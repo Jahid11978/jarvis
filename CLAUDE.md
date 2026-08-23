@@ -4458,6 +4458,36 @@ Der Wächter prüft beides: `hidden` im Markup UND dass der Skriptteil `pt-card-
 anfasst – ohne die zweite Prüfung wäre ein später ergänztes `classList.remove('hidden')`
 unsichtbar. Der Umbau selbst steht in der Memory `open-todos`.
 
+## Update-Pill: Aktion FEST, nur die Liste scrollt (Fix 2026-08-23)
+**Gemeldet („der Button im Popup wieder WIEDER abgeschnitten"):** im Update-Popup lagen
+Anwenden-Knopf UND Auto-Update-Zeile **hinter** der Commit-Liste im selben Scrollbereich
+(`.update-dropdown-body`, `max-height: 440px`). Nachgestellt: bei acht Commits ist der Knopf
+ausserhalb des Sichtfensters – unerreichbar, und **nichts weist darauf hin**, dass da noch etwas
+kommt. Das Popup sieht aus wie eine reine Anzeige.
+- **Jetzt eine Flex-SPALTE mit fester Fusszeile:** `.update-dropdown` ist `flex column` mit
+  `max-height: calc(100vh - 84px)` (am SICHTFENSTER, nicht an einer festen Zahl – 440 px passten
+  auf einem kleinen Fenster ebenfalls nicht), der Koerper scrollt (`flex:1 1 auto`,
+  **`min-height: 0`** – ohne das schrumpft ein Flex-Kind nicht unter seine Inhaltshoehe,
+  `overflow-y` bleibt wirkungslos und die Fusszeile wird aus dem Popup gedrueckt), und
+  `.update-dropdown-foot` (`flex:0 0 auto`) traegt Knopf und Auto-Update-Zeile.
+- **Die Fusszeile wird vom Widget SELBST erzeugt** (`foot()`), nicht ins Markup gelegt: so wirkt
+  der Fix auch auf einer Installation, deren `portal.html` noch nicht neu ausgerollt ist. Die
+  Pill ist eine Admin-Anzeige – ein halb aktualisierter Stand darf sie nicht brechen.
+- Nach einem erfolgreichen Update wird die Fusszeile **geleert**: ein Knopf „Update anwenden"
+  unter der Erfolgsmeldung waere eine Aufforderung ins Leere.
+- **Die Pill lebt nur noch in `portal.html`** und wird nur von `update_widget.css` gestaltet
+  (`chat.js:329` ruft `init()` ins Leere – auf /chat gibt es das Markup nicht mehr). Die
+  konkurrierenden Regeln in `style.css` betreffen Seiten ohne Pill.
+- **Verifiziert:** 26 Pruefungen (`tests/test_update_pill_ui.js`; jsdom rechnet kein Layout,
+  geprueft wird die Eigenschaft „der Knopf ist kein Kind des scrollenden Koerpers" – im echten
+  DOM UND am Quelltext). Gegenproben greifen: Knopf zurueck in den Koerper → 4 FAIL, feste
+  `max-height` zurueck → 2 FAIL. Optisch abgenommen: dunkel/hell mit 8 Commits, dazu **40
+  Commits auf 560 px Fensterhoehe** – Popup bleibt im Sichtfenster, Knopf sichtbar.
+  **FALLSTRICK im eigenen Test:** ein Schnitt „bis zum ersten `;`" endet mitten im Ausdruck (die
+  zusammengesetzten Zeichenketten enthalten selbst Semikolons, z.B. `font-size:.82rem;`) – die
+  Pruefungen waren damit trivial wahr. Geschnitten wird an der STRUKTUR (`var f = foot()`), und
+  erst ab `body.innerHTML =`, weil die Variablen davor definiert werden.
+
 ## Zahnrad-Badge fuer Administratoren (wieder da, 2026-08-23)
 Zahl am Einstellungs-Zahnrad aller Bereichsseiten: **offene Root-Freigaben + gesperrte Konten**.
 Amber = nur Freigaben, Rot = mindestens eine Sperre. Klick auf die Badge fuehrt in
