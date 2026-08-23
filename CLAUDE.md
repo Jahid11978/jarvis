@@ -2303,6 +2303,99 @@ SAP-Zugang* eigene Zugangsdaten hinterlegt, arbeitet damit – in `/sap`, bei de
   Zugang hinterlegen. Ohne Freigabeliste ändert sich für niemanden etwas – alles läuft wie
   bisher über den Sammelzugang.
 
+### SAP-Serverzertifikat prüfen und verankern (2026-08-23)
+**Der Anlass:** Im SAP-Reiter gab es nur den Haken „SSL-Zertifikat prüfen" – an oder aus. Bei
+einem SAP mit selbst ausgestelltem Zertifikat blieb dem Administrator nur das **Abschalten**,
+und danach ist jede SAP-Verbindung gegen einen Man-in-the-Middle offen, ohne dass es jemand
+sieht. Beim persönlichen Zugang war es schlimmer: `verify_ssl` kommt dort ausschließlich aus der
+Admin-Konfiguration – wer einen eigenen Server mit eigenem Zertifikat eintrug, hatte **gar
+keinen Weg** außer der Bitte, die Prüfung für alle abzuschalten.
+Code: `backend/sap_cert.py`, `frontend/js/sapcert.js`, sechs Endpunkte, Bausteine im Reiter
+*Einstellungen → SAP* und in der Benutzerkachel von `/sap`. Umfang: **OData und HANA**
+(RFC hat kein Serverzertifikat in diesem Sinne).
+
+- **Verankern statt abschalten:** genau EIN Zertifikat wird Vertrauensanker. Die Prüfung bleibt
+  AN, ein Zertifikatswechsel bricht ab und muss bewusst übernommen werden. Vorbild ist die
+  Bindung im Standort-Sync (`knowledge_sync._ssl_kontext`).
+- **DIE BINDUNG WIRD GEMESSEN, NICHT ABGELEITET.** `pruefen()` macht bis zu drei Handshakes:
+  (1) ohne Prüfung → Zertifikat holen, (2) gegen den Vertrauensspeicher → braucht es einen
+  Anker?, (3) **gegen das geholte Zertifikat als `cadata` → würde der Anker wirken?** Erst (3)
+  beantwortet die Frage, die zählt. Ohne sie müsste man über Namensabweichungen raten (häufig:
+  Zertifikat lautet auf den FQDN, in der URL steht eine IP), und der Knopf verspräche etwas, das
+  die Verbindung nicht hält. Bei `pin_ok = false` gibt es **keinen Knopf**, sondern die im
+  Zertifikat stehenden Namen und den Weg dorthin.
+- **⚠ DER FUND, DEN NUR DER LIVE-LAUF ZEIGTE: `ssl` und `requests` haben VERSCHIEDENE
+  Vertrauensspeicher.** Auf DEV liegt eine interne CA in `/usr/local/share/ca-certificates`;
+  `ssl.create_default_context()` sagte deshalb „von einer bekannten Zertifizierungsstelle
+  bestätigt – nichts zu tun", während **dieselbe** Verbindung über `requests` (das **certifi**
+  benutzt) mit `SSLError` scheiterte. Die Anzeige hätte Entwarnung gegeben und die SAP-Verbindung
+  wäre trotzdem tot geblieben. `_system_kontext(kanal)` misst deshalb je Kanal die **echte**
+  Quelle: OData über `REQUESTS_CA_BUNDLE`/`CURL_CA_BUNDLE`/`certifi`, HANA über den
+  Systemspeicher (hdbcli läuft über OpenSSL). Die benutzte Quelle steht im Ergebnis
+  (`system_quelle`). **Merkregel: „vertrauenswürdig" ist keine absolute Aussage – sie gilt immer
+  nur gegenüber einem bestimmten Speicher.**
+- **Das PEM kommt NIE aus dem Request.** „Vertrauen" sendet nur den **Fingerabdruck**, den der
+  Mensch gesehen hat; der Server holt das Zertifikat selbst und vergleicht mit
+  `hmac.compare_digest`. Deshalb stehen `cert_odata`/`cert_hana` auch **nicht** in
+  `sap_accounts.AENDERBAR` – über `speichern()` ließe sich sonst ein beliebiger Vertrauensanker
+  einschleusen (ein Test schiebt genau das durch).
+- **Ein Anker gilt nur für sein Ziel.** Der Eintrag speichert Host UND Port; die Prüfung sitzt
+  **im `sap_client`**, nicht beim Aufrufer – so kann kein Aufrufer sie umgehen, und Sammelzugang
+  wie persönlicher Zugang teilen dieselbe Entscheidung. Ohne sie schleppte ein Adresswechsel den
+  alten Anker still weiter.
+- **Der Anker GEWINNT gegen den Aus-Haken.** Ist verankert, wird geprüft, auch wenn `verify_ssl`
+  aus steht. Die Gegenrichtung (Anker wirkt nur bei eingeschalteter Prüfung) wäre ein stiller
+  No-op – das Muster, das dieses Projekt mehrfach teuer bezahlt hat.
+- **Warum der BENUTZER das darf, obwohl er die Prüfung nicht abschalten darf:** Verankern ist
+  strenger, nicht schwächer. Begrenzt bleibt es durch die **Host-Freigabeliste** des
+  Administrators (`host_pruefen`, dieselbe Schranke wie beim Speichern) – ohne sie wäre die
+  Prüfung ein Portscanner für jeden SAP-Freigegebenen. Ein eigener Anker sticht den des
+  Administrators; dessen Anker gilt als Rückfall, wenn der Host derselbe ist, und die Oberfläche
+  sagt, **wessen** Anker gerade wirkt (mit Mülleimer nur am eigenen).
+- **`requests.verify` nimmt keinen SSLContext**, nur `bool` oder einen **Pfad** – daher
+  `data/sap_certs/<fp16>.pem` (0640, atomar, idempotent, Name aus dem Hash des Inhalts). Das
+  Bündel enthält **nur** das verankerte Zertifikat; ein öffentlich signiertes würde damit
+  folgerichtig abgelehnt. `data/sap_certs` steht in `_APP_DENY_REL`: der Inhalt ist öffentlich,
+  die **Schreibbarkeit** wäre der bequeme Weg, eine SAP-Verbindung umzuleiten.
+- **Nur HANA kann eine Namensabweichung überbrücken** (`sslHostNameInCertificate`); bei OData
+  gibt es dafür keinen Schalter, dort nennt die Prüfung den Weg (Adresse anpassen bzw. neues
+  Zertifikat). Diese Asymmetrie ist Absicht und steht im Code.
+- **Ein Baustein für BEIDE Oberflächen** (`js/sapcert.js`, Unterschied nur die Endpunkt-Basis) –
+  zwei Fassungen wären in drei Wochen auseinandergelaufen. CSS in **theme.css**, nicht style.css
+  (`/sap` lädt style.css nicht). Fremdtext aus dem Zertifikat (Aussteller, Namen) geht
+  ausschließlich per `textContent` hinaus. `sap.js::_collect()` sendet **keine** `cert_*`-Felder,
+  sonst löschte der Verbindungs-Knopf, was der Zertifikats-Knopf gesetzt hat („zwei Knöpfe, zwei
+  Teilmengen").
+- **Kontrast gemessen, nicht geschätzt:** die Signalfarben sind auf Weiß zu schwach (Warnung
+  **2,2:1**). Dieser eine Satz entscheidet über das Verankern, deshalb im Hell-Modus abgedunkelt –
+  nachgemessen **5,14:1** (Dunkel 8,26:1). Bewusst nur hier, nicht projektweit.
+- **Verifiziert:** 113 Prüfungen (`tests/test_sap_cert.py`, ohne fastapi lauffähig, Stub +
+  Exit-2-Sandkastenwächter) – Kern ist ein **echter lokaler TLS-Server** mit selbst erzeugten
+  Zertifikaten samt **Positivkontrolle und Gegenprobe an einer echten `requests`-Verbindung**
+  (ohne Anker scheitert sie / mit Anker läuft sie / mit fremdem Anker scheitert sie wieder) –
+  plus 53 UI-Prüfungen in jsdom gegen die echten Dateien. Bestand grün: 115/66/120/11/70/50/152
+  und 87/105/270. Gegenproben greifen einzeln: dritter Handshake raus → 6 FAIL, Ziel-Prüfung raus
+  → 3, Fingerabdruck-Vergleich raus → 1, Host-Freigabe raus → 1, `cert_*` in `AENDERBAR` → 2,
+  Kanal-Vertrauensquelle raus → 2, Verankern-Knopf trotz Namensabweichung → 2, Fremdtext per
+  `innerHTML` → 3, × statt Mülleimer → 1.
+- **Live auf DEV** (`tests/live_sap_cert_dev.py`, gegen Jarvis' EIGENES selbst ausgestelltes
+  Zertifikat – genau der Fall): 12/12, inklusive der oben beschriebenen Abweichung zwischen
+  certifi und Systemspeicher. Dazu 401 an allen sechs Endpunkten ohne Token (Phantasie-Route zum
+  Vergleich 404), Sandbox kommt an `data/sap_certs` weder lesend noch schreibend
+  (`authorize_fs`: „geschützte/sensible Datei", `fs_target_sensitive` = True), `data/knowledge`
+  bleibt lesbar. Danach zurückgebaut: Bündel und Verzeichnis entfernt, `settings.json`
+  **md5-gleich**, `data/sap_accounts.json` unangetastet. Optisch in Dunkel UND Hell abgenommen.
+- **Nebenbefund, mitbehoben:** eine Prüfung in `test_sap_accounts.py` war **seit einiger Zeit
+  rot** – sie prüfte die **Position** eines Eintrags in `PRIVATE_FILES` (letztes Element vor der
+  Klammer) statt die Mitgliedschaft; als die Liste wuchs, meldete sie einen Fehler, den es nicht
+  gab. Mit `git stash` als Vorbefund belegt und auf Mitgliedschaft umgestellt.
+- **NICHT geprüft:** ein Lauf gegen ein echtes SAP-System und der **HANA**-Weg end-to-end (auf
+  DEV gibt es kein HANA) – belegt ist dort, dass `sslTrustStore`/`sslValidateCertificate`/
+  `sslHostNameInCertificate` korrekt zusammengebaut und übergeben werden. Steht so auch im
+  Code-Kommentar.
+- **Auf ECHT noch NICHT ausgerollt.** Beim Ausrollen ist nichts zu konfigurieren: ohne
+  verankertes Zertifikat verhält sich alles exakt wie bisher.
+
 ## E-Mail-Bereich `/email`: Exchange-Anbindung + Verarbeitungsregeln (2026-08-12)
 **Was es ist:** Der firmeninterne Exchange wird angebunden; jeder freigegebene Benutzer hinterlegt
 SEIN Postfach und legt **selbst** beliebig viele Regeln an. Trifft eine neue Nachricht ein, läuft
