@@ -4458,6 +4458,41 @@ Der Wächter prüft beides: `hidden` im Markup UND dass der Skriptteil `pt-card-
 anfasst – ohne die zweite Prüfung wäre ein später ergänztes `classList.remove('hidden')`
 unsichtbar. Der Umbau selbst steht in der Memory `open-todos`.
 
+## Zahnrad-Badge fuer Administratoren (wieder da, 2026-08-23)
+Zahl am Einstellungs-Zahnrad aller Bereichsseiten: **offene Root-Freigaben + gesperrte Konten**.
+Amber = nur Freigaben, Rot = mindestens eine Sperre. Klick auf die Badge fuehrt in
+*Sicherheit* (`sessionStorage.jarvis_settings_tab`, ausgewertet in `app.js::_enterSettingsPage`).
+Code: `_admin_badge*` in `main.py` (Feld `admin_badge` in `/api/me`), `settings_btn.js`,
+`.jv-gear-badge` in **theme.css**. Tests: `test_gear_badge.py` (28), `test_gear_badge_ui.js` (42).
+- **Es gab sie schon einmal** (`gear-broker-badge` in app.js) und sie fiel am 2026-07-15 mit
+  `bc41701` als toter Code – zu Recht: beim Umzug des Zahnrads in die Bereichsseiten war das
+  Element nicht mitgenommen worden. Zurueck blieben ein Aufruf ins Leere
+  (`window._setBrokerBadge` in security_incidents.js, vom vorgeschalteten `if` verschluckt) und
+  zwei unbenutzte i18n-Schluessel. Sie sitzt jetzt in `settings_btn.js` – **eine** Fassung fuer
+  alle elf Seiten, gefunden ueber `[data-jarvis-settings]`.
+- **Kein eigener Endpunkt** – die Zahlen haengen an `/api/me`, das der Knopf ohnehin abruft
+  (dieselbe Begruendung wie `license_banner`). Nur fuer Administratoren.
+- **Der Zaehler ist GEMERKT (20 s) und GEDECKELT (3 s):** die Freigaben kommen ueber einen
+  Unix-Socket aus dem Broker-Prozess, und `/api/me` liegt auf dem heissen Pfad JEDER Seite –
+  ein haengender Broker waere sonst der 20-Sekunden-Freeze vom 2026-08-11 an neuer Stelle.
+  Deckel als Daemon-Thread mit `join()`, **nicht** `asyncio.wait_for(asyncio.to_thread(...))`.
+  Bei Zeitueberschreitung bleibt der letzte Stand stehen (0 waere eine Behauptung) und die
+  Frist steigt auf 120 s – sonst spawnt ein toter Broker alle 20 s einen weiteren Thread.
+- **Faellt eine Quelle aus, fehlt nur IHRE Zahl.** Eine Badge, die wegen des Brokers auch die
+  Sperren verschweigt, waere der schlechtere Ausgang.
+- Neue Signalfarben-Variable `--on-signal` (Schrift auf Warn-/Gefahrflaeche, in beiden Themes
+  gleich – die Flaeche darunter wechselt ja auch nicht; gemessen 4,72:1 rot / 8,26:1 amber).
+- **ZWEI FALLSTRICKE, die nur der Test fand:** `zeige(false)` blendet den Knopf aus, malte die
+  Badge aber trotzdem hinein (ohne belegten Admin-Status wird jetzt gar nichts gemalt). Und der
+  Reiter-Sprung muss **nach** `openModal()` laufen – die Funktion ist `async` und aktiviert an
+  ihrem ENDE den ersten Reiter; davor geklickt sah „KI & System" ausgewaehlt aus, waehrend das
+  Sicherheits-Panel offen stand UND das Profil-Panel mit ihm (der Reset raeumt Panels nicht ab).
+  Deshalb `Promise.resolve(_auf).then(...)`.
+- **Verifiziert live auf DEV** mit Positivkontrolle (eine echte Sperre + eine echte pending-Op:
+  `{root_pending:1, gesperrt:1, gesamt:2}` in 16 ms), danach vollstaendig zurueckgebaut
+  (`broker-policy.json` md5-gleich, `security_state.json` feldgleich). Optisch in Dunkel UND
+  Hell abgenommen. **Auf ECHT noch NICHT ausgerollt.**
+
 ## Titelsymbole: eine Reihenfolge, eine CPU-Anzeige, ein Avatar-Anker (2026-08-22)
 **Vorgabe des Nutzers, von RECHTS nach links:** `Abmelden · Einstellungen · Startseite ·
 Hell/Dunkel · Issues · Avatar ausblenden · Sprachausgabe · Dokumente`. Der DE/EN-Umschalter
