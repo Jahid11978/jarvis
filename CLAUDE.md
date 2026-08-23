@@ -4365,6 +4365,86 @@ Der Wächter prüft beides: `hidden` im Markup UND dass der Skriptteil `pt-card-
 anfasst – ohne die zweite Prüfung wäre ein später ergänztes `classList.remove('hidden')`
 unsichtbar. Der Umbau selbst steht in der Memory `open-todos`.
 
+## Titelsymbole: eine Reihenfolge, eine CPU-Anzeige, ein Avatar-Anker (2026-08-22)
+**Vorgabe des Nutzers, von RECHTS nach links:** `Abmelden · Einstellungen · Startseite ·
+Hell/Dunkel · Issues · Avatar ausblenden · Sprachausgabe · Dokumente`. Der DE/EN-Umschalter
+steht wie bisher ganz links. Das **SSL-Zertifikat gibt es nur noch auf `/portal`** – auf den
+Unterseiten war es reine Wiederholung und stand genau an dem Platz, an dem dort das Haus sitzt.
+- **Vorher gab es zwei Ordnungen** (Thema→Home gegen Home→Thema) und zusätzlich zwei Plätze für
+  Issues. Der Wächter dazu steht in `tests/test_claude_subagent_ui.js` (Rollen-Vergleich über
+  ALLE Seiten); er wurde auf die neue Folge nachgezogen und erfasst jetzt auch `/portal` und
+  `/wissen`, die ihre Leiste flach bauen (kein `topbar-right`) und bis dahin **stillschweigend
+  aus der Prüfung fielen** – also ausgerechnet die zwei Seiten mit eigener Bauform.
+  Die Gleichheitsprüfung gilt nur für Seiten MIT Haus-Symbol: `/portal` ist die Startseite und
+  hat folgerichtig keines.
+- **Der Avatar-Schalter ankert jetzt an `.jv-issues-btn`**, nicht mehr am Theme-Knopf
+  (`avatar.js::injectToggle`). Er übernimmt die Klassen des Ankers – **die Anker-Klasse selbst
+  muss dabei entfernt werden**, sonst wäre er beim nächsten Einhängen sein eigener Anker.
+  Jede Seite trägt die Klasse genau einmal; der Theme-Knopf bleibt Rückfall für Seiten ohne
+  Issues-Knopf, `.jav-toggle-float` für Seiten ganz ohne Leiste.
+- **Die CPU-Anzeige lag in VIER Fassungen vor** (chat.js über WebSocket, support.js, wissen.js,
+  userchat.js je mit eigenem Poll) **und fehlte deshalb auf `/portal`, `/sap`, `/email`,
+  `/tracks`, `/excel`, `/claude`**. Dazu **drei** gleichlautende CSS-Blöcke mit je eigenen Zahlen
+  (chat.css, support.html inline, wissen.html inline). Jetzt: `frontend/js/cpubar.js` +
+  `.jv-cpu-bar` in theme.css.
+  - **Kein Aufruf nötig:** das Modul läuft im 3-s-Takt und prüft bei jedem Durchgang selbst, ob
+    ein Sitzungstoken vorliegt. Damit erscheint die Anzeige nach dem Anmelden ohne Zutun der
+    Seite und bleibt auf der Anmeldemaske aus – die Alternative wären zehn Aufrufstellen
+    gewesen, von denen die nächste neue Seite wieder eine vergisst.
+  - **Es baut die Anzeige selbst**, wenn `#cpu-bar` fehlt (Anker `.topbar-left`, `.wi-topbar`,
+    `.pt-topbar`, `.ad-top`, `.sa-topbar`) – links neben dem Titel, nicht in der Symbolgruppe.
+    Findet es keinen Anker, entsteht nichts.
+  - **Nach 401/403 wird die Abfrage EINGESTELLT** – weiter zu klopfen füllt nur Journal und
+    Verstoßzähler (gleiche Regel wie in `activity.js`).
+  - `/chat` behält seine WebSocket-Quelle, schreibt aber durch `JarvisCpuBar.setzeWert()`.
+  - **`.jv-cpu-bar` steht in theme.css, NICHT in chat.css/style.css** – die Anzeige erscheint auf
+    jeder Seite, chat.css lädt nur `/chat` und `/userchat` (gleiche Begründung wie bei
+    `select option`, 2026-07-29).
+### Die Symbolabstände: eine Gruppe mit `gap: 4px` – NICHT die Titelleiste
+**Gemeldet am selben Tag: „die Symbol Abstände auf /portal passen wieder einmal nicht … auch das
+hatten wir schon mehrfach."** Zutreffend, und die Ursache ist strukturell, nicht kosmetisch:
+- **`/portal` baut seine Leiste FLACH** – die Knöpfe waren direkte Kinder von `.pt-topbar`, und
+  deren `gap: 10px` ist für Logo, Titel und Statuspunkt gedacht. Im Browser gemessen: **jeder
+  Abstand 10 px**, während alle anderen Seiten ihre Symbole in `.topbar-right` bzw.
+  `.wi-top-icons` mit **4 px** halten. Nach dem Einziehen von `.pt-top-icons`: 4 px durchgängig.
+  Dieselbe Bauform-Frage wie bei `/excel` (2026-08-21) und dieselbe Regel wie bei `.role-card`:
+  **wenn Elemente als Gruppe wirken sollen, brauchen sie einen gemeinsamen Container.**
+- **Zweiter Beitrag: `.jv-cpu-bar` brachte `margin-left: 8px` mit.** In einem `gap`-Container
+  addiert sich das – auf `/portal` 10 + 8 = **18 px** neben 10 px. **Ein gemeinsamer Baustein
+  darf seinen Abstand nicht selbst mitbringen**, den setzt der Wirt. Rand entfernt.
+- Mitgezogen: `.sa-top-icons` (8 px) und `api.html`, das wie `/portal` gar keine Gruppe hatte
+  (12 px aus `.ad-top`).
+- **Der Wächter prüft die STRUKTUR, nicht eine Pixelzahl je Seite** (Abschnitt 4 in
+  `tests/test_topbar_symbole_ui.js`): der Abmelden-Knopf darf kein direktes Kind der
+  Titelleiste sein, und seine Gruppe muss `gap: 4px` führen – ermittelt über den echten
+  DOM-Elternteil, nicht über eine gepflegte Liste. Damit fällt auch eine künftige Seite auf.
+  Gegenproben: Gruppe auf `/portal` entfernt → 2 FAIL, `margin-left` zurück → 1 FAIL.
+- **FALLSTRICK, zum zehnten Mal im Projekt:** die Prüfung „`.jv-cpu-bar` hat kein `margin`" las
+  ihre eigene Begründung im Kommentar-Block und schlug fehl, obwohl der Code stimmte.
+  Kommentare vor jedem solchen Vergleich entfernen.
+- **Merkregel:** Eine Titelleiste hat ZWEI Abstände – einen weiten für den Titelbereich und
+  einen engen für die Symbolgruppe. Wer nur einen Container benutzt, bekommt zwangsläufig den
+  falschen; und wer es an einer Seite repariert, muss die Regel prüfbar machen, sonst kommt es
+  auf der nächsten Seite wieder.
+
+- **Nebenbefund, mitbehoben:** `/wissen` war die einzige Bereichsseite **ohne DE/EN-Umschalter**.
+  Aufgefallen erst, als der Wächter die Seite überhaupt zu sehen bekam – ein Test, der eine Seite
+  überspringt, meldet keinen Fehler, er meldet gar nichts. Ergänzt (i18n.js verdrahtet
+  `.lang-toggle-btn` von selbst); `/claude` lud zudem `avatar.js` gar nicht.
+- **Verifiziert:** 106 Prüfungen (`tests/test_topbar_symbole_ui.js`, jsdom gegen die ECHTEN
+  Dateien – cpubar.js läuft dort wirklich, und **avatar.js wird echt ausgeführt**: mit gemerktem
+  „Avatar aus" hängt sich der Schalter ein und `build()` entfällt, clippy/jQuery braucht es
+  dafür nicht) + 186 (`test_claude_subagent_ui.js`) + der übrige JS-Bestand unverändert grün.
+  Gegenproben greifen einzeln: Anker zurück auf den Theme-Knopf → 4 FAIL, `cpubar.js` von einer
+  Seite entfernt → je 1 FAIL in beiden Dateien, Zertifikat zurück auf `/chat` → 1 FAIL,
+  Issues/Thema auf `/sap` vertauscht → 2 FAIL, Symbolgruppe auf `/portal` entfernt → 2 FAIL.
+  **Live auf DEV:** alle elf Seiten HTTP 200, `/static/js/cpubar.js` 200, `chat.ssl_cert` nur in
+  `portal.html`, Anker und cpubar auf jeder Seite. Optisch in Dunkel UND Hell abgenommen
+  (statische Vorschau mit dem echten Markup und dem echten CSS).
+- **NICHT geprüft:** ein Lauf im echten Browser mit Anmeldung – die dafür nötige Anmeldung von
+  der Kommandozeile wurde von der Freigabe abgelehnt.
+- **Auf ECHT noch NICHT ausgerollt.**
+
 ## PDF-Textqualität: beschädigte Textebene erkennen und OCR entscheiden lassen (2026-08-13)
 **Der Vorfall (2026-08-12, ECHT):** `Einsender_KIM_Anbindung_compressed.pdf` (8,9 MB, 54 Seiten)
 lieferte über pdfplumber **80.586 Zeichen** – die alte Schwelle „unter 80 Zeichen → OCR" greift
