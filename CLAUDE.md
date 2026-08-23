@@ -1003,10 +1003,130 @@ Gemessen auf DEV, damit die Grenze nicht geschaetzt ist:
   **Keine Variante loest**, dass Laeufe sich bei gleicher uid per `ps` sehen und Signale senden
   koennen (dafuer braeuchte es einen PID-Namespace – fuer MCP-Server ist genau das inzwischen
   ueber `bwrap --unshare-pid` geloest).
-- **Der Namespace-Umbau steht auf der Todo-Liste** (bewusst zurueckgestellt, Memory `open-todos`),
-  ebenso die nicht gebaute Enumerations-Bremse und der Sperr-Ablauf.
+- **Der Namespace-Umbau ist seit 2026-08-23 GEBAUT** – eigener Abschnitt unten. Nicht gebaut
+  bleiben die Enumerations-Bremse und der Sperr-Ablauf.
 - **Verifiziert:** `tests/test_attachment_cleanup.py` (24) + live auf DEV mit zwei echten Kopien:
   die zwei Stunden alte war nach dem Neustart weg, die junge blieb.
+
+## Privates `/tmp` je Benutzer (Mount-Namespace, 2026-08-23)
+**Was es loest:** der Abschnitt darueber. Alle Domain-Benutzer fuehren Shell-Befehle als EIN
+OS-Benutzer aus; in `/tmp` gab es damit keine Trennung zwischen ihnen, und Dateirechte sind fuer
+dieses Problem die falsche Ebene (0600 sperrt den eigenen Lauf aus). Jetzt bekommt jeder
+unprivilegierte Benutzer ein eigenes Arbeitsverzeichnis, das `bwrap` im Lauf auf `/tmp` mountet.
+Code `backend/lauf_tmp.py` (eine Stelle fuer alles), Verdrahtung in `tools/shell.py`,
+`broker/ops.py::sandbox_exec`, `agent.py`, `sandbox.py`, `attachments.py`.
+
+- **JE BENUTZER, NICHT JE LAUF** (Vorgabe des Nutzers, nach einer ersten Fassung mit einem
+  Verzeichnis je Lauf): die Trennung, die FEHLTE, war Benutzer gegen Benutzer. Zwei Laeufe
+  derselben Person voreinander zu verbergen loest kein Sicherheitsproblem, kostet aber etwas, das
+  vorher ging – ein Zwischenprodukt, das der Agent nicht als Ergebnis nennt, waere nach dem Lauf
+  weg und „und jetzt filtere Spalte C" liefe in `No such file or directory`. **Der Preis:** das
+  Aufraeumen ist nicht mehr deterministisch („Lauf zu Ende, Verzeichnis weg"), sondern haengt an
+  einer Frist, und ein Lauf sieht Dateien frueherer Laeufe derselben Person – wie vorher auch.
+
+- **DER KERN IST DIE UEBERGABE, NICHT DIE GRENZE.** Der Agent arbeitet strukturell in `/tmp`, und
+  der System-Prompt sagt ihm das an sieben Stellen. Ein `--tmpfs /tmp` haette jede Ergebnisdatei
+  beim Prozessende vernichtet und den Download-Chip ausfallen lassen. Deshalb
+  **`--bind <arbeitsverzeichnis> /tmp`**: der MODELL-Pfad `/tmp/ergebnis.xlsx` bleibt gueltig, auf
+  dem Host liegt die Datei in `/tmp/jarvis-arbeit/<kennung>/` und ist fuer `_deliver_docs`
+  erreichbar. **Kein Prompt musste sich aendern.**
+- **Fremde Dateien sind nicht „unlesbar", sie sind NICHT VORHANDEN** – das ist der Unterschied zu
+  jeder Rechte-Loesung. Dazu `--unshare-pid`: kein Blick auf fremde Prozesse (gemessen 5 statt 288).
+- **Anhaenge gehen den ANDEREN Weg: Host-Pfad = Modell-Pfad.** Eine Arbeitskopie muss zwei Welten
+  bedienen – die Shell im Namespace UND die Backend-Werkzeuge (`xlsx_inspect`, `office_read`,
+  `create_chart`, `filesystem`), die im Dienstprozess laufen und den Pfad so oeffnen, wie das
+  Modell ihn nennt. Ein uebersetzter Pfad waere dort tot. Also: `/tmp/jarvis-anhaenge/<kennung>/`
+  je Benutzer, per **`--ro-bind` auf denselben Pfad** in dessen eigene Laeufe – EINE Bindung
+  unabhaengig von der Anzahl (je Datei waere es eine 0-Byte-Attrappe im Lauf-Verzeichnis, die als
+  „Ergebnis" ausgeliefert werden koennte), und neue Anhaenge werden waehrend des Laufs sichtbar.
+- **Damit faellt eine zweite Luecke: der BACKEND-Weg.** `authorize_fs` prueft jetzt die
+  Zugehoerigkeit am Verzeichnis (`gehoert_anhang`, `gehoert_lauf`). Vorher konnte ein
+  Domain-Benutzer die Arbeitskopie oder Ergebnisdatei eines anderen ueber jedes Werkzeug oeffnen,
+  sobald er den Namen kannte – und `filesystem list /tmp` nannte ihm alle Namen. Der Namespace
+  allein haette das NICHT geschlossen, er wirkt nur auf die Shell.
+- **Der Dispatch uebersetzt Modell-Pfade** (`_lauf_pfade_umleiten`) fuer `filesystem`,
+  `create_chart(source.file)` und jedes Werkzeug mit `pfad_parameter`; `skills/office`
+  zusaetzlich in `_resolve_existing`. Ohne das schreibt die Shell `/tmp/x.xlsx` und das naechste
+  Werkzeug findet dort nichts – ein Widerspruch, den niemand erklaeren kann.
+- **Privilegierte Laeufe bekommen KEIN eigenes Verzeichnis.** Sie laufen als Dienstbenutzer,
+  brauchen das echte `/tmp` (Screenshot-Werkzeug, Chrome-Profil) und haben ohnehin Root-Wege;
+  Isolation zwischen Administratoren ist kein Ziel. **Verschachtelte Klammern ERBEN** – ein
+  Sub-Agent muss die Dateien seines Eltern-Laufs sehen, auch wenn er einen anderen Actor hat.
+- **`--dev-bind / /`, nicht `--bind / /`.** Eine gewoehnliche Bindung mountet `nodev`, damit
+  scheitert `2>/dev/null` mit „Keine Berechtigung" – genau die Umleitung, die 2026-08-05 vier
+  Konten gesperrt hat. Der Test hat dafuer eine Gegenprobe. Das Dateisystem bleibt sonst wie es
+  ist: die harte Grenze sind weiter die OS-Rechte, eine Whitelist wuerde legitime Zugriffe
+  (Wissens-Share, `/mnt`, `skills/`) abschneiden.
+- **`setpriv --inh-caps=-all --ambient-caps=-all` davor** – `jarvis.service` vererbt
+  `CAP_NET_BIND_SERVICE` an jedes Kind, `bwrap` bricht damit ab. Faellt bei einer Handprobe per
+  `runuser` NICHT auf, nur im Dienst (Register: Dienstumgebung ≠ Handprobe).
+- **Verzeichnisse legt ROOT an** (Broker-Op `sandbox_exec`, Argument ist die 8-Hex-**Kennung**,
+  nie ein Pfad): Eigentuemer Sandbox-Benutzer, Gruppe des Dienstes, 0770 – beide Seiten brauchen
+  Schreibrecht. Ein vom Backend zuerst angelegtes Verzeichnis wird per `chown` uebernommen, die
+  Reihenfolge ist also gleichgueltig. **Die Einhaengepunkte muss root VORHER anlegen:**
+  ueberlaesst man das `bwrap`, entstehen sie als `drwx------ jarvis_sandbox:jarvis_sandbox` und
+  das Backend kann darin nichts mehr aufraeumen – `rmtree(ignore_errors=True)` scheitert STILL.
+- **Aufgeraeumt wird NACH FRIST, und nur root kann es** (Op `lauf_aufraeumen`, Kennung hart
+  geprueft): der Agent legt im Verzeichnis eigene Unterverzeichnisse an (`mkdir /tmp/zwischen`,
+  matplotlib-Cache), die gehoeren dem Sandbox-Benutzer mit dessen eigener Gruppe. Vorgabe 240
+  Minuten ohne Zugriff, **Untergrenze 4 Stunden**: die Frist ist die einzige Schranke gegen ein
+  Verzeichnis, in dem gerade gearbeitet wird (ein aktiver Lauf haelt die mtime frisch).
+- **Zusatz-Bindungen fuer Ablaeufe, deren Arbeitsverzeichnis den Lauf ueberlebt:**
+  `lauf_tmp.zusatz_bind(pfad)` um den Aufruf von `run_task_headless` legen (beschreibbar, nur
+  `/tmp`, Verwaltungswurzeln ausgeschlossen, Deckel 8). Der **Claude-Subagent** braucht das – sein
+  Wegwerf-Klon liegt in `/tmp/claude_subagent/<job>` und waere im Lauf sonst NICHT VORHANDEN, der
+  Skill still kaputt. Angemeldete Pfade sind von der Uebersetzung ausgenommen (Host = Modell).
+  **Wer einen neuen Ablauf mit eigenem Arbeitsverzeichnis baut, muss ihn anmelden.**
+- **FAIL-OPEN, aber nicht still.** Ohne `bwrap` laeuft alles wie vorher (gemeinsames `/tmp`), mit
+  Klartext im Journal beim Start. Fail-closed waere hier falsch – es wuerde auf einem Server ohne
+  `bubblewrap` jeden Shell-Befehl jedes Netzwerk-Benutzers abschalten. `start_jarvis_root.sh`
+  Schritt 6d installiert das Paket selbst nach (wie 6c fuer die Python-Module). Abschaltbar mit
+  `JARVIS_LAUF_ISOLATION=0`.
+- **Erleichterungen, die erst dadurch moeglich sind:** die Frist der Arbeitskopien steigt von 30
+  auf **240 Minuten** (`DEFAULT_TTL_MIN_ISOLIERT`) – sie ist kein Sicherheitsmittel mehr, sondern
+  Datenminimierung, und „und jetzt Spalte C" nach der Mittagspause funktioniert wieder; ohne
+  Isolation bleibt es bei 30. Der matplotlib-Cache liegt je Benutzer (`/tmp/.mplcache` im Lauf),
+  nicht je Lauf – sonst waere der Schriftarten-Index bei jedem Shell-Befehl neu gebaut worden.
+  Und der matplotlib-Cache braucht keine eigene Bindung mehr – er liegt einfach im
+  Arbeitsverzeichnis (`/tmp/.mplcache`), das den Lauf ueberlebt.
+- **Was die Trennung NICHT ersetzt:** die mtime-Schranke in `_deliver_docs`. Eine Zwischenfassung
+  hat sie fuer Dateien im Lauf-Verzeichnis uebersprungen („was drin liegt, ist aus diesem Lauf") –
+  mit einem Verzeichnis je BENUTZER ist die Annahme falsch, dort liegen auch die Zwischenprodukte
+  von vorhin. Genau die duerfen nicht als Ergebnis dieses Laufs herausgehen.
+
+### Drei ALTFEHLER, die erst die Abnahme dieses Umbaus sichtbar gemacht hat
+1. **`shell_execute(code=…)` war fuer Netzwerk-Benutzer nie benutzbar.**
+   `tempfile.NamedTemporaryFile` legt mit **0600** an, der Befehl laeuft aber als
+   `jarvis_sandbox` – `python3 /tmp/jarvis_x.py` scheiterte reproduzierbar mit `Errno 13`. Das
+   Skript liegt jetzt direkt im Lauf-Verzeichnis (keine Bindung noetig) und wird auf 0644 gesetzt.
+   Ebenfalls weg: das `; rm -f` im Befehl, das als Sandbox-Benutzer ohnehin still scheiterte
+   (fremder Eigentuemer im sticky `/tmp`) – aufgeraeumt wird jetzt vom Aufrufer.
+2. **Der Timeout des Brokers griff bei einem STILLEN Befehl nicht.** `for line in proc.stdout`
+   blockiert, die Deadline wird nur beim Eintreffen einer Zeile geprueft: `sleep 300` mit
+   `timeout=3` lief bis zum Client-Timeout (33 s) und der **Prozessbaum lebte danach weiter**.
+   Jetzt ein Wachhund-Timer plus Kill der ganzen PROZESSGRUPPE (`start_new_session=True` +
+   `killpg`) – `proc.kill()` erwischte nur die aeussere Shell, nicht `runuser → setpriv → bwrap →
+   bash → python`. Gemessen: 0 Waisen statt 3. Gleiche Korrektur im lokalen Zweig von `shell.py`.
+3. **Eine Meldung im Normalbetrieb entwertet das Journal:** die erste Fassung rief `chmod` auf ein
+   Verzeichnis, das der Broker schon uebernommen hatte → EPERM-Zeile bei JEDEM weiteren
+   Shell-Befehl, obwohl alles funktionierte. Jetzt nur als Eigentuemer.
+
+**Und ein eigener beim Umbau auf „je Benutzer":** beim Entfernen des mpl-Arguments rutschte in
+`bwrap_verfuegbar()` ein Positionsargument auf `_pruefen`; die Pruefung warf TypeError, und die
+Isolation war damit **still aus** (fail-open griff korrekt – nur eben immer). Kein Unit-Test sah
+es, weil alle Abschnitte diese Funktion durch einen festen Wert ersetzen. Lehre und Gegenmittel:
+**Positivkontrolle der Pruefung selbst** (Abschnitt 6b im Waechter: „bei installiertem bwrap muss
+sie JA sagen") und alle Argumente dort namentlich. Register: wer eine Pruefung mockt, braucht
+einen Test, der sie WIRKLICH laufen laesst.
+
+**Verifiziert:** `tests/test_lauf_tmp.py` (147; der bwrap-Aufruf wird WIRKLICH ausgefuehrt, mit
+Gegenprobe fuer `--dev-bind`, und der Sandkasten bricht mit Exit 2 ab, wenn eine Wurzel nicht
+umgebogen ist). Gegenproben beissen einzeln (2/3/1/1/2 FAIL). **Live auf DEV ueber den echten
+Broker-Weg:** zwei parallele Benutzer schreiben denselben Modell-Pfad `/tmp/gemeinsam.txt` und
+lesen je nur ihre eigene Datei; `cat` auf die fremde Arbeitskopie und `filesystem` auf den fremden
+Arbeitsbereich werden abgewiesen; Ergebnis und PNG kommen auf dem Host an; `code=` mit pandas und
+matplotlib laeuft; ein zweiter Lauf desselben Benutzers findet das Zwischenprodukt des ersten;
+Timeout beendet den Baum ohne Waise. **Auf ECHT noch NICHT ausgerollt.**
 
 ## Vektor-Datenbank (Wissenssuche)
 - **FAISS** (`IndexFlatIP`, normierte Vektoren = Cosine) + **sentence-transformers**
@@ -4771,6 +4891,18 @@ Regel und Folge stehen in derselben Zeile: **etwas tun → was bricht.**
   danach als „lokale Aenderung" und blockiert jeden weiteren Pull. `git reset <stand>` (mixed).
 - **Ein Schutz, der still ausfaellt, ist kein Schutz** – `skip-worktree` und `sparseCheckout`
   schlossen sich gegenseitig aus, ohne dass es jemand bemerkte. Wirksamkeit messen, nicht annehmen.
+- **Ein Timeout muss die PROZESSGRUPPE treffen** (`start_new_session=True` + `killpg`) – und wer
+  auf einer Pipe blockiert, braucht einen Wachhund-Timer: `for line in proc.stdout` prueft keine
+  Deadline, ein stiller `sleep 300` lief deshalb bis zum Client-Timeout weiter und hinterliess
+  einen ganzen Prozessbaum als Waise.
+- **`bwrap --bind / /` mountet `nodev`** – `2>/dev/null` scheitert dann mit „Keine Berechtigung".
+  Fuer ein Dateisystem, das sich wie das echte verhalten soll, gehoert `--dev-bind` hin.
+- **Einhaengepunkte, die `bwrap` selbst anlegt, gehoeren dem Sandbox-Benutzer** (0700, eigene
+  Gruppe) – das Aufraeumen durch den Dienst scheitert danach, mit `ignore_errors` sogar still. Wer
+  in ein fremdes Verzeichnis mountet, legt den Punkt vorher als root an.
+- **Wer eine Isolation baut, muss die UEBERGABEN mitdenken** – nicht die Grenze ist der Aufwand,
+  sondern jeder Pfad, den zwei Welten unter demselben Namen sehen muessen (Anhang hinein,
+  Ergebnis heraus, Arbeitsverzeichnis eines Ablaufs, der den Lauf ueberlebt).
 
 ### Code-Muster, die hier schon Geld gekostet haben
 - **Nie auf Falsyness pruefen, wo `0`, `""` oder die leere Menge gueltige Werte sind** –
