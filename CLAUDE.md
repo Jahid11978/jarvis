@@ -2102,6 +2102,75 @@ E-Mail-Zugriff* freigeben (leer = niemand) und die Werkzeug-Bereiche freischalte
 `mail`). Jeder Benutzer hinterlegt sein Postfach selbst. **Kostet einen Skill-Slot**
 (FREE/BASIC: fuenf aktive Skills).
 
+## Office-Add-ins am Arbeitsplatz: zwei Meldungen, zwei Ursachen (2026-08-24)
+Zwei Meldungen aus dem echten Betrieb, beide zutreffend, beide NICHT im Code, sondern in der
+Anleitung bzw. in der Adresse begruendet.
+
+### „Es wird kein Netzlaufwerk angeboten, nur der Store"
+Microsoft hat die Add-in-Oberflaeche umgebaut: der Knopf **Add-Ins** im Menueband oeffnet den
+Store. Der Reiter **FREIGEGEBENER ORDNER** liegt dahinter – unter **Erweitert** (Excel als
+Programm) bzw. **Weitere Einstellungen** (Excel im Browser). Die Anleitung nannte „Weitere
+Add-Ins", einen Menuepunkt, den es so nicht gibt.
+- **Zwei weitere Fehler in derselben Anleitung, beide fuehren zu genau diesem Bild:** der Knopf
+  **„Katalog hinzufuegen"** im Trust Center fehlte (ohne ihn wird die eingetippte URL nicht
+  uebernommen – danach zeigt Excel nur den Store), und als Ablageort war „ein Ordner, auf den du
+  zugreifen kannst" genannt. **Ein LOKALER Ordner erscheint nie**; es muss ein Netzwerkpfad
+  (`\\Server\Ordner`) sein.
+- **Der einfachste Weg stand gar nicht drin: Excel im BROWSER.** Dort laedt jeder Benutzer die
+  Datei selbst hoch (**Start → Add-Ins → Weitere Einstellungen → Mein Add-In hochladen**) – kein
+  Katalog, kein Trust Center, keine Administration. Preis: es gilt pro Browser (das Manifest liegt
+  im Browser-Speicher).
+- **Die zentrale Bereitstellung im Microsoft-365-Adminportal ist hier KEIN Weg** und steht deshalb
+  ausdruecklich als Nicht-Weg in der Admin-Anleitung: sie verlangt Exchange Online mit aktiven
+  Postfaechern und schliesst „Add-in deployment to an Exchange on-premises Mailbox" aus – das Haus
+  betreibt Exchange 2019 im Haus. Dieselbe Randbedingung wie beim Outlook-Add-in, nur aus einer
+  anderen Richtung.
+- Fuer eine Ausrollung per Gruppenrichtlinie steht der Katalog-Eintrag unter
+  `HKCU\Software\Microsoft\Office\16.0\WEF\TrustedCatalogs` (in der Admin-Anleitung genannt).
+- **Merkregel: eine Klick-Anleitung fuer Fremdsoftware ist ein Ablaufdatum im Text.** Sie gehoert
+  gegen die Herstellerdoku geprueft, wenn sich eine Meldung darauf beruft – und der Waechter prueft
+  die INHALTE der Anleitung (nennt sie „Erweitert"? „Katalog hinzufuegen"? verlangt sie einen
+  Netzwerkpfad?), nicht ihre Existenz.
+
+### „Office 365 vertraut dem Add-in nicht" – das ist die ADRESSE, nicht das Zertifikat
+Gemessen auf ECHT: dort liegt seit demselben Tag ein Zertifikat der **internen Firmen-CA**
+(`ROOT-CA-NEXUS`) fuer **`CN=dp.nexerius.nexus-ag.de`**, SAN nur dieser Name. Das Manifest zeigte
+aber auf **`https://<IP-Adresse>`**. Damit ist es eine **Namensabweichung** – Office bricht das
+Laden ab, obwohl Zertifikat UND Vertrauensstellung in Ordnung sind (Domaenenrechner vertrauen der
+CA per AD).
+- **Der Fehler ist von aussen nicht zu deuten:** das Add-in installiert sich klaglos, und die
+  Meldung zeigt auf das Vertrauen – gesucht wird dann am falschen Ende (Zertifikat importieren
+  hilft hier NICHT).
+- **Deshalb wird es GEMESSEN, nicht erklaert:** `addin.zert_deckt_basis(basis)` liest das eigene
+  Serverzertifikat (CN + SAN, Wildcards nur eine Ebene tief, so wie der Client es prueft) und
+  vergleicht mit dem Host der Manifest-Adresse. Beide Manifest-Endpunkte legen das Ergebnis in den
+  Antwortkopf **`X-Jarvis-Cert-Warn`**; der Excel-Admin-Reiter zeigt es beim Adress-Test.
+- **Warnung, keine Sperre** – anders als bei `localhost`: bei TLS-Terminierung in einem
+  Rueckwaertsproxy ist das lokale Zertifikat nicht massgeblich, und ein 400 wuerde dort eine
+  funktionierende Einrichtung abwuergen. `gedeckt is None` (nichts lesbar) ist deshalb NICHT
+  dasselbe wie „nicht gedeckt".
+- **Der Text reist in einem HTTP-KOPF und muss ASCII sein.** Erste Fassung enthielt Gedankenstriche
+  – live stand dann ein `?` mitten im Satz (`encode("ascii","replace")`). Ein Test prueft jetzt den
+  Textausdruck (nicht die Funktion samt Docstring – der Waechter haette sonst seine eigene
+  Begruendung mitgelesen).
+- **Abhilfe in dieser Reihenfolge:** (1) das Manifest ueber den NAMEN abrufen, auf den das
+  Zertifikat lautet, bzw. `addin_base_url`/`JARVIS_ADDIN_BASE` darauf setzen – dann ist nichts
+  weiter zu tun; (2) erst wenn die Adresse stimmt, ist das Zertifikat die Frage: ein selbst
+  ausgestelltes gehoert auf den Arbeitsplaetzen unter *Vertrauenswuerdige Stammzertifizierungs-
+  stellen* (Download `/api/cert`, per GPO verteilbar), besser eines der eigenen Firmen-CA.
+- **Nebenbefund im Excel-Admin-Reiter, unabhaengig davon:** die Sichtbarkeit des Ordner-Knopfes
+  sass HINTER dem fruehen Ausstieg fuer „kein Pfad" – der Zweig war unerreichbar, und beim LEEREN
+  des Feldes blieb der Knopf stehen (ohne Ziel). Ein Bestandstest hatte das gemeldet und stand rot,
+  weil er zusaetzlich an der Zeichenkette `feldPfad() && kannSpeichern()` hing. Beides behoben:
+  Knopf-Logik in `ordnerKnopf(pfad)` VOR dem Ausstieg, Test auf die Eigenschaft umgestellt.
+
+**Verifiziert:** `tests/test_excel_addin.py` (348) · `tests/test_excel_addin_ui.js` (209).
+Gegenproben beissen einzeln: alter Menuepfad in der Anleitung = 4 FAIL, Wildcard ohne
+Ebenenpruefung = 1, Antwortkopf nicht gesetzt = 1, Knopf-Logik zurueck hinter den Ausstieg = 1
+(UI) + 1 (Quelltext). **Live auf DEV:** Abruf ueber die IP, die das DEV-Zertifikat im SAN fuehrt →
+**keine** Warnung; Abruf ueber einen fremden Namen → Warnung mit den tatsaechlich abgedeckten
+Namen, in beiden Manifest-Endpunkten, Kopf sauber ASCII.
+
 ## Outlook-Add-in: /email im Aufgabenfenster (2026-08-16)
 **Was es ist:** Ein Office-**Web**-Add-in (Office.js), das `/email` in ein Aufgabenfenster in
 Outlook holt – Postfach, Regeln, Protokoll – plus das, wofuer es ein Add-in ueberhaupt braucht:
