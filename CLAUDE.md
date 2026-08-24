@@ -2886,6 +2886,63 @@ STRUKTUR und beschreibt die TRANSFORMATION; ausgefuehrt wird sie im Backend auf 
   erzeugen") – jetzt nur fuer **neu anzulegende** Tabellen, bei vorhandenen die `xlsx_*`-Werkzeuge,
   „**TIPPE TABELLENDATEN NIEMALS AB**", eigene Regel fuer gemeldete Kuerzungen.
 
+### Zellen im ZIP patchen statt die Mappe neu zu bauen (2026-08-24)
+**Der Auslöser war eine Frage:** „warum wird die zu modifizierende Excel-Datei neu gebaut, anstatt
+sie nur in ein paar Zellen zu verändern?" Antwort: weil `openpyxl` das nicht kann — `load_workbook`
+parst die ganze Mappe in ein Objektmodell, `save()` serialisiert sie vollständig neu, und alles,
+was die Bibliothek nicht versteht, fällt heraus. **An der echten Produktionsdatei gemessen:**
+
+| | Teile | verloren | `xl/workbook.xml` |
+|---|---|---|---|
+| openpyxl-Rundlauf | 16 → **10** | calcChain, **printerSettings ×2**, sharedStrings, **Blatt-rels ×2** | 2277 → **833 B** |
+| Patch-Weg | 16 → **15** | nur `calcChain.xml` (bewusst) | unverändert + `fullCalcOnLoad` |
+
+`skills/office/xlsx_patch.py` schreibt ein neues ZIP, in das **jeder Teil byte-gleich** übernommen
+wird; angefasst werden nur drei: die betroffene `xl/worksheets/sheetN.xml`, `xl/workbook.xml`
+(`calcPr`) und die zwei Verweisdateien der entfernten calcChain.
+
+- **Bewusst kein ElementTree, sondern gezielte Textmanipulation.** Die Blatt-XML echter Dateien
+  trägt `mc:Ignorable` und mehrere Namespaces (`x14ac`, `xr`, `xr2`, `xr3`); ein Rundlauf durch
+  einen Serialisierer ändert Präfixe, Attributreihenfolge und Selbstschließung – und damit
+  womöglich mehr, als gewollt ist. Was nicht angefasst wird, bleibt Zeichen für Zeichen stehen.
+- **`fullCalcOnLoad="1"` ist nicht optional, sondern der Unterschied zwischen nützlich und
+  gefährlich:** die calcChain wird entfernt, und die gecachten `<v>`-Werte der Formelzellen, die
+  auf eine geänderte Zelle zeigen, stünden sonst **veraltet** in der Datei – Excel zeigte alte
+  Summen zu neuen Zahlen. Die Beziehung auf die calcChain muss aus `[Content_Types].xml` **und**
+  `xl/_rels/workbook.xml.rels` heraus: eine Beziehung auf einen fehlenden Teil lässt Excel die
+  Datei als beschädigt melden.
+- **DIE GRENZE SIND SHARED FORMULAS, und sie ist fail-closed.** In echten Mappen steht die Formel
+  einer Zeile als Gruppe: eine MASTER-Zelle (`<f t="shared" ref="B3:BL3" si="0">…`) und viele
+  Folger (`<f t="shared" si="0"/>`). Wer die Master-Zelle überschreibt, nimmt allen Folgern ihre
+  Definition. Die gemeldete Datei hat **435 bzw. 492** solcher Zellen. Ein Schreibversuch darauf
+  wird **abgelehnt und benannt**; eine Folgezelle darf geschrieben werden.
+- **Text als `inlineStr`, nicht als sharedString:** sonst müsste `xl/sharedStrings.xml` samt aller
+  Indizes umgeschrieben werden, und die Zusage „alles andere bleibt byte-gleich" wäre weg. Der
+  **Stil (`s`) der alten Zelle wird übernommen** – sonst wird aus einem Datum eine fünfstellige Zahl.
+  Eine Formel wird **ohne** gecachten Wert geschrieben; ein mitgeschriebener wäre eine Behauptung.
+- **Reihenfolge ist Pflicht:** die `r`-Attribute müssen innerhalb einer Zeile aufsteigend sein und
+  die `<row>`-Elemente ebenso – Excel meldet eine Datei mit falscher Reihenfolge als beschädigt.
+  Neue Zellen und Zeilen werden deshalb einsortiert, nicht angehängt; `<dimension>` wird nachgezogen
+  (Excel repariert das still, LibreOffice und pandas lesen es als Bereichsgrenze).
+- **Der Test hat einen echten Befund geliefert:** `"Ort"` **ist** eine gültige Spaltenbezeichnung
+  (Spalte 10.628) – dieselbe Falle wie in `tabellen.py`. Ablehnen wäre falsch, stillschweigend
+  dorthin schreiben auch. Deshalb `weit_draussen`: ein Ziel mehr als 50 Spalten bzw. 1000 Zeilen
+  hinter der bisherigen Grenze wird **im Ergebnis benannt**.
+- **`xlsx_edit` nutzt den Patch-Weg als REGELWEG**, mit openpyxl-Rückfall bei `PatchFehler` – und
+  der Rückfall ist **nicht still**: er schreibt `HINWEIS_AN_NUTZER`, was dabei verloren gehen kann.
+  Im Patch-Weg wird umgekehrt **kein Verlusthinweis** ausgegeben, weil dort keiner entsteht.
+- **Verifiziert:** `tests/test_xlsx_patch.py` (102 lokal / **111 auf DEV im venv** – dort liest
+  openpyxl das Ergebnis als echter Konsument). Gegenproben beißen einzeln (byte-gleich aus → 1,
+  `fullCalcOnLoad` aus → 3, Master-Schranke aus → 2). **An der echten Produktionsdatei:** 194 von
+  194 Werten korrekt, 985 Formeln erhalten, Druckbereich erhalten, alle XML-Teile wohlgeformt,
+  LibreOffice öffnet und konvertiert sie. **Ende-zu-Ende über `xlsx_edit`** mit derselben Datei:
+  194/194, nur calcChain fehlt.
+- **FALLSTRICKE im eigenen Test, beide von einem echten Konsumenten aufgedeckt:** das synthetische
+  Material war zunächst **kein gültiges xlsx** (fehlende Wurzel-Beziehung auf `xl/workbook.xml`) –
+  openpyxl meldete „File contains no valid workbook part", und der ganze Abschnitt bewies nichts;
+  danach fehlte `xl/styles.xml`, worauf jeder `s="N"`-Verweis in einen `IndexError` lief.
+  **Ein Testmaterial, das ein echter Konsument nicht öffnet, kann nichts belegen.**
+
 ### Beschriftungszeile ≠ Datenanfang
 Die erste Fassung nahm „Kopfzeile = Zeile 1" an – an der echten Datei waeren **9 von 13 Blaettern
 falsch gelesen** worden:
