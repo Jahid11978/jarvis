@@ -2507,6 +2507,78 @@ weiter 200 als leere Huelle, Admin-Endpunkt weiter 200).
 Berechtigungen → Short-Tracks-Zugriff* eintragen (leer = niemand)**, Grenzen und Bereiche pruefen
 (Vorgabe: nur „Lesen + Dokumente erzeugen"). **Kostet einen Skill-Slot.**
 
+### `shell_execute` gehoert zur Grundausstattung (Vorgabe 2026-08-24)
+**Gemessen auf ECHT, Ablage „Tabellen zusammenfuehren": vier Laeufe an einem Vormittag, kein
+einziges brauchbares Ergebnis.** Das Journal nannte dabei achtmal
+`Rolle 'dump:…': Tool 'shell_execute' nicht im Rollenumfang`, und das Modell schrieb es selbst in
+seine Antwort: „Da shell_execute nicht verfuegbar ist, hole ich die restlichen Spalten in Batches"
+bzw. „Shell ist gesperrt. … Ohne Shell-Tools muss ich die Daten manuell in die Excel-Struktur
+uebertragen." Ergebnisse: einmal 32 Schritte / 534 s / **nichts**; einmal 27 Spalten
+**faelschlich auf 0** gesetzt; einmal Master UND Slave **selbst erfunden** („hypothetische
+weitere Monate als Platzhalter"), samt derselben Datei zweimal als Chip.
+- **Entscheidung des Nutzers, woertlich: „es KANN NICHT SEIN, dass `shell_execute` nicht verfuegbar
+  ist. Eine Sicherheit, die die Funktionsfaehigkeit einschraenkt, ist nicht zumutbar."**
+  `shell_execute` steht jetzt in `BASIS_WERKZEUGE`, der abwaehlbare Bereich **`shell` ist weg**.
+- **Die Beschraenkung war ohnehin KEIN Sicherheitsgewinn:** der Lauf traegt die Kennung des
+  Menschen, der die Datei abgelegt hat, ist IMMER unprivilegiert und laeuft im privaten `/tmp` als
+  `jarvis_sandbox*` – genau wie ein Shell-Befehl desselben Benutzers **im Chat, wo er
+  `shell_execute` hat**. Die Ablage schnitt also einen Benutzer zu, der einen Klick weiter mehr
+  darf. Was traegt, ist die harte Grenze: OS-Benutzer, Namespace, Pfad-Confinement, Deny-Muster.
+- **Der Haken durfte nicht als Attrappe stehen bleiben** – ein Schalter, der nichts mehr bewirkt,
+  behauptet einen Zustand, den er nicht herstellt. `wissen` und `fach` bleiben eigene Bereiche:
+  dort geht es nicht um Rechenleistung, sondern um ZUGANG zu fremden Datenquellen – das ist die
+  Grenze, die ein Administrator ziehen soll.
+- **`ALTE_BEREICHE = ("shell",)` – die einzige Stelle, an der ein unbekannter Wert still
+  uebergangen wird**, und das ist Absicht: ohne sie liesse sich eine bestehende Ablage mit
+  `bereiche: ["basis","shell"]` **nicht mehr speichern** („Unbekannte Werkzeug-Bereiche: shell") –
+  ein Fehler, den niemand deuten kann, fuer eine Faehigkeit, die sie ohnehin hat. Der Benutzer
+  verliert nichts, deshalb keine Meldung.
+
+### Spaltennamen sind STRUKTUR – der Kopf wird nicht auf eine Anzahl gekappt
+Dieselbe Messung deckte die eigentliche Ursache auf, und sie liegt in `skills/office/tabellen.py`:
+- Das Blatt der echten Datei hat **254 Spalten** (Laborcode-Kuerzel als Spaltenkopf).
+  `xlsx_inspect` benannte davon **60** und meldete „+182 weitere benannte Spalten";
+  `xlsx_read_range` benannte sogar nur **25** – und schrieb darunter „Mit 'spalten' gezielt
+  auswaehlen". **Ein Zirkelschluss:** der Hinweis verlangt Namen, die dieselbe Ausgabe gerade
+  verschwiegen hat. Das Modell kam nur durch Durchprobieren weiter (24 Leseaufrufe).
+- **Der Platz war da:** der ganze inspect-Text war **2.630 von 14.000 erlaubten Zeichen** lang. Die
+  Kappung kam allein von einer festen Zahl.
+- Jetzt `KOPF_TEXT_MAX = 4000` **Zeichen** (nicht Spalten) ueber `_kopf_text()`, benutzt von
+  `xlsx_inspect` UND `xlsx_read_range` – eine Stelle, damit die beiden nicht wieder verschieden
+  weit kappen. **Die DATENZEILEN bleiben gekappt** (`BEISPIEL_SPALTEN = 25`): dort ist die Grenze
+  richtig, Werte gehoeren nicht durch das Modell. Reisst die Namensliste den Deckel, wird die
+  Restzahl **beziffert** – eine unvollstaendige Liste, die sich fuer vollstaendig ausgibt, waere
+  schlimmer als eine kurze.
+- **Merkregel: die SPALTENNAMEN sind das, was diese Werkzeuge liefern sollen.** Wer sie nach Anzahl
+  deckelt, deckelt die Struktur und laesst nur die Daten uebrig.
+
+### Ein Lauf, dessen Antwort mitten im Satz endet, ist kein Erfolg
+Der Lauf um 12:28 wurde als **`ok: True` mit `dateien: []`** verbucht; die Endantwort lautete
+„… hole ich die restlichen Spalten in Batches.\nFehler:" – abgebrochen. Ein gruen gemeldeter
+Fehlschlag ist die schlimmste Variante, weil niemand nachsieht. `_kein_ergebnis()` erkennt das
+jetzt und loest denselben Neuversuch aus wie bei einer leeren Antwort.
+- **Bewusst ENG:** geprueft wird das Ende auf `Fehler:`/`Error:`, **nicht** allgemein ein
+  Doppelpunkt am Satzende – eine legitime Antwort darf „Die Datei liegt bereit:" heissen, wenn
+  danach der Download-Chip kommt.
+
+### Zwei Befunde, die BEWUSST offen bleiben
+- **`xlsx_merge`/`xlsx_edit` nehmen keine CSV als Slave** („ist keine Excel-Datei"), obwohl die
+  Ablage `dateitypen: ['csv','xlsx']` erlaubt. Genau daraus entstand die falsche Folgerung „der
+  Slave-Juli ist leer" (das Werkzeug hatte die CSV nie gelesen). Mit `shell_execute` in der Basis
+  ist es kein Blocker mehr; ein CSV-Leser im Merge waere die saubere Loesung.
+- **Ein Short-Tracks-Lauf schreibt KEINEN Eintrag in den LLM-Verlauf** (`data/logs/conv`) – im
+  Zeitfenster des Fehlschlags stand dort nur ein fremder Chat-Lauf. Damit ist „Das Modell hat keine
+  Antwort formuliert" von aussen **nicht nachvollziehbar**: keine Werkzeugkette, keine Token-Zahl,
+  kein Abbruchgrund. Die Diagnose musste ueber `short_tracks_log.jsonl` plus Journal rekonstruiert
+  werden.
+
+**Verifiziert:** `tests/test_short_tracks.py` (374) · `tests/test_short_tracks_ui.js` (242) ·
+`tests/test_xlsx_tabellen.py` (151, auf DEV im venv). Live auf DEV: `werkzeuge_fuer([])` enthaelt
+`shell_execute`, `BEREICHE` hat nur noch `basis|wissen|fach`, ein Altbestand-`shell` wird still
+entfernt statt abgewiesen. An einer nachgebauten 254-Spalten-Struktur gemessen: **alle 253 Kuerzel
+in EINEM `xlsx_inspect`-Aufruf** (3.570 von 14.000 Zeichen), `xlsx_read_range` nennt das letzte
+Kuerzel ebenfalls – vorher waeren allein fuer den Kopf 11 Bloecke noetig gewesen.
+
 ## Excel: bestehende Tabellen BEARBEITEN statt neu aufbauen (Vorfall + Umbau 2026-08-19)
 **Gemeldet von ECHT:** „Eine Master und eine Slave. Die Master gibt das Layout vor …" – fuenf
 Dateien angeboten, „NICHTS davon brauchbar". An den echten Artefakten gemessen:
