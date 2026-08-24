@@ -2655,6 +2655,19 @@ Ergebnisse UND Endantwort laufen – mit **demselben** `delivered`-Set, also je 
   fuellt den Bereich **unter** der Titelleiste (`--st-top` wird GEMESSEN, nicht angenommen),
   Kopfzeile sticky, hoechstens EINE Karte, Escape verkleinert, **Zustand wird bewusst NICHT
   gemerkt** – ein Vollbild beim naechsten Oeffnen sieht wie ein Fehler aus.
+- **Drehender Kreis in der Auftragsliste** (`.st-spin`, Vorgabe des Nutzers): erscheint **nur bei
+  `status === 'laeuft'`** – ein wartender Auftrag arbeitet nicht. Er steht NEBEN dem Text „läuft …",
+  nicht an seiner Stelle: eine Bewegung allein ist keine Information. `aria-hidden`, Farbe aus
+  `--accent`.
+  - **Die Liste wird alle 2 s neu gebaut** (`TAKT_AKTIV`), und ein CSS-`animation` beginnt bei
+    jedem Neuaufbau von vorn – der Kreis spränge im Sekundentakt zurück. Deshalb ein **negativer
+    `animation-delay` aus der Uhrzeit** (`-(Date.now() % 800)ms`): die Drehphase hängt an der Zeit,
+    nicht am Rendern, und alle Kreise laufen synchron.
+  - **`prefers-reduced-motion` verlangsamt, es schaltet NICHT ab** – ein stehender Ring sieht aus
+    wie ein Zeichen, nicht wie ein Vorgang; die Anzeige verlöre genau das, wofür sie da ist.
+  - **FALLSTRICK im eigenen Test:** `laufZeile.querySelector(...)` ohne Null-Prüfung *wirft*, wenn
+    der Kreis fehlt – die Gegenprobe bricht dann ab und sieht wie ein bestandener Lauf aus. Jetzt
+    null-sicher; Gegenproben beißen mit 3 bzw. 1 FAIL.
 - **Eine abgeschaltete Ablage bekommt GAR KEINE Drop-Bindung** – der Server weist mit 404 ab, und
   eine Flaeche, die zum Ablegen einlaedt, produziert eine Meldung, die niemand deuten kann.
 - `.st-form` braucht `grid-column: 1 / -1` (Kind des Karten-Rasters), `.st-board`
