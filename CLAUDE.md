@@ -1128,6 +1128,64 @@ Arbeitsbereich werden abgewiesen; Ergebnis und PNG kommen auf dem Host an; `code
 matplotlib laeuft; ein zweiter Lauf desselben Benutzers findet das Zwischenprodukt des ersten;
 Timeout beendet den Baum ohne Waise. **Auf ECHT noch NICHT ausgerollt.**
 
+### Halb aktive Isolation: das Backend uebersetzte, der Broker isolierte nicht (Vorfall 2026-08-24)
+**Gemeldet als „einmal mehr ein nicht existierender Link zu einer Behauptung":** eine Benutzerin
+liess zwei Kontrakt-Tabellen zusammenfuehren (9.693 Zeilen, Ergebnis fertig erzeugt) und fragte
+„wo lade ich die neue liste". Die Antwort lautete woertlich „…nutze diesen Link:" – und dahinter
+stand **nichts**. Kein Download-Chip, keine Fehlermeldung, keine Journal-Zeile.
+- **Ursache – eine PROZESSGRENZE ist eine VERSIONSGRENZE:** das Backend hatte den `/tmp`-Umbau,
+  der **Broker-Prozess** lief noch mit seiner sechs Tage alten Kopie von `backend/broker/*`. Er
+  nahm `arbeit`/`ro_binds` klaglos an, **ignorierte sie** und fuehrte den Befehl ohne `bwrap` aus:
+  die Datei landete im gemeinsamen `/tmp`. Das Backend hielt die Isolation fuer aktiv, uebersetzte
+  den Modell-Pfad nach `/tmp/jarvis-arbeit/<kennung>/…` – dort war nie etwas angekommen.
+  Messbar am Zustand: Datei im echten `/tmp` mit Eigentuemer `jarvis_sandbox_noinet`,
+  `/tmp/jarvis-arbeit` **leer**.
+- **DIE LEHRE IST DIE ASYMMETRIE, NICHT DER ALTE PROZESS.** Fail-open ist hier richtig – aber
+  **beide Seiten muessen denselben Rueckfall nehmen.** Faellt nur die AUSFUEHRUNG zurueck und die
+  PFAD-UEBERSETZUNG nicht, ist die Isolation halb aktiv, und das ist schlimmer als gar keine: die
+  beiden Welten sehen unter demselben Namen verschiedene Orte. **Wer eine Grenze einbaut, deren
+  Wirkung ein anderer Prozess herstellt, muss sich von diesem bestaetigen lassen, dass sie
+  wirklich gewirkt hat.**
+- **Der Handshake laeuft ueber die Broker-ANTWORT:** `_op_sandbox_exec` liefert `isolation: bool`,
+  `shell.py` gibt das an `lauf_tmp.melde_ausfuehrung()`. **Ein FEHLENDES Feld ist die Aussage
+  „nein"** – genau so verhaelt sich jede Fassung, die den Umbau nicht kennt; auf ein neues Feld zu
+  *warten* waere die Pruefung, die den Vorfall nicht gefunden haette. Danach uebersetzt
+  `aufloesen()` nicht mehr und `lauf_scope()` oeffnet gar keinen Lauf.
+  - Ausgewertet wird **nur** bei angeforderter Isolation und wirklich gelaufenem Befehl
+    (`"rc" in res`) – `pending`/`denied`/`unreachable` sagen darueber nichts.
+  - **`None` (nichts gemessen) gilt NICHT als unwirksam**, sonst waere die Isolation nach jedem
+    Dienststart einmal aus. Der Preis ist genau EIN Befehl im gemeinsamen `/tmp` – und weil die
+    Meldung vor der Auslieferung eintrifft, findet der Chip die Datei trotzdem.
+- **AUSDRUECKLICH NICHT gebaut: ein Rueckfall „nicht im Lauf-Verzeichnis? dann im echten /tmp
+  suchen".** Er haette den Vorfall auch behoben und ist die naheliegende Idee (`such_wurzeln()`
+  nennt beide Wurzeln) – aber bei AKTIVER Isolation waere er die Wiedereinfuehrung genau der
+  Luecke, die der Umbau geschlossen hat: Dateinamen sind ratbar (`ergebnis.xlsx`), und der Marker
+  liefert die Datei ohne weitere Eigentuemerpruefung aus.
+- **Der zweite, unabhaengige Fehler – und der ist der aeltere:** der Marker-Zweig in
+  `_deliver_docs` brach bei fehlender Datei mit einem **nackten `continue`** ab. Kein Log, kein
+  Hinweis. Und weil `_clean_doc_refs` den Marker aus dem Anzeigetext entfernt, blieb genau der Satz
+  stehen, der auf ihn verwies. **Der Chip IST der einzige Weg zur Datei – faellt er aus, muss der
+  Benutzer das ERFAHREN.** Jetzt: Journal-Zeile mit rohem UND aufgeloestem Pfad plus Grund, dazu
+  eine sichtbare Zeile im Chat („Konnte nicht zum Download bereitgestellt werden: …").
+  - Gemeldet wird **nur beim letzten Text des Laufs** (`melden=True`, gesetzt allein an der
+    Endantwort). Bei einem Werkzeug-Ergebnis waere die Warnung verfrueht – die Datei kann einen
+    Schritt spaeter entstehen, und dann stuenden Warnung und Chip nebeneinander.
+  - Das gilt fuer **jede** Ursache eines verfehlten Markers (Tippfehler des Modells, geloeschte
+    Datei, Ort gesperrt, Secret, Ingest-Fehler), nicht nur fuer diesen Vorfall.
+- **Nebenbefund: `tests/test_doc_delivery.py` war seit dem Umbau vom 23.08. ROT** –
+  `_hostpfad` ruft `_lauf_tmp.aufloesen`, und die Attrappen-Umgebung kannte das Modul nicht
+  (NameError mitten im Lauf). Zusaetzlich hing eine Pruefung an der Zeichenkette
+  `"_search_dirs = [docs_dir, _tmp_root]"`, die nach dem Umbau `[docs_dir] + _arb_roots` heisst –
+  **eine Zeichenkette als Testkriterium ist eine Zeitbombe**, jetzt wird die Eigenschaft geprueft
+  (`docs_dir` drin, `proj` nicht).
+- **Verifiziert:** `tests/test_lauf_tmp.py` (160, Abschnitt 10 fuehrt `aufloesen`/`lauf_scope`
+  WIRKLICH aus) + `tests/test_doc_delivery.py` (53, Abschnitt 7 stellt den Vorfall funktional
+  nach). Gegenproben beissen einzeln (1/2/1 FAIL). **Live auf DEV ueber den echten Broker-Weg:**
+  mit neuem Broker `isolation=True`, Datei nur im Lauf-Verzeichnis, `ls /tmp` zeigt nichts Fremdes;
+  mit einem nachgebauten ALTEN Broker kommt kein Feld, der Merker faellt auf `False`, das Journal
+  nennt Grund und Abhilfe, `aufloesen()` laesst den Pfad stehen und die Datei wird gefunden – ohne
+  den Fix zeigt derselbe Aufbau auf `/tmp/jarvis-arbeit/<kennung>/…` und findet nichts.
+
 ## Vektor-Datenbank (Wissenssuche)
 - **FAISS** (`IndexFlatIP`, normierte Vektoren = Cosine) + **sentence-transformers**
   (`intfloat/multilingual-e5-small`, 384d); Persistenz `data/vector_store/faiss_index.bin` +
@@ -4880,7 +4938,15 @@ Regel und Folge stehen in derselben Zeile: **etwas tun → was bricht.**
   (`skills/office/main.py` und `backend/main.py`).
 - **Der Root-Broker ist ein EIGENER Prozess mit eigener Kopie von `backend/broker/*`** – nach
   einer Aenderung dort `systemctl restart jarvis-broker.service`, sonst 502 „unbekannte Op";
-  und nach dem Neustart einige Sekunden warten, bis der Socket steht.
+  und nach dem Neustart einige Sekunden warten, bis der Socket steht. **Eine BESTEHENDE Op ist
+  schlimmer als eine unbekannte:** sie nimmt neue Argumente klaglos an und ignoriert sie – 502
+  faellt auf, ein still verworfenes Argument nicht (Vorfall 2026-08-24, halb aktive
+  `/tmp`-Isolation). Wer einer Op ein wirkungsvolles Argument gibt, laesst sich die Wirkung in der
+  ANTWORT bestaetigen; ein fehlendes Feld heisst „nicht angewandt".
+- **Fail-open muss auf BEIDEN Seiten gleich antworten.** Faellt nur die ausfuehrende Haelfte auf
+  das alte Verhalten zurueck und die auswertende nicht, ist die Grenze halb aktiv – und zwei
+  Welten sehen unter demselben Namen verschiedene Orte. Das kostet Ergebnisse, nicht Sicherheit,
+  und es meldet sich nicht.
 - **Die Dienstumgebung ist nicht die Handprobe** – `AmbientCapabilities` der Unit werden an jeden
   Kindprozess vererbt und lassen `bwrap` abbrechen, waehrend derselbe Aufruf per `runuser`
   einwandfrei laeuft. Sandboxen IM Dienst pruefen (`systemd-run -p …`).
