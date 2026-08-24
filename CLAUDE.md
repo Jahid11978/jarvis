@@ -2561,19 +2561,49 @@ jetzt und loest denselben Neuversuch aus wie bei einer leeren Antwort.
   Doppelpunkt am Satzende – eine legitime Antwort darf „Die Datei liegt bereit:" heissen, wenn
   danach der Download-Chip kommt.
 
-### Zwei Befunde, die BEWUSST offen bleiben
-- **`xlsx_merge`/`xlsx_edit` nehmen keine CSV als Slave** („ist keine Excel-Datei"), obwohl die
-  Ablage `dateitypen: ['csv','xlsx']` erlaubt. Genau daraus entstand die falsche Folgerung „der
-  Slave-Juli ist leer" (das Werkzeug hatte die CSV nie gelesen). Mit `shell_execute` in der Basis
-  ist es kein Blocker mehr; ein CSV-Leser im Merge waere die saubere Loesung.
-- **Ein Short-Tracks-Lauf schreibt KEINEN Eintrag in den LLM-Verlauf** (`data/logs/conv`) – im
-  Zeitfenster des Fehlschlags stand dort nur ein fremder Chat-Lauf. Damit ist „Das Modell hat keine
-  Antwort formuliert" von aussen **nicht nachvollziehbar**: keine Werkzeugkette, keine Token-Zahl,
-  kein Abbruchgrund. Die Diagnose musste ueber `short_tracks_log.jsonl` plus Journal rekonstruiert
-  werden.
+### Nachtrag am selben Tag: CSV als Quelle, und headless-Laeufe im Verlauf
+Beide Punkte standen hier zunaechst als „bewusst offen" – auf Nachfrage des Nutzers geschlossen.
+
+**a) Eine CSV ist eine erlaubte QUELLE** (`_CSV_ENDUNGEN` in `skills/office/tabellen.py`).
+`_oeffnen()` baut aus einer CSV/TSV eine Mappe IM SPEICHER; damit arbeiten `_kz`, `_kopfzeile`,
+`iter_rows` und alle vier Werkzeuge unveraendert weiter – ein zweiter Codepfad je Werkzeug waere
+auseinandergelaufen.
+- **SCHREIBEND bleibt gesperrt** (`xlsx_edit`-Ziel, `xlsx_merge`-Master): eine CSV hat kein Layout
+  und keine Formeln, „bearbeiten und Formeln behalten" ist dort keine Zusage, die man halten kann.
+  Die Meldung nennt den Weg, statt nur abzulehnen.
+- **`_csv_wert()` – die Umwandlung darf keine Bedeutung loeschen.** Ohne sie landet „3282" als TEXT
+  in der Master-Zelle, Excel richtet es links aus und jede Summenformel darueber rechnet es als 0.
+  Umgekehrt bleiben **fuehrende Nullen TEXT** (PLZ `02625`, Kundennummer `00083` – als Zahl waeren
+  sie zerstoert) und Ziffernfolgen ueber 15 Stellen (IBAN verliert als float die letzten Stellen).
+  Deutsche Schreibweise laeuft ueber `chart.parse_number` – `float("1.234")` ergaebe 1.234 statt
+  1234, also Faktor 1000.
+- **`chart.csv_zeilen()` ist die EINE Stelle fuer Kodierung und Trennzeichen** (utf-8-sig → utf-8 →
+  cp1252 → latin-1, Sniffer mit `;` als Vorgabe). `_read_table` der Diagramme benutzt sie jetzt
+  ebenfalls; zwei getrennte Erkennungen waeren beim naechsten Exportformat auseinandergelaufen.
+
+**b) Headless-Laeufe stehen im LLM-Verlauf** (`_run_headless` → `conv_log.log_conversation`).
+Bis dahin protokollierte nur `run_task`, der Chat-Weg – unsichtbar war also ausgerechnet, was ohne
+Zuschauer laeuft: E-Mail-Regeln, Short Tracks, Cron, Rollen-Agenten.
+- **Der Eintrag entsteht im `finally`**, also auch fuer einen abgebrochenen oder gescheiterten
+  Lauf. Genau der ist der interessante.
+- **Auch fuer `is_sub_agent`-Laeufe** – anders als im Chat-Weg, wo der Eltern-Lauf mitschreibt.
+  Hier waere sonst der Rollen-/Dump-Lauf unsichtbar, und das war der gemeldete Fall. Doppelte
+  Eintraege entstehen nicht: der aeussere Lauf protokolliert nur sein Delegations-ERGEBNIS.
+- **`client_type` nennt den Kanal UND die Rolle** (`headless:dump:c4e3312e6197`) – ohne das weiss
+  niemand, WELCHER Lauf es war. Die Pille in `telemetry.js` rendert den Wert escaped, es braucht
+  keinen Frontend-Fix.
+- **Die Kosten wurden GEMESSEN, nicht geschaetzt** (ECHT, 2026-08-24): der conv-Ordner haelt 507
+  Laeufe in 21 MB (~42 KB je Lauf, fast alles System-Prompt); headless kaeme mit 195 Mail- und 28
+  Tracks-Eintraegen ueber Wochen dazu, also rund +9 MB. **Eine Dedup-Infrastruktur fuer den Prompt
+  braucht das nicht** – wer sie ohne Messung baut, loest ein Problem, das es nicht gibt.
+- **Nebenbefund: `tests/test_empty_answer.py` schrieb in den ECHTEN Verlauf** – Teil 3 fuhr seit
+  immer `run_task`-Laeufe, und die protokollieren. Jetzt wird `conv_log` in einen Sandkasten
+  umgebogen, mit Exit-2-Waechter.
 
 **Verifiziert:** `tests/test_short_tracks.py` (374) · `tests/test_short_tracks_ui.js` (242) ·
-`tests/test_xlsx_tabellen.py` (151, auf DEV im venv). Live auf DEV: `werkzeuge_fuer([])` enthaelt
+`tests/test_xlsx_tabellen.py` (161, auf DEV im venv; Abschnitt 8b deckt den CSV-Weg ab, Gegenprobe
+ohne die CSV-Weiche = 7 FAIL) · `tests/test_empty_answer.py` (56, Abschnitt 4 fuer den
+headless-Verlauf; Gegenprobe = 5 FAIL) · `tests/test_create_chart.py` (112). Live auf DEV: `werkzeuge_fuer([])` enthaelt
 `shell_execute`, `BEREICHE` hat nur noch `basis|wissen|fach`, ein Altbestand-`shell` wird still
 entfernt statt abgewiesen. An einer nachgebauten 254-Spalten-Struktur gemessen: **alle 253 Kuerzel
 in EINEM `xlsx_inspect`-Aufruf** (3.570 von 14.000 Zeichen), `xlsx_read_range` nennt das letzte
@@ -3412,6 +3442,11 @@ bei JEDER Konversation komplett gelesen und neu geschrieben, ein einzelnes Tool-
   (`truncated` + `full_len`); der alten Fassung fehlte genau das, ein „…" sah nach Satzende aus.
 - **`_new_id()` = Millisekunden + Zaehler** – zwei Konversationen koennen in derselben Millisekunde
   enden, eine doppelte Id ueberschriebe den Rumpf.
+- **Seit 2026-08-24 protokolliert auch der HEADLESS-Weg** (`_run_headless`): E-Mail-Regeln, Short
+  Tracks, Cron, Rollen-Agenten. Vorher war ausgerechnet unsichtbar, was ohne Zuschauer laeuft – ein
+  fehlgeschlagener Ablagen-Lauf hinterliess keine Werkzeugkette, keine Token-Zahl und keinen
+  Abbruchgrund. `client_type` traegt dort den Kanal samt Rolle (`headless:dump:<id>`). Details im
+  Short-Tracks-Abschnitt.
 - **Migration automatisch und einmalig**, Quelldatei wird zu `conv_log.json.migrated`
   **umbenannt, nicht geloescht**. Alt-Eintraege tragen `legacy: true` und ein Abzeichen „gekuerzt
   (Altbestand)" – ihre Texte SIND gekuerzt; ohne den Hinweis haelt man sie fuer vollstaendig.
