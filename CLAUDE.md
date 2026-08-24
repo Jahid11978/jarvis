@@ -1186,6 +1186,56 @@ stand **nichts**. Kein Download-Chip, keine Fehlermeldung, keine Journal-Zeile.
   nennt Grund und Abhilfe, `aufloesen()` laesst den Pfad stehen und die Datei wird gefunden – ohne
   den Fix zeigt derselbe Aufbau auf `/tmp/jarvis-arbeit/<kennung>/…` und findet nichts.
 
+### Wer NACH dem Lauf ausliefert, steht ausserhalb der Klammer (Vorfall 2026-08-24, zweiter Teil)
+**Gemeldet am selben Tag, wenige Stunden nach dem Fix oben:** eine Ablage „Tabellen
+zusammenfuehren" endete auf ECHT mit dem Satz „Die bearbeitete Master-Datei wurde als `` gespeichert."
+– **kein Dateiname, kein Download-Chip, keine Fehlermeldung.** Der Lauf stand im Protokoll als
+`ok: True` mit `dateien: []`.
+- **Die Datei war fertig.** Gemessen: `/tmp/jarvis-arbeit/9e78f36a/IBSv3_Monatsstatistik.xlsx`,
+  37 KB, Zeitstempel **zwei Sekunden vor Laufende**; im echten `/tmp` lag nichts. Der LLM-Verlauf
+  (seit dem Vortag auch fuer headless-Laeufe) nennt den Antworttext woertlich: das Modell hatte
+  korrekt `/tmp/IBSv3_Monatsstatistik.xlsx` geschrieben – den MODELL-Pfad.
+- **URSACHE: `short_tracks_runner` liefert NACH `run_task_headless` aus.** Die Klammer
+  `lauf_scope` wird in `_run_headless` geoeffnet und beim Verlassen zurueckgesetzt. Wer danach
+  ausliefert, ist **doppelt blind**: `aufloesen()` gibt ohne ContextVar den Pfad unveraendert
+  zurueck (Zweig b findet nichts), und `such_wurzeln()` liefert das Lauf-Verzeichnis nicht mit
+  (Zweig c sucht am falschen Ort). Der Chat-Weg war nie betroffen – dort steht `_deliver_docs`
+  INNERHALB von `run_task`. **Short Tracks ist der einzige Aufrufer ausserhalb** (drei Aufrufer
+  insgesamt, per grep belegt).
+- **Der Fix ist die Klammer um den Auslieferungsblock.** Sie ist gefahrlos wiederholbar: das
+  Verzeichnis haengt am BENUTZER (`benutzer_kennung` ist deterministisch), und beim Verlassen wird
+  nichts geloescht – es ist dasselbe Verzeichnis, in dem der Lauf gerade gearbeitet hat.
+- **DER ZWEITE FEHLER IST DERSELBE WIE AM VORMITTAG, nur in Zweig (b):** die Pfad-Erkennung brach
+  bei fehlender Datei mit einem nackten `continue` ab. Und weil `_clean_doc_refs` den Pfad aus dem
+  Anzeigetext entfernt, blieb genau der Satz stehen, der auf ihn verwies. Jetzt meldet auch (b)
+  einen verfehlten Pfad – **eng gehalten**: nur an einem ERGEBNISORT (`/tmp/…`, `data/documents/…`;
+  ein genannter Quellpfad wie `/mnt/share/…` bleibt still), nur beim LETZTEN Text des Laufs
+  (`melden=True`; ein Werkzeug-Ergebnis darf nichts behaupten, die Datei kann einen Schritt spaeter
+  entstehen) und nur, wenn der Pfad **nicht schon ausgeliefert** wurde.
+  - **Die `_schon()`-Pruefung ist nicht optional, der Bestandstest hat sie erzwungen:** `_ingest`
+    VERSCHIEBT die Quelle nach `data/documents` – danach ist der Pfad zwangslaeufig weg. Zwei
+    Normalfaelle liefen sonst in eine Falschmeldung **neben dem fertigen Chip** (derselbe Pfad im
+    Liefer-Marker UND als nackter Pfad im selben Text; oder ein Werkzeug-Ergebnis liefert, die
+    Endantwort nennt ihn erneut).
+  - **Die Sendung der Meldung stand ZWISCHEN (m) und (b)** – ein in (b)/(c) vermerkter Fehlschlag
+    waere also nie ausgegeben worden. Sie steht jetzt am ENDE. *Eine Meldung, deren Wirkung von
+    ihrer Position abhaengt, ist dieselbe Falle wie ein Hinweis hinter dem Kuerzungsschnitt.*
+- **Die Warnung waere im Runner verpufft.** Der `_Sammler` legt Chip und Warnung in dieselbe Liste,
+  und `_chips_lesen` laesst alles fallen, was den Chip-Regex nicht trifft. `_warnungen_lesen()`
+  holt sie heraus und haengt sie **nach** `_clean_doc_refs` an die Antwort (davor schnitte die
+  Bereinigung den Dateinamen aus der Warnung wieder heraus). **Eine Warnung, die nur der Chat-Weg
+  ausgibt, ist fuer /tracks keine.**
+- **Kosmetik mit Schutz:** `_clean_doc_refs` entfernt jetzt auch das leere Backtick-Paar, das der
+  entfernte Pfad hinterlaesst. Das Lookaround um das Backtick-Paar ist Pflicht – ohne es
+  matcht „``" in „```python" und macht daraus einen kaputten Codeblock.
+- **Verifiziert:** `tests/test_lauf_tmp.py` (168; Abschnitt 11 fuehrt `lauf_scope`/`aufloesen`
+  WIRKLICH aus und prueft per `ast`, dass der Runner **innerhalb** der Klammer ausliefert – keine
+  Zeichenkette) · `tests/test_short_tracks.py` (380) · `tests/test_doc_delivery.py` (53).
+  Gegenproben beissen einzeln (1/2/1/2 FAIL). **Live auf DEV mit echtem `lauf_tmp` und echtem
+  `agent.py`:** ohne Scope 0 Chips + 1 Warnung (vorher: 0 Chips, **0 Warnungen**), im Scope 1 Chip
+  + 0 Warnungen, Anzeigetext ohne leere Backticks.
+  **Auf ECHT noch NICHT ausgerollt.**
+
 ## Vektor-Datenbank (Wissenssuche)
 - **FAISS** (`IndexFlatIP`, normierte Vektoren = Cosine) + **sentence-transformers**
   (`intfloat/multilingual-e5-small`, 384d); Persistenz `data/vector_store/faiss_index.bin` +
@@ -2669,7 +2719,7 @@ Zuschauer laeuft: E-Mail-Regeln, Short Tracks, Cron, Rollen-Agenten.
   immer `run_task`-Laeufe, und die protokollieren. Jetzt wird `conv_log` in einen Sandkasten
   umgebogen, mit Exit-2-Waechter.
 
-**Verifiziert:** `tests/test_short_tracks.py` (374) · `tests/test_short_tracks_ui.js` (242) ·
+**Verifiziert:** `tests/test_short_tracks.py` (380) · `tests/test_short_tracks_ui.js` (242) ·
 `tests/test_xlsx_tabellen.py` (161, auf DEV im venv; Abschnitt 8b deckt den CSV-Weg ab, Gegenprobe
 ohne die CSV-Weiche = 7 FAIL) · `tests/test_empty_answer.py` (56, Abschnitt 4 fuer den
 headless-Verlauf; Gegenprobe = 5 FAIL) · `tests/test_create_chart.py` (112). Live auf DEV: `werkzeuge_fuer([])` enthaelt
@@ -5142,6 +5192,10 @@ Regel und Folge stehen in derselben Zeile: **etwas tun → was bricht.**
 - **Einhaengepunkte, die `bwrap` selbst anlegt, gehoeren dem Sandbox-Benutzer** (0700, eigene
   Gruppe) – das Aufraeumen durch den Dienst scheitert danach, mit `ignore_errors` sogar still. Wer
   in ein fremdes Verzeichnis mountet, legt den Punkt vorher als root an.
+- **Wer NACH einem Lauf Dateien ausliefert, muss im Lauf-Scope stehen.** `lauf_scope` haengt an
+  einem ContextVar; ausserhalb uebersetzt `aufloesen()` keinen Modell-Pfad mehr UND das
+  Lauf-Verzeichnis fehlt in `such_wurzeln()` – die Auslieferung ist dann doppelt blind, ohne jede
+  Meldung. Betrifft jeden headless-Aufrufer, der `_deliver_docs` selbst ruft.
 - **Wer eine Isolation baut, muss die UEBERGABEN mitdenken** – nicht die Grenze ist der Aufwand,
   sondern jeder Pfad, den zwei Welten unter demselben Namen sehen muessen (Anhang hinein,
   Ergebnis heraus, Arbeitsverzeichnis eines Ablaufs, der den Lauf ueberlebt).
