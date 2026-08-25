@@ -4,8 +4,40 @@
 Autonomer KI-Agent auf einem Linux-Server (Debian 13) mit Web-Frontend, Desktop-Steuerung via VNC und WhatsApp-Integration.
 
 ## Server & Deployment
-- **App-Server:** root@191.100.144.1 (Debian 13), SSH: `ssh -i /c/users/bender/.ssh/id_rsa
-  root@191.100.144.1`
+- **ZWEI App-Server, und die Unterscheidung ist NICHT optional:**
+
+  | | Adresse | Rolle |
+  |---|---|---|
+  | **DEV** | `root@191.100.144.1` | Testen, Messen, Ausprobieren – hier laufen die Tests |
+  | **ECHT** | `191.100.130.62` · FQDN **`dp.nexerius.nexus-ag.de`** | **Produktion** – Benutzer arbeiten darauf |
+
+  ### ⛔ ECHT wird NIEMALS von Claude angefasst (Vorgabe 2026-08-25, unbefristet)
+  **Der Betreiber pflegt ECHT ausschliesslich selbst.** Daraus folgt, ohne Ausnahme:
+  - **Keine schreibende Aktion auf ECHT** – kein `scp`/`install`, kein `git pull`, kein
+    `systemctl restart`, keine Konfigurations- oder Dateiaenderung, kein Skriptlauf, der
+    etwas veraendert. Auch nicht „nur kurz", auch nicht nach einem gruenen Test.
+  - **KEIN HINWEIS, dass ECHT zu aktualisieren waere.** Kein „auf ECHT noch nicht
+    ausgerollt", keine Rueckfrage „soll ich ausrollen?", keine Erinnerung, keine
+    Ausrollen-Checkliste am Ende einer Aufgabe. Der Betreiber entscheidet und handelt
+    selbst; ein solcher Hinweis ist keine Hilfe, sondern Wiederholung.
+  - **Erlaubt bleibt LESEN und MESSEN** zur Fehlersuche, wenn danach gefragt wurde
+    (Journal, Einstellungen, Dateistaende, Abgleich) – das veraendert nichts.
+  - Fertige Aenderungen bleiben im Arbeitsbaum bzw. auf DEV liegen. Punkt.
+
+  **Anmeldung ist NICHT gleich:** DEV `root@191.100.144.1`, ECHT **`nxadmin@191.100.130.62`**
+  (root ist dort per SSH gesperrt; `sudo` verlangt ein Kennwort, das der Betreiber eingibt).
+  Beide Debian 13, beide `/opt/jarvis/`, Hostname von ECHT ist `hh-vm-jarvis`.
+  **Der FQDN ist die massgebliche Adresse**, nicht die IP: das Serverzertifikat der
+  Firmen-CA lautet auf `CN=dp.nexerius.nexus-ag.de` (SAN nur dieser Name) – ein Aufruf
+  ueber die IP ist eine Namensabweichung und laesst u.a. die Office-Add-ins scheitern
+  (siehe *Office-Add-ins am Arbeitsplatz*).
+  **FALLSTRICK, am 2026-08-25 bezahlt:** hier stand jahrelang nur „App-Server:
+  root@191.100.144.1" ohne Rollenangabe. Eine Fehlersuche zu einem Vorfall **auf ECHT**
+  („die Wissen-Kachel fehlt oft") lief deshalb vollstaendig gegen **DEV** – Journal,
+  Einstellungen, AD-Caches, Wissensgruppen, Mounts, 101 gemessene Neustarts: **alles vom
+  falschen Server.** Die Zahlen waren echt und die Schlussfolgerungen daraus wertlos.
+  **Wer eine Meldung von ECHT untersucht, misst auf ECHT** – und schreibt in jeden Befund
+  dazu, welcher Server gemeint ist.
 - **Ein Pfad:** `/opt/jarvis/` (systemd, WorkingDirectory) – der fruehere Zweitpfad
   `/home/jarvis/jarvis/` wurde abgeschafft (totes Kopier-Ziel).
 - **Deploy:** lokal schreiben + `scp` (keine Heredocs ueber SSH – Quoting mit f-strings).
@@ -4612,5 +4644,7 @@ journalctl -u jarvis.service -f
 journalctl -u whatsapp-bridge.service -f
 
 # Deployen
-scp -i ~/.ssh/id_rsa <datei> root@191.100.144.1:/opt/jarvis/<pfad>
+scp -i ~/.ssh/id_rsa <datei> root@191.100.144.1:/opt/jarvis/<pfad>      # DEV
+# ECHT: hier steht bewusst KEIN Deploy-Befehl - siehe "ECHT wird NIEMALS von
+# Claude angefasst" unter Server & Deployment.
 ```
