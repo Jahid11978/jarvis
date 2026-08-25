@@ -4014,6 +4014,34 @@ Fuer mechanische Breitenarbeiten (viele Dateien, einfache Aenderung,
 vorhandener Test) MUSST du den Skill `code-delegate` verwenden.
 Bei Fehlschlag sofort selbst machen - keine Nachbesserungsversuche.
 
+**VORBEDINGUNG, die einen ganzen Lauf gekostet hat (2026-08-25): der Riegel muss in
+`origin/master` liegen.** Der Server klont von dort – ein frisch geschriebener, noch nicht
+gepushter Waechter existiert im Arbeitsbereich gar nicht. Der Lauf startet trotzdem, der Agent
+arbeitet, und erst die Bewertung meldet „Riegel existiert im Arbeitsbereich nicht": kein Patch, und
+nach der Abbruchregel macht man die Aufgabe danach selbst. Dieselbe Falle subtiler: ein
+committeter, aber lokal **geaenderter** Riegel – geprueft wuerde die alte Fassung, ein gruener
+Riegel bewiese dann etwas anderes als das gerade Geschriebene. `delegiere.py::pruefe_riegel()`
+faengt beides jetzt **vor** dem Lauf ab. **Reihenfolge: Waechter schreiben → committen und pushen →
+delegieren.**
+
+**Buchhaltung (`delegiere.py bericht`):** `claude_subagent.messwerte_erheben()` haelt je Auftrag
+die **Zeichen** fest – Auftragstext, Quelldateien **vor** dem Lauf (danach hat der Agent sie
+veraendert), Patch, Dauer –, `GET /api/claude/jobs` gibt sie heraus (am **Delegations-Schluessel**,
+nicht an der Sitzung: der Bericht laeuft in der Kommandozeile, dort gibt es kein Sitzungstoken).
+Rechnung: *ohne* Delegation ≈ Quelldateien lesen + Patch schreiben, *mit* ≈ Auftrag schreiben +
+Patch lesen ⇒ **Ersparnis ≈ Quelle − Auftrag**; der Patch faellt heraus, er geht in beiden Faellen
+durch Claude. Ein **abgelehnter** Auftrag zaehlt **negativ** – die Spezifikation wurde bezahlt und
+die Aufgabe danach trotzdem selbst gemacht; deshalb werden die Messwerte auch im Fehlerzweig
+geschrieben, sonst erschiene er als Nullzeile. **Token sind GESCHAETZT** (`ZEICHEN_JE_TOKEN = 3.6`),
+Zeichen sind gemessen – und der Bericht nennt den Vorbehalt selbst: die Ersparnis gilt nur, soweit
+die Dateien vorher NICHT gelesen wurden.
+
+**Stand 2026-08-25:** Freigabe war **leer = niemand**, auf DEV auf `claudesub_allowed_users =
+jarvis` gesetzt; Schluessel liegt in `~/.jarvis-csa-key` (der Client sucht `~/.<marke>-csa-key`,
+**nicht** `~/.subagent-key` – der Name im SKILL.md ist ein Platzhalter). Bis dahin war **keine
+einzige Aufgabe delegiert worden**: keine Auftraege auf dem Server, kein Skill-Aufruf in den
+Sitzungen, kein Schluessel auf der Maschine.
+
 ## Konventionen
 - **Git:** `git commit` und `git push` NUR auf ausdrueckliches Kommando des Nutzers (`c+p`) –
   niemals aus eigenem Antrieb, auch nicht wenn eine Aufgabe fertig und getestet ist. Fertige
@@ -4531,8 +4559,14 @@ Regel und Folge stehen in derselben Zeile: **etwas tun → was bricht.**
   schreiben und `scp`.
 - **`PYTHONUNBUFFERED=1`** ist Pflicht fuer Live-Ausgabe (Shell-Streaming) und dafuer, dass
   Shutdown-Hooks ueberhaupt im Journal erscheinen.
-- **Bei Frontend-Aenderungen den Cache-Buster hochzaehlen** (`?v=N`) – sonst behaelt der Browser
-  des Melders genau die kaputte Fassung.
+- **Bei Frontend-Aenderungen den Cache-Buster hochzaehlen** (`?v=N`) – **an ALLEN Einbindungen
+  derselben Datei**, nicht nur auf der Seite, an der man gerade arbeitet. Sonst behaelt der Browser
+  des Melders genau die kaputte Fassung, und bei ungleichen Staenden haelt er **zwei** Fassungen
+  derselben Datei: die Seite mit der niedrigeren Zahl bekommt nach jeder Aenderung weiter die ALTE
+  aus dem Cache. Gemessen am 2026-08-25: 9 von 64 Dateien liefen auseinander
+  (`chatlib.js` v=4 auf /settings gegen v=16 auf /chat, `security_incidents.js` v=14 gegen v=30).
+  Waechter `tests/test_cache_buster.py` – er prueft die REGEL, nicht eine Liste, und meldet
+  zusaetzlich eine Datei, die auf manchen Seiten **ganz ohne** `?v=` eingebunden ist.
 - **`data/instructions/*.md` NIE aus dem Repo ueberschreiben** – der Server ist die Wahrheit.
 - **Deadlock in `wa_logger.py`:** `clear_logs()` darf `log()` erst NACH dem Lock-Release rufen.
 - **Nie synchrone Bridge-Requests im Event-Loop** – immer `_wa_bridge_async()`.
