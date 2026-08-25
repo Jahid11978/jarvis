@@ -4351,6 +4351,14 @@ Rendern, von einem `catch` verschluckt: die Skills-Seite blieb ohne Fehlermeldun
     steht in der Ausgabe**: eine Sicherung, deren Erfolg niemand prueft, ist keine.
 - **Grenze, die in der Ausgabe steht:** Basis ist `git ls-files`. Eine lokal vorhandene, aber noch
   nicht hinzugefuegte Datei ist fuer den Lauf unsichtbar.
+- **Die Ablage liegt im HOME des ANMELDENDEN Benutzers, nicht fest unter `/root`.** Bis 2026-08-25
+  stand dort `/root/.jarvis-abgleich` – auf **ECHT meldet man sich als `nxadmin` an**, und damit
+  scheiterte JEDER Lauf mit `mkdir: cannot create directory '/root'`. Ausgerechnet der Server, auf
+  dem Drift am teuersten ist, war nicht pruefbar; gemerkt hat es niemand, weil auf DEV root
+  angemeldet ist. `ablage_pfad()` erfragt das HOME einmal per `printf %s "$HOME"` und ist
+  **fail-closed** (kein absoluter Pfad zurueck → Abbruch statt geratenem Ziel). Dieselbe Korrektur
+  im Sicherungspfad von `--nachziehen`, sonst scheiterte das Nachziehen **nachdem** der Lauf schon
+  Drift gemeldet hat.
 - **Serverseitige Haelfte ist `deploy/abgleich_agent.py`** – wird per scp abgelegt und dort mit dem
   System-Python ausgefuehrt (kein Fremdmodul). Bewusst **kein** Heredoc/`python3 -c` ueber SSH
   (Quoting-Fallstrick, siehe Register); die Ablage liegt unter `/root/.jarvis-abgleich` (0700),
