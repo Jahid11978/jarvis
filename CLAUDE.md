@@ -2544,6 +2544,49 @@ naechsten Broker-Start selbst. **Stand ECHT:** Code ausgerollt, die 6 fehlenden 
   loescht ein Klick auf die erste Bot-Antwort den falschen Eintrag.** `_submitEdit`/
   `truncateHistoryToUserIndex` zaehlen nur `user`-Eintraege und sind nicht betroffen.
 
+### Der Benutzer holt ihn selbst zurueck (2026-08-25)
+**Der Marker war eine Einbahnstrasse.** „Nach dem Loeschen kommt er nicht wieder" war richtig
+gedacht (eine Willkommensmeldung, die sich nicht wegraeumen laesst, ist eine Zumutung) – nur gab es
+**keinen Weg zurueck**: wer die Beispiele spaeter brauchte, war auf einen Administrator angewiesen,
+der die Datei `.welcome_v1` auf dem Server entfernt. Gemeldet fuer einen Benutzer auf ECHT.
+- **Knopf „Beispiel-Prompts" im FUSS der Verlaufsleiste** (`#cs-welcome`) →
+  `POST /api/chat/welcome/restore` (`require_auth`) → `chat_sessions.restore_welcome_session()`.
+- **Der Benutzer kommt AUSSCHLIESSLICH aus der Anmeldung**, nie aus dem Rumpf – sonst waere der
+  Endpunkt ein Weg, in fremde Chatordner zu schreiben (dieselbe Regel wie beim Empfaenger einer
+  Erinnerung). Ein Test lehnt jedes `request.json`/`body.get` im Rumpf ab.
+- **Ist der Chat noch da, entsteht KEIN zweiter gleichen Namens** – der Knopf springt dann nur
+  hinein (`restored: false`). Der Marker wird nur entfernt, wenn wirklich keiner mehr existiert.
+- **Wiedererkannt wird er ueber `kind: "welcome"` im `meta.json`** (seit 2026-08-25 beim Anlegen
+  gesetzt); Altbestand ueber Titel **UND** ersten Transkript-Eintrag. **Der Titel allein genuegt
+  NICHT** – ein Benutzer darf einen echten Chat „Beispiel Prompts" nennen, und der wuerde sonst als
+  Willkommens-Chat gelten: die Wiederherstellung verweigerte still ihren Dienst und der Knopf
+  fuehrte in den eigenen Verlauf statt in die Beispiele.
+- **Der Kartenhinweis nennt den Weg zurueck** (DE+EN). Er versprach bis dahin nur das Loeschen –
+  ein Weg zurueck, den niemand kennt, ist kein Weg.
+- **⚠ CSS-FALLE, im echten Chrome gemessen:** `chat.css` setzt in `body.light` **absichtlich**
+  `--fg-rgb: 255,255,255` („helle Overlays/Raender"). Auf `/chat` sind `--border`/`--border-hover`
+  aus `theme.css` damit in **beiden** Themes weiss – der erste Anlauf hatte einen Rand darauf und
+  las sich auf der weissen Flaeche des Fusses als blosse **Beschriftung** statt als Knopf.
+  Richtig ist das theme-bewusste `--outline` aus `chat.css` (dunkel `#333355` / hell `#D0D0DD`).
+  Ein Waechter verbietet `--fg-rgb`/`--border` in diesen beiden Regeln. **Nur der Screenshot hat
+  das gezeigt** – die Messung „deckende Flaeche vorhanden" war gruen.
+- **Der Fuss ist `position: sticky`** mit DECKENDER Flaeche (`--bg-secondary`): mit 15 Chats waere
+  der Knopf sonst unerreichbar weit unten, und halbtransparent schienen die Eintraege durch.
+  `bottom: -12px` deckt das Polster der Leiste mit ab, sonst blitzt dort ein Streifen hervor.
+- **Verifiziert:** `tests/test_welcome_restore.py` (54). Gegenproben beissen einzeln
+  (Doppelungs-Schutz raus → 6 FAIL, Titel allein genuegt → 3, Marker bleibt stehen → 12, Fuss ohne
+  deckende Flaeche → 1). **Live auf DEV** ueber HTTP (loeschen → GET holt ihn NICHT zurueck →
+  restore → genau einer; 3× restore → weiterhin einer; ohne/mit Muell-Token 401) und als
+  **Klick-Test im echten Chrome** (`tests/live_welcome_restore_dev.py`, 12/12: Karte mit 10
+  Beispielen, aktive Sitzung, Rueckmeldung, Sprachwechsel DE↔EN), Screenshots hell und dunkel.
+- **FALLSTRICKE im eigenen Test:** `x["id"]` direkt in einer Pruefung liess die Gegenprobe
+  „Marker bleibt stehen" mit `TypeError` **abbrechen** statt fehlschlagen (Register). Und im
+  Klick-Test war zweimal der TEST falsch, nicht der Code: der Toast ist `#attach-toast` (ID, keine
+  Klasse) und die Sprache wechselt ueber `window.setLang()`, nicht `applyLang()`.
+- **jsdom ist in dieser Umgebung NICHT installiert** – `tests/test_welcome_examples.js` laeuft
+  weder lokal noch auf DEV (`MODULE_NOT_FOUND`, Bestandslage, nicht durch diese Aenderung
+  verursacht). Deshalb der Klick-Test ueber CDP.
+
 ## Chat-Sitzungen: „Neue Sitzung" war nur ein Trenner (geklaert 2026-07-28)
 **Der vermutete Fehler existierte nicht.** Verdacht war: „Neue Sitzung" erzeugt keine neue
 Backend-Sitzung, weil zwei Auftraege trotz sichtbarem Trenner denselben Kontext teilten.
