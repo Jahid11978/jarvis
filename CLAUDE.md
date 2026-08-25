@@ -2383,7 +2383,10 @@ ausdruecklich weiter unterstuetzt** – also genau unser Fall.
   darf nicht davon abhaengen, welches Pulldown jemand bedient. Laeuft jetzt immer.
 
 ### Antwort-Stile (`mail_accounts.stile`, seit 2026-08-18)
-Mehrere benannte Stile statt einer Vorgabe; verwaltet unter *Postfach*, waehlbar in der
+Mehrere benannte Stile statt einer Vorgabe; **eigener Reiter *Stile*** (seit 2026-08-25,
+davor ein Abschnitt unten im Postfach-Reiter – dort lag er hinter Serveradresse, Kennwort und
+vier Ordnerfeldern und war nur nach Scrollen erreichbar, obwohl er im taeglichen Gebrauch
+haeufiger gebraucht wird als Zugangsdaten, die man einmal eintraegt), waehlbar in der
 Vorschau und je Regel. Endpunkte `GET/POST /api/email/styles`, `PUT/DELETE …/{id}`.
 - **DREI WEGE, EINE REIHENFOLGE:** ausdrueckliche Auswahl (Pulldown bzw. Feld an der Regel) →
   sprachliche Nennung im Regel-**Prompt** → Standardstil. `STIL_KEINER = "-"` ist die
@@ -4935,6 +4938,33 @@ zutraf. Belege: `data/email_log.jsonl` + `data/logs/audit.jsonl` auf ECHT.
   Bedingung im Prompt bleiben stehen, laufen aber erst wieder mit gefuelltem Feld (Journal nennt
   sie namentlich).
 
+## Vorgabe-Thema ist HELL (Umstellung 2026-08-25)
+Wer noch nie umgeschaltet hat, bekommt das helle Thema; ein gespeichertes `dark` gilt unveraendert.
+Betroffen sind **16 Stellen**: 15 HTML-Seiten mit je einem Anti-Flacker-Skript plus `theme.js` und
+`chat.js`.
+- **Geprueft wird auf `!== 'dark'`, NICHT auf `=== 'light'`.** Mit der alten Bedingung bliebe die
+  Vorgabe dunkel – „nichts gespeichert" muss sich wie „hell" verhalten, nicht wie „unbekannt".
+- **Das Anti-Flacker-Skript war fuer den SELTENEN Fall gebaut, jetzt ist es der Normalfall.** Fehlt
+  es auf einer Seite, blitzt bei JEDEM Laden Dunkel auf (vorher nur ausnahmsweise). `api.html` hatte
+  es als einzige nicht und wurde nachgezogen. Es steht unmittelbar hinter `<body>` – dort, wo
+  `document.body` existiert und noch nichts gerendert ist.
+- **Stellen, die die KLASSE `body.light` lesen (14 gemessen), folgen automatisch** – nur die vier,
+  die den localStorage selbst befragen, mussten angefasst werden.
+- **Cache-Buster mitziehen, und dabei vereinheitlichen:** die Staende waren uneinheitlich
+  (`theme.js?v=1` neben `?v=2`, `chat.js?v=44` neben `?v=100`) – ein Browser haette je nach Seite
+  eine andere Fassung behalten. Jetzt `theme.js?v=3`, `chat.js?v=101`, `i18n.js?v=173`,
+  `addin.js?v=11`.
+- **Verifiziert:** `tests/test_theme_default.js` (13; `theme.js` wird in jsdom WIRKLICH ausgefuehrt –
+  Vorgabe, gespeichertes `dark`, gespeichertes `light`, beide Klickrichtungen samt Speicherung, und
+  dass die Sonne/Mond-Symbole folgen). Gegenproben beissen einzeln (alte Vorgabe = 5 FAIL, eine
+  vergessene Seite = 2 FAIL). Live auf DEV als Screenshot abgenommen.
+  - **FALLSTRICK im eigenen Test:** jsdom meldet direkt nach `new JSDOM` noch `readyState:
+    'loading'` (gemessen) – `theme.js` haengt sich dann an `DOMContentLoaded`. Wer sofort auswertet,
+    prueft den Zustand VOR der Initialisierung und bekommt ueberall „dunkel". Und die Pruefung
+    „steht das Skript gleich hinter `<body>`" muss den Anfang des **`<script>`-Tags** messen, nicht
+    den Ausdruck darin – sonst zaehlt sie die eigene Skript-Einleitung als Abstand und meldet auf
+    jeder Seite dieselben 37 Zeichen.
+
 ## Konventionen
 - **Git:** `git commit` und `git push` NUR auf ausdrueckliches Kommando des Nutzers (`c+p`) –
   niemals aus eigenem Antrieb, auch nicht wenn eine Aufgabe fertig und getestet ist. Fertige
@@ -5207,6 +5237,53 @@ idempotent). Sicherungen in `/root/fw-backup/`. Vor dem Umstellen geprueft, dass
 5900/6080 verbunden war.
 **FALLSTRICK:** eine Auswertung mit `grep "timed out"` zaehlt die Vision-Warnung mit (185 statt 28);
 und im Journal steht `State 'stop-sigterm' timed out` **mit Apostrophen**.
+
+## Drift Repo ↔ Server messen (`deploy/abgleich.py`, seit 2026-08-25)
+**Anlass:** auf DEV lag eine `settings.html`, die `icons.js` nicht einband, waehrend die
+JS-Dateien daneben aktuell waren → `ReferenceError: JarvisIcons is not defined` mitten im
+Rendern, von einem `catch` verschluckt: die Skills-Seite blieb ohne Fehlermeldung halb leer
+(Container nicht klappbar, OpenClaw gar nicht gerendert). Betroffen waren **10 Module** der Seite.
+- **Die Datei war SPAETER geschrieben und trotzdem 30 KB kleiner.** Ein Deploy, der einen aelteren
+  Stand aufspielt, hebt die mtime trotzdem an – deshalb vergleicht das Werkzeug **md5**, nie mtime
+  (und `git rev-parse` auf dem Server ist ohnehin kein Versionsindikator, dort wird nicht
+  committet).
+- **Ein halber FRONTEND-Deploy ist der gefaehrlichste Fall**, weil HTML und JS getrennte Dateien
+  sind: passen sie nicht zusammen, faellt kein Skript aus – es wirft mitten im Rendern.
+  `tests/test_icon_semantik.js` kann das **nicht** fangen: er prueft das Repo, und das war korrekt.
+- **Aufruf:** `python3 deploy/abgleich.py [--nur frontend/] [--server root@…] [--ziel /opt/jarvis]`.
+  Exit **0** = deckungsgleich · **1** = Drift · **2** = konnte nicht laufen (der Unterschied ist
+  Absicht: „konnte nicht laufen" darf nie wie „alles in Ordnung" aussehen).
+- **Vier getrennte Kategorien, weil sie verschiedene Handlungen nach sich ziehen:** *abweichend* und
+  *fehlt* sind Deploy-Rueckstand · *ausgeblendet* ist sparse-checkout, also Absicht (auf Produktion
+  `tests/`, `android/`, `windows-app-go/` – ohne diese Unterscheidung meldet der Lauf dort hunderte
+  Fehlbefunde und wird nach dem zweiten Mal nicht mehr gelesen) · *Server-Hoheit*
+  (`data/instructions/`, `settings.json`, `.env`) wird gar nicht erst verglichen.
+- **„Verirrt" = auf dem Server, kein Repo-Pendant, und NICHT von `.gitignore` gedeckt.** Die
+  Ignore-Pruefung laeuft lokal, weil nur dort die `.gitignore` liegt. `data/`, `venv/`,
+  `__pycache__` & Co. werden gar nicht erst durchlaufen – der Startpunkt wird geprueft, nicht nur
+  der Abstieg: `data` steht in der Praefixliste (weil `data/instructions_default/` verfolgt ist),
+  und ohne diese Zeile meldete der Lauf **197** Laufzeitdateien als „verirrt".
+- **Das Werkzeug aendert von sich aus NICHTS.** `--nachziehen` ist die ausdrueckliche Ausnahme,
+  spielt aus dem Repo auf (`install -o jarvis -g jarvis`) und sichert vorher nach
+  `/root/abgleich-sicherung-<marke>`. **Es loescht nie** – auch keine verirrte Datei; Loeschen ist
+  irreversibel und braucht eine Entscheidung.
+  - **FALLSTRICK, im eigenen Bau passiert:** die erste Fassung rief `cp -p --parents <rel>` ohne
+    vorher ins Zielverzeichnis zu wechseln und verschluckte den Fehlschlag mit `2>/dev/null ||
+    true` – der Sicherungsordner blieb **LEER**, waehrend die Meldung einen Rueckweg behauptete.
+    Jetzt `cd <ziel> && if [ -f … ]`, ohne Unterdrueckung, und die **Anzahl gesicherter Dateien
+    steht in der Ausgabe**: eine Sicherung, deren Erfolg niemand prueft, ist keine.
+- **Grenze, die in der Ausgabe steht:** Basis ist `git ls-files`. Eine lokal vorhandene, aber noch
+  nicht hinzugefuegte Datei ist fuer den Lauf unsichtbar.
+- **Serverseitige Haelfte ist `deploy/abgleich_agent.py`** – wird per scp abgelegt und dort mit dem
+  System-Python ausgefuehrt (kein Fremdmodul). Bewusst **kein** Heredoc/`python3 -c` ueber SSH
+  (Quoting-Fallstrick, siehe Register); die Ablage liegt unter `/root/.jarvis-abgleich` (0700),
+  **nicht** in `/tmp` (1777), und wird im `finally` entfernt.
+- **Verifiziert:** `tests/test_abgleich.py` (25; der Agent wird wirklich ausgefuehrt, und Abschnitt
+  7 prueft **funktional** mit Attrappe, dass ohne `--nachziehen` keine schreibende Funktion laeuft –
+  ein Quelltext-Grep haette dort die eigene Begruendung im Kommentar mitgelesen). **Live gegen DEV
+  in beide Richtungen:** `frontend/` deckungsgleich (Exit 0), und eine Probe-Kopie mit drei
+  kuenstlichen Drifts wird vollstaendig gefunden – **auch die Datei mit mtime 2099**, also genau
+  der Fall, an dem ein mtime-Vergleich scheitert. Sicherung und Ersetzung inhaltlich nachgewiesen.
 
 ## Bekannte Fallstricke
 Zentrales Register. Jede Zeile ist ein bezahlter Vorfall, kein Ratschlag – die
