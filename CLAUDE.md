@@ -3779,6 +3779,87 @@ ist das Bild als Download:" – und dahinter stand **nichts**.
   ueberlebt nicht, und ueber `_try_final` kommt das Bild gar nicht an. Damit ist der gemeldete Fall
   reproduziert, nicht nur plausibel gemacht.
 
+### Nachtrag am selben Tag: Bilddaten werden AUSGELAGERT, nicht abgeschnitten
+**Gemeldet wenige Stunden nach dem Fix oben, mit einem anderen Satz:** „Die Bildgenerierung als
+Base64 war zu gross fuer den Chat. Stattdessen habe ich das Bild direkt mit matplotlib gerendert
+und gespeichert:" – verlangt war ausdruecklich ein **generiertes Bild**, geliefert wurde ein Plot.
+Wieder Modell-Prosa (die Formulierung steht in keiner Zeile Code), aber diesmal mit einer **echten
+Ursache dahinter**, und die lag nicht im Anzeigepfad.
+- **`_ergebnis_kappen` schnitt MITTEN IM BLOB.** Ein Werkzeug-Ergebnis mit base64-Bilddaten lief in
+  den 5000-Zeichen-Deckel; ein 150-dpi-PNG sind rund 200.000 base64-Zeichen. **Das Modell sah 2,5 %
+  eines Datenklumpens** – wertlos, aber der Kuerzungshinweis sagt nur „gekuerzt", nicht „das war
+  ein Bild". Also erfand es eine Begruendung und wich aus. **Live auf DEV mit dem Altstand
+  reproduziert:** 40,2 s, **kein Bild**, und im Antworttext woertlich „Die Shell-Ausgabe wird
+  beschnitten. Ich schreibe den Base64-Inhalt in eine Datei und lese ihn dann" – vier Umwege
+  hintereinander, alle vergeblich.
+- **DIE REGEL IST DIESELBE WIE BEI `tabellen.py` UND `pdf_formular`: Nutzdaten gehen NIE durch das
+  Sprachmodell.** `_bilddaten_bergen()` schreibt die Bytes in `data/generated_images/`, ruft
+  `record_task_image()` und ersetzt den Blob durch die kurze `/api/generated/…`-URL. Aus 22.156
+  Zeichen werden rund 200 – und das Bild erscheint wirklich.
+- **`record_task_image` ist die zweite Haelfte und nicht optional:** nennt das Modell die URL in
+  seiner Antwort nicht, traegt `_mit_bildern` sie nach. Ohne das haette der Benutzer wieder eine
+  Antwort ohne Bild – also genau den Fehler, der hier behoben wird.
+- **In `_ergebnis_kappen`, weil das der EINE Engpass beider Wege ist** (Chat und `_run_headless`) –
+  eine Auslagerung nur im Chat-Weg waere die halbe Reparatur. **Reihenfolge ist Semantik: erst
+  bergen, dann kappen** (Gegenprobe „erst kappen" → 7 FAIL, das PNG ist dann ein Torso).
+- **Die BYTES entscheiden ueber die Endung, nicht die Typangabe.** `data:image/png;base64,` vor
+  einem ZIP darf keine `.png`-URL erzeugen, die der Browser nicht anzeigen kann; erkannt wird ueber
+  die magischen Bytes. Ist es kein Bild, bleibt der Text **unangetastet** und wird gekappt wie
+  bisher – keine Wette auf Fremdtext.
+- **FALLSTRICK, den erst der Test fand: Fliesstext besteht aus base64-Zeichen.** Der nackte
+  mehrzeilige Blob (Form von `base64 datei.png`) wird zeilenweise erkannt; die kurze Restzeile
+  danach wurde naiv angehaengt – und das Wort **`fertig`** besteht ausschliesslich aus
+  Alphabet-Zeichen. Folge: es verschwand aus dem Ergebnis UND beschaedigte das Bild am Ende (die
+  magischen Bytes stehen vorn, dort faellt es nicht auf). Jetzt zwei Bedingungen: ein Block MIT
+  Polster (`=`) ist abgeschlossen, sonst muss die Gesamtlaenge ein Vielfaches von 4 ergeben.
+- **⚠ DIE ERSTE FASSUNG UEBERSAH DIE HAEUFIGSTE FORM – gemeldet mit „du hast eine Pipe zu einem
+  Tool, das base64 zurueckliefert".** Sie erkannte nur ganze ZEILEN, also blieb
+  `{"image": "iVBOR…"}` zerschnitten: die Zeile enthaelt Klammern und Anfuehrungszeichen. Genau so
+  antwortet aber **jeder MCP-Server, jeder API-Wrapper und jeder Skill mit JSON-Rueckgabe**.
+  Nachgemessen: **vier von sieben** Formen fielen durch (JSON kompakt, JSON eingerueckt, in
+  Anfuehrungszeichen, `key=wert`). Jetzt DREI Formen in dieser Reihenfolge: Data-URL · mehrzeiliger
+  Blob · **eingebetteter Lauf** – letzterer zuletzt und nur in den noch freien Bereichen, sonst
+  zerlegt er einen mehrzeiligen Blob in seine Einzelzeilen.
+  - **Warum der allgemeine Lauf-Finder gefahrlos ist:** das **Leerzeichen gehoert nicht zum
+    Alphabet**. Ein zusammenhaengender Lauf von 512 Zeichen ohne jedes Leerzeichen ist kein
+    Fliesstext – und was trotzdem keines ist, faellt an den magischen Bytes durch. Die urspruengliche
+    Angst vor Prosa war unbegruendet; sie galt nur fuer das ZUSAMMENSETZEN von Zeilen.
+  - **KEINE Prompt-Regel dagegen** (ausdruecklich verworfen): base64 ist ein Transportformat, kein
+    Fehlverhalten. Das Modell kann die Ausgabe eines Werkzeugs nicht „vermeiden" – ein Verbot
+    haette nur wieder Ausweichverhalten erzeugt, also genau das Symptom. **Die Pipeline war kaputt,
+    nicht der Prompt.**
+- **Zwei Testmaengel, beide von einer Gegenprobe aufgedeckt, die NICHT biss:** die Attrappe holte
+  die Konstanten aus einer **handgepflegten Liste** – eine neue (`_B64_LAUF_RE`) fehlte darin, und
+  der `NameError` tief in der Methode wurde vom `except` verschluckt und sah aus wie ein
+  Codefehler; jetzt werden alle `_B64_*` per `ast` eingesammelt. Und niemand prueste, dass das
+  **Praefix** `data:image/…;base64,` mit verschwindet: ohne diese Zusage blieb die Gegenprobe
+  „Data-URL-Erkennung entfernt" gruen, weil der allgemeine Finder die Nutzlast auch greift und nur
+  den Praefix-Rest stehen laesst.
+- **DRIFT-SCHRANKE im Waechter:** jede Endung, die `_b64_endung` erzeugen kann, muss
+  `/api/generated/{name}` auch ausliefern – die Liste steht an zwei Orten (`main.py`), und laufen
+  sie auseinander, entsteht eine URL, die mit **400** antwortet: ein Bild, das es gibt und das
+  niemand sieht. Deshalb kein `.bmp`/`.svg`.
+- **Nebenbefund:** `tests/test_jira_kommentare.py` schneidet `_ergebnis_kappen` per Quelltext in
+  eine Attrappe und brach danach mit `AttributeError` ab – **ohne Zaehlzeile**, der Lauf sah aus
+  wie „nicht gelaufen". Durchreiche ergaenzt. Dieselbe Falle im eigenen Waechter: `bild.load()`
+  wirft bei einem abgeschnittenen PNG, die Gegenprobe brach ab statt zu zaehlen (Register: eine
+  Pruefung darf nicht werfen).
+- **Was das NICHT loest:** dass das Modell fuer „generiere ein Bild" ueberhaupt auf matplotlib
+  auswich, statt `generate_image` zu nennen bzw. dessen Meldung unveraendert auszugeben (Regel in
+  `agent.py`). Der Ausweichgrund ist weg, das Verbot steht im Prompt – **eine Prompt-Regel, die
+  base64 als Weg ins Chat ausdruecklich ausschliesst, gibt es noch nicht.**
+- **Verifiziert:** `tests/test_bilddaten_bergen.py` (62 lokal **und auf DEV im venv**; das echte
+  Testmaterial ist ein wirklich dekodierbares PNG, mit PIL gegengeprueft – Register: Material, das
+  ein echter Konsument nicht oeffnet, belegt nichts). Abschnitt 13 haelt **neun** Rueckgabeformen
+  fest (Data-URL, Blob ein-/mehrzeilig, JSON kompakt/eingerueckt, Anfuehrungszeichen, `key=wert`,
+  XML, Tabellenzelle) und 13b vier Gegenrichtungen, die liegen bleiben muessen (JWT, Hex-Liste,
+  ZIP, base64 von Klartext). Gegenproben beissen einzeln (Bergung nicht gerufen → 14 FAIL, Endung
+  geraten → 3, Restzeile naiv → 2, erst kappen → 7, Form 3 raus → 6, Form 1 raus → 1).
+  **Live auf DEV ueber `POST /api/agent/task` mit echtem Modell, zweimal:** ueber stdout 22.156
+  base64-Zeichen ausgelagert (16.616-Byte-PNG, 900×600, PIL-lesbar, Endpunkt HTTP 200, **kein
+  base64 in der Antwort**, 6,8 s – gegen 40,2 s und gar kein Bild im Altstand); ueber eine
+  **JSON-Rueckgabe** `{"mime":…,"image":…}` 59.756 Zeichen ausgelagert, Bild da.
+
 ## Diagramme professionalisiert: Theme-Layer, `create_chart`, Mermaid (2026-08-06)
 Ausgangslage: Diagramme entstanden als ```chartjs-**Freitextblock** aus der Modellantwort – das
 Modell bestimmte damit auch die Optik (grelle Defaults, keine Achsentitel, `1000` statt `1.000`),
