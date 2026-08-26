@@ -3713,6 +3713,72 @@ der 12 UI-Pruefungen durch, mit der woertlichen Meldung „Bitte stoppe zuerst d
   keinen Socket. Dazu fehlen jsdom `matchMedia` und `requestAnimationFrame`; letzteres **selbst
   stellen statt `pretendToBeVisual`**, das sonst einen Dauerlauf startet.
 
+## Erzeugte Bilder kamen nicht an – „Base64-URL zu lang" (Fix 2026-08-26)
+**Gemeldet von ECHT:** Orchestrierung mit Bildgenerierung in `/chat`. Das Bild wurde erzeugt, die
+Antwort lautete „Die Base64-codierte Bilddaten-URL war vermutlich zu lang fuer die Anzeige. Hier
+ist das Bild als Download:" – und dahinter stand **nichts**.
+- **Der Satz steht in keiner Zeile Code, er ist Modell-Prosa.** Das „vermutlich" ist das
+  Kennzeichen: das Modell RAET, warum sein Bild nicht erscheint, und erfindet eine Erklaerung.
+  **Eine erfundene Begruendung ist ein Symptom, keine Spur** – wer nach „Base64" sucht, sucht am
+  falschen Ende. Der Befund liegt im Anzeigepfad.
+
+**ZWEI URSACHEN, jede fuer sich hinreichend:**
+1. **`_clean_doc_refs` ZERSTOERTE die Bildreferenz.** Die Regel „Markdown-Link auf Dokument → nur
+   Label behalten" trifft jeden absoluten Pfad mit Bildendung – also auch `/api/generated/…`. Aus
+   `![Ein Hund](/api/generated/<hex>.png)` wurde der Textrest **`!Ein Hund`**. Fuer
+   `/api/documents/…` ist das richtig (dort liefert `_deliver_docs` einen Chip nach); fuer
+   `/api/generated/…` ist es das **GEGENTEIL**: dafuer gibt es **keinen Chip**, die Markdown-
+   Referenz im Anzeigetext ist der einzige Weg zum Bild. **Zwei URL-Formen, die gleich aussehen und
+   entgegengesetzte Behandlung brauchen.**
+2. **Die NOTPFADE sendeten den Modelltext ROH.** `_ohne_tool_markup`, `_clean_doc_refs`,
+   `_expand_charts` und vor allem `_mit_bildern` liefen nur im Regelweg. Nach MAX_STEPS /
+   Endlosschleife / „Abschluss ohne Antwort" uebernimmt `_try_final` – und dessen **Reset-Versuch
+   bekommt die Werkzeug-Ergebnisse gar nicht mehr zu sehen** („Antworte direkt aus deinem Wissen").
+   Das Modell weiss dort nichts von `/api/generated/…` und formuliert frei. `_mit_bildern` haette
+   das Bild deterministisch nachgetragen, **lief auf diesem Pfad aber nie**. Eine Orchestrierung
+   braucht viele Schritte – **MAX_STEPS ist dort der Normalfall, nicht die Ausnahme.**
+
+- **Fix 1: MASKIERUNG statt Ausnahme-Regel.** `_GENERATED_URL_RE` (modulweit, EINE Quelle) ersetzt
+  die Bild-URLs vor der Bereinigung durch einen Platzhalter ohne Slash und ohne Endung und stellt
+  sie danach wieder her. Damit greift auch eine **kuenftig ergaenzte** Regel nicht mehr daneben –
+  eine Ausnahme je Regex waere beim naechsten Feinschliff wieder halb.
+- **Fix 2: `_anzeigetext()` ist die EINE Aufbereitung** und haengt an **allen** Ausgabestellen
+  (Regelweg, Kurz-Prompt-Neuversuch, `_try_final`). Reihenfolge ist Semantik: Tool-Syntax weg →
+  Dokumentpfade weg → Diagramm-Marker → **Bilder ZULETZT** (davor wuerde `_clean_doc_refs` die
+  gerade angehaengte Referenz gleich wieder bearbeiten). `mit_bildern=False` fuer Zwischentexte,
+  sonst erscheint ein Bild doppelt.
+- **`text` bleibt im Regelweg die tool-markup-bereinigte Fassung** – sie geht unten auch ins
+  Konversationslog und in `_deliver_docs`. Beim Herausziehen der Kette waere das sonst still
+  mitgewandert.
+- **Der Waechter prueft die REGEL, nicht eine Liste** (`tests/test_bild_anzeige.py`): per `ast`
+  muss **jedes** `_send_status(..., highlight=True)` in `run_task`, dessen Argument kein
+  String-Literal/f-String ist (= Modelltext), durch `_anzeigetext` laufen. Damit faellt auch ein
+  **kuenftiger** Notpfad auf. Ausnahmen sind **einzeln** eingetragen und begruendet
+  (`_KEIN_MODELLTEXT = {"err_msg"}` – eine Fehlermeldung des Programms; durch `_mit_bildern`
+  geschickt bekaeme „Verbindung fehlgeschlagen" am Ende noch ein Katzenbild angehaengt).
+- **BESTANDSBEFUND, bewusst NICHT mitgeaendert:** eine **externe** Bild-URL ueberlebt
+  `_clean_doc_refs` ebenfalls nicht – die Dokument-Link-Regel greift vor den Bild-Regeln und trifft
+  jedes `](….png)`, auch `https://…`. Der Kommentar an Regel (2) behauptet das Gegenteil
+  („Externe http(s)-Bild-URLs bleiben unangetastet") und gilt nur fuer die Bild-Regeln selbst. Das
+  ist ein **eigener** Fehler (ein vom Modell verlinktes Firmenbild verschwindet); der Test haelt
+  den Ist-Zustand fest, damit die Aenderung auffaellt, wenn ihn jemand angeht.
+- **ZWEI FALLEN IM EIGENEN WAECHTER, beide beim ersten Lauf** (Register, beide Male dieselbe
+  Lehre): die Reihenfolge-Pruefung las den **Docstring** von `_anzeigetext` mit, der alle vier
+  Namen in erklaerendem Fliesstext und in anderer Reihenfolge nennt – jetzt wird der Docstring per
+  `ast` abgeschnitten. Und die Regel meldete den **Regelweg selbst** als Verstoss: dort steht
+  `_display = self._anzeigetext(...)` und gesendet wird `_display` – die Herkunft einer Variablen
+  gehoert mitverfolgt, sonst prueft man die Schreibweise statt der Eigenschaft.
+- **Verifiziert:** `tests/test_bild_anzeige.py` (33 auf DEV im venv, 29 lokal – Abschnitt 4 fuehrt
+  **echte `run_task`-Laeufe** mit Stub-Provider und Stub-Werkzeug aus, Sandkasten fuer den
+  LLM-Verlauf mit Exit 2). Dazu unveraendert gruen: `test_doc_delivery` (53), `test_empty_answer`
+  (56), `test_create_chart` (112), `test_lauf_tmp` (168), `test_agent_roles` (174),
+  `test_display_names` (70), `test_skill_audit` (50).
+  **Gegenproben beissen einzeln** (Maskierung raus → 10 FAIL, `_try_final` roh → 3,
+  Kurz-Neuversuch roh → 3, Bild-Nachtrag nicht zuletzt → 2) und **der komplette Altstand faellt auf
+  DEV in 16 von 33 durch – darunter beide echten Laeufe**: die vom Modell ausgegebene Referenz
+  ueberlebt nicht, und ueber `_try_final` kommt das Bild gar nicht an. Damit ist der gemeldete Fall
+  reproduziert, nicht nur plausibel gemacht.
+
 ## Diagramme professionalisiert: Theme-Layer, `create_chart`, Mermaid (2026-08-06)
 Ausgangslage: Diagramme entstanden als ```chartjs-**Freitextblock** aus der Modellantwort – das
 Modell bestimmte damit auch die Optik (grelle Defaults, keine Achsentitel, `1000` statt `1.000`),
