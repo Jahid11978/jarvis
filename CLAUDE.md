@@ -3848,17 +3848,58 @@ Ursache dahinter**, und die lag nicht im Anzeigepfad.
   auswich, statt `generate_image` zu nennen bzw. dessen Meldung unveraendert auszugeben (Regel in
   `agent.py`). Der Ausweichgrund ist weg, das Verbot steht im Prompt – **eine Prompt-Regel, die
   base64 als Weg ins Chat ausdruecklich ausschliesst, gibt es noch nicht.**
-- **Verifiziert:** `tests/test_bilddaten_bergen.py` (62 lokal **und auf DEV im venv**; das echte
+- **NACHTRAG am selben Tag – „das Bild wird nur als Zeichen angezeigt" (ECHT).** Die Bergung hing
+  ausschliesslich an `_ergebnis_kappen`, deckte also nur den Weg ueber ein Werkzeug-**Ergebnis** ab.
+  Gibt das Modell die Bilddaten in seiner **ANTWORT** aus, lief nichts durch die Bergung: der rohe
+  base64-String blieb im Anzeigetext stehen – eine Zeichenwueste statt eines Bildes. `_anzeigetext`
+  ruft sie jetzt ebenfalls, **VOR `_clean_doc_refs`** (danach griffe die Bereinigung in den Blob).
+  - **`fuer_anzeige=True` ist nicht Kosmetik:** der Ersatztext fuers MODELL ist eine ANWEISUNG
+    („gib GENAU diese Zeile aus"). Im Anzeigetext laese der Benutzer eine Aufforderung an das
+    Modell mitten in seiner Antwort. Fuer die Anzeige bleibt nur `![Bild](url)`.
+  - **Merkregel: eine Aufbereitung, die nur an EINEM der beiden Wege haengt (Werkzeug-Ergebnis
+    ODER Modelltext), ist die halbe Reparatur** – dieselbe Lehre wie bei `_anzeigetext` selbst,
+    nur eine Ebene tiefer.
+  - **AUF ECHT GEMESSEN, nicht vermutet** (Chat `dbcbe98a0f9d`, 16:56 – also NACH dem Neustart um
+    16:52, der Werkzeug-Teil des Fixes war aktiv): im Transkript stand
+    `![Drache ueber einem See](data:image/png;base64,iVBORw0KGgo…)` mit **43.483 Zeichen**, und
+    `/api/generated/` kam **0×** vor. Damit war belegt, dass die Daten NICHT ueber ein
+    Werkzeug-Ergebnis kamen.
+  - **DER TEURERE SCHADEN LAG IM KONTEXT:** derselbe Blob stand auch in `context.json` – rund
+    12.000 Token, die von da an bei JEDER Folgeanfrage der Sitzung mitgehen, ohne dass das Modell
+    etwas damit anfangen kann. Der Anzeigepfad erwischt ihn nicht: in den Verlauf geht das ROHE
+    Provider-Objekt (`response.parts` bzw. `candidates[0].content`), nicht der aufbereitete Text.
+    Deshalb `_verlauf_text()` / `_verlauf_content()` an **allen** Stellen, die Modelltext in
+    `chat_history` oder ins Konversationslog legen (11 Stellen, beide Wege).
+    `_verlauf_content` gibt das Objekt **unveraendert** zurueck, wenn nichts zu bergen war – so
+    bleibt der Google-Rohpfad samt Funktionsaufrufen exakt wie bisher.
+  - **Deshalb ist der Dateiname der sha256 des INHALTS und nicht `uuid4`:** derselbe Antworttext
+    laeuft ZWEIMAL durch die Bergung (Anzeige und Verlauf). Mit `uuid4` entstuenden zwei Dateien
+    und zwei URLs fuer ein Bild. Inhaltsadressiert ist die Bergung idempotent; Nebeneffekt ist
+    Deduplizierung. Abwaegung zur Capability-URL: sie ist damit aus dem Bildinhalt berechenbar –
+    wer das Bild hat, gewinnt nichts, wer es nicht hat, muesste es byte-genau raten.
+  - **Der Waechter prueft die REGEL, nicht eine Liste** (Abschnitt 15c): jeder
+    `chat_history.append` mit Modelltext muss durch `_verlauf_*` laufen – **mit Verfolgung der
+    Variablen-Herkunft**, denn an drei Stellen wird die `parts`-Liste einige Zeilen weiter oben
+    befuellt. Eine Pruefung auf die Schreibweise haette genau diese drei falsch gemeldet.
+  - **Zum dritten Mal dieselbe Testfalle:** die Attrappe in `tests/test_bild_anzeige.py` kannte die
+    neue Methode nicht und **stuerzte ab statt fehlzuschlagen** (kein Zaehlwert, sah aus wie „nicht
+    gelaufen"). Wer eine Methode in eine geschnittene Kette einhaengt, muss JEDE Attrappe
+    mitziehen, die diese Kette nachbaut.
+- **Verifiziert:** `tests/test_bilddaten_bergen.py` (79 lokal **und auf DEV im venv**; das echte
   Testmaterial ist ein wirklich dekodierbares PNG, mit PIL gegengeprueft – Register: Material, das
   ein echter Konsument nicht oeffnet, belegt nichts). Abschnitt 13 haelt **neun** Rueckgabeformen
   fest (Data-URL, Blob ein-/mehrzeilig, JSON kompakt/eingerueckt, Anfuehrungszeichen, `key=wert`,
   XML, Tabellenzelle) und 13b vier Gegenrichtungen, die liegen bleiben muessen (JWT, Hex-Liste,
   ZIP, base64 von Klartext). Gegenproben beissen einzeln (Bergung nicht gerufen → 14 FAIL, Endung
-  geraten → 3, Restzeile naiv → 2, erst kappen → 7, Form 3 raus → 6, Form 1 raus → 1).
+  geraten → 3, Restzeile naiv → 2, erst kappen → 7, Form 3 raus → 6, Form 1 raus → 1,
+  Anzeigepfad ohne Bergung → 3, ohne `fuer_anzeige` → 1, Verlaufs-Bergung raus → 1,
+  `uuid4` statt Inhalts-Hash → 2).
   **Live auf DEV ueber `POST /api/agent/task` mit echtem Modell, zweimal:** ueber stdout 22.156
   base64-Zeichen ausgelagert (16.616-Byte-PNG, 900×600, PIL-lesbar, Endpunkt HTTP 200, **kein
   base64 in der Antwort**, 6,8 s – gegen 40,2 s und gar kein Bild im Altstand); ueber eine
-  **JSON-Rueckgabe** `{"mime":…,"image":…}` 59.756 Zeichen ausgelagert, Bild da.
+  **JSON-Rueckgabe** `{"mime":…,"image":…}` 59.756 Zeichen ausgelagert, Bild da; und ein
+  dritter Lauf, in dem das Modell die Data-URL in seine **ANTWORT** schreibt – Antwortlaenge
+  **61 Zeichen** statt rund 60.000, genau EINE Bilddatei trotz Anzeige- UND Verlaufsbergung.
 
 ## Diagramme professionalisiert: Theme-Layer, `create_chart`, Mermaid (2026-08-06)
 Ausgangslage: Diagramme entstanden als ```chartjs-**Freitextblock** aus der Modellantwort – das
