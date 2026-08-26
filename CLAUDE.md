@@ -2325,6 +2325,39 @@ mehrfach"). Zutreffend, und die Ursache ist strukturell:
   erst, als der Waechter die Seite ueberhaupt zu sehen bekam. **Ein Test, der eine Seite
   ueberspringt, meldet keinen Fehler, er meldet gar nichts.** `/claude` lud zudem `avatar.js` nicht.
 
+### Das Marken-Logo fuehrt aufs Portal (Vorgabe 2026-08-26)
+„Zusaetzlich zum Klick auf das Home Symbol soll auch durch Klick auf das 'J' / 'nx' Symbol oben
+links auf die Portalseite gewechselt werden." `frontend/js/logo_home.js` + `.jv-logo-home` in
+**theme.css**; eingebunden auf den zehn Bereichsseiten hinter `sessions.js`.
+- **EIN Modul statt zehn `<a>`-Huellen** – dasselbe Muster wie bei `cpubar.js`: die
+  Handarbeit-Variante lag dort in vier Fassungen vor und fehlte auf sechs Seiten. Der naechste
+  Bereich kommt hier von selbst dazu.
+- **DIE SCHRANKE IST DER VORHANDENE WEG, NICHT EINE LISTE:** verlinkt wird nur, wenn die Seite
+  selbst schon ein Haus-Symbol hat (`[data-i18n-title="nav.home"]`). Damit bleiben ohne jede Pflege
+  aussen vor: `/portal` (ein Link auf sich ist kein Weg) und die beiden **Office-Aufgabenfenster** –
+  dort waere eine Navigation aufs Portal ein Fehler, das Fenster laeuft IN Outlook bzw. Excel.
+- **Geklickt wird das VORHANDENE Bedienelement** (`ziel.click()`), nicht `location.href`:
+  `/tracks` benutzt bewusst `location.replace()` (kein Eintrag in der Verlaufsliste), andere ein
+  gewoehnliches `href`. Wer selbst navigiert, verliert den Unterschied und baut ihn beim naechsten
+  Bereich erneut nach. Das Ziel wird **beim Klick neu gesucht** – die Leiste kann inzwischen neu
+  gebaut sein.
+- **⚠ DER FEHLER, DEN NUR DER TEST FAND: der Selektor fand sein eigenes Werk.** Das Modul setzt
+  `data-i18n-title="nav.home"` auf das Logo (damit die Beschriftung dem Sprachwechsel folgt) – und
+  weil das Logo im Markup VOR dem Haus-Symbol steht, klickte der Handler danach auf das Logo: der
+  Klick tat **gar nichts**. Deshalb `:not(.topbar-avatar)` im Selektor.
+- `role="button"` + `tabindex="0"` + Enter/Leertaste (ein `<div>` ist von sich aus weder
+  fokussierbar noch als Knopf erkennbar); Beschriftung ueber den **vorhandenen** Schluessel
+  `nav.home` (kein neuer Text); `:focus-visible`, **nicht** `:focus` – letzteres liesse nach jedem
+  Mausklick einen Rahmen stehen. Die Klasse setzt das JS, damit ein Logo **ohne** Funktion nicht
+  wie ein Knopf aussieht.
+- **Verifiziert:** `tests/test_logo_home_ui.js` (57; das Modul wird wirklich ausgefuehrt und der
+  Klick ausgeloest, die Seitenliste kommt aus dem VERZEICHNIS – eine kuenftige Bereichsseite faellt
+  damit von selbst auf). Gegenproben beissen einzeln: `:not(.topbar-avatar)` raus 8 FAIL, Skript auf
+  einer Seite vergessen 1, Modul im Aufgabenfenster eingebunden 1, `:focus` statt `:focus-visible` 1.
+  **Live im echten Chrome auf DEV** (`tests/live_logo_home_dev.js`, 47/47 ueber neun Bereichsseiten):
+  Klick landet wirklich auf `/portal`, Zeiger ist `pointer`, `/portal` selbst bleibt unangetastet;
+  `/claude` per Positivkontrolle mit einem dort freigegebenen Benutzer.
+
 **Verifiziert:** `tests/test_topbar_symbole_ui.js` (106; cpubar.js laeuft dort wirklich, und
 **avatar.js wird echt ausgefuehrt**) + `tests/test_claude_subagent_ui.js` (186).
 **NICHT geprueft:** ein Lauf im echten Browser mit Anmeldung (die noetige Anmeldung von der
