@@ -4671,6 +4671,17 @@ Regel und Folge stehen in derselben Zeile: **etwas tun → was bricht.**
   (`in self.tools_map`) oder Ersatzweg nennen.
 - **Aufbereitung beim LESEN, nicht nur beim Schreiben.** „Heilt sich beim naechsten Request" ist
   keine Loesung fuer Daten, deren Wert gerade darin besteht, dass kein Request mehr kommt.
+- **Branding, das erst ein Serverabruf liefert, fehlt genau auf der ANMELDEMASKE** – dort gibt es
+  noch keine Adresse, keine Sitzung und oft gar keine Verbindung. Was ein Client vor dem ersten
+  Abruf zeigt, muss im AUSGELIEFERTEN PAKET stehen (Browser-Erweiterung: `<meta name="marke">`,
+  vom Server beim Bauen des ZIP gefuellt) – ein Paket, das ohnehin pro Installation entsteht,
+  darf die Marke tragen. Gemeldet 2026-08-27, nachdem die Laufzeit-Loesung als „erledigt" galt.
+- **Ein Bereich, den nur ein Fremdclient pflegen kann, ist nicht gepflegt.** Die gemeinsamen
+  Jira-Vorlagen gehoerten dem Administrator und liessen sich ausschliesslich im Popup der
+  Browser-Erweiterung aendern. Wer Daten FUER ALLE verwaltet, braucht die Flaeche IM Portal – und
+  dann eine Dependency „Freigabe ODER Admin" (`require_jira_vorlagen_access`), weil die
+  Bereichs-Freigaben bewusst keinen Admin-Bypass kennen (gleiche Stelle wie
+  `GET /api/sap/analyses/catalog`).
 - **Jede Kuerzung beziffern, und der Hinweis steht VOR dem gekuerzten Teil** – am Ende schneidet
   ihn die naechste Kappung selbst weg, und das Modell haelt den Ausschnitt fuer vollstaendig.
 - **Ein Umschalter wechselt seine Beschriftung mit dem Zustand** – gleichbleibender Text sieht
