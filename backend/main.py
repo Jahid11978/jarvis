@@ -1032,26 +1032,140 @@ def _login_still_allowed(username: str) -> bool:
 # 3 s, Ungelesen-Zaehler, Fortschritte). Wuerde jede davon als "Aktivitaet"
 # gelten, waere ein offener Tab dauerhaft "aktiv" und die Anzeige wertlos.
 # Faustregel: GET = nachsehen, alles andere = tun.
+# Beschriftung einer Handlung fuer die Anwesenheitsliste: BEREICH · WAS.
+# Zweistufig (Vorgabe 2026-09-27 - "nur 'Aktion'" war die Klage):
+#   1. _ACTION_DETAILS: bekannte Endpunkte mit genauer Handlung
+#      ("Short Tracks · Datei abgelegt"). Muster = regulaerer Ausdruck auf dem
+#      GANZEN Pfad (fullmatch), Methode "*" = jede. Erster Treffer gewinnt -
+#      Spezielles also VOR Allgemeinem.
+#   2. _ACTION_LABELS: nur der Bereich; bei PUT/PATCH/DELETE mit dem Verb aus
+#      _ACTION_VERBEN ("Wissen · gelöscht"). POST bleibt beim Bereich allein -
+#      es kann Anlegen, Ausfuehren oder Senden sein, geraten wird nicht.
+# Nur was hier NICHT steht, heisst weiterhin "Aktion".
+# Die Texte stehen in einer Admin-Ansicht (Oberflaechentext -> echte Umlaute)
+# und werden in user_sessions.note_action auf 60 Zeichen gekuerzt.
+_ID = r"[^/]+"
+_ACTION_DETAILS = [
+    # Short Tracks
+    ("POST",   r"/api/tracks/drop",                     "Short Tracks · Datei abgelegt"),
+    ("POST",   r"/api/tracks/drop_url",                 "Short Tracks · Web-Adresse abgelegt"),
+    ("POST",   r"/api/tracks/dumps",                    "Short Tracks · Ablage angelegt"),
+    ("PUT",    rf"/api/tracks/dumps/{_ID}",             "Short Tracks · Ablage bearbeitet"),
+    ("DELETE", rf"/api/tracks/dumps/{_ID}",             "Short Tracks · Ablage gelöscht"),
+    ("POST",   rf"/api/tracks/dumps/{_ID}/reset",       "Short Tracks · Ablage zurückgesetzt"),
+    ("POST",   r"/api/tracks/jobs/seen",                "Short Tracks · Ergebnisse angesehen"),
+    ("DELETE", rf"/api/tracks/jobs/{_ID}",              "Short Tracks · Lauf entfernt"),
+    ("POST",   r"/api/tracks/admin/.*",                 "Short Tracks · Verwaltung"),
+    # Chat
+    ("POST",   r"/api/agent/task",                      "Chat-Anfrage"),
+    ("POST",   r"/api/chat/sessions",                   "Chat · Unterhaltung begonnen"),
+    ("DELETE", rf"/api/chat/sessions/{_ID}",            "Chat · Unterhaltung gelöscht"),
+    ("PATCH",  rf"/api/chat/sessions/{_ID}",            "Chat · Unterhaltung umbenannt"),
+    ("POST",   rf"/api/chat/sessions/{_ID}/context/forget", "Chat · Kontext vergessen"),
+    ("PUT",    r"/api/chat/(sessions/[^/]+/)?preprompt", "Chat · Vorgabe geändert"),
+    # Wissen
+    ("POST",   r"/api/wissen/upload",                   "Wissen · Datei hochgeladen"),
+    ("DELETE", r"/api/wissen/file",                     "Wissen · Datei gelöscht"),
+    ("POST",   r"/api/wissen/extract/confluence",       "Wissen · Confluence-Import"),
+    ("POST",   r"/api/wissen/extract/cancel",           "Wissen · Extraktion abgebrochen"),
+    ("POST",   r"/api/wissen/extract(/upload)?",        "Wissen · Informationen extrahiert"),
+    ("POST",   rf"/api/wissen/pending/{_ID}/approve",   "Wissen · Entwurf übernommen"),
+    ("PATCH",  rf"/api/wissen/pending/{_ID}",           "Wissen · Entwurf bearbeitet"),
+    ("DELETE", rf"/api/wissen/pending/{_ID}",           "Wissen · Entwurf verworfen"),
+    ("POST",   r"/api/wissen/confluence/bindung",       "Wissen · Confluence-Einbindung angelegt"),
+    ("PUT",    rf"/api/wissen/confluence/bindung/{_ID}", "Wissen · Confluence-Einbindung bearbeitet"),
+    ("DELETE", rf"/api/wissen/confluence/bindung/{_ID}", "Wissen · Confluence-Einbindung gelöscht"),
+    ("*",      r"/api/wissen/destillat/.*",             "Wissen · Destillat"),
+    ("*",      r"/api/wissen/subfolders(/move)?",       "Wissen · Ordner geändert"),
+    # Support, Fachsysteme, Assistenten
+    ("POST",   r"/api/support/query",                   "Support-Suche"),
+    ("POST",   r"/api/support/summarize",               "Support · Zusammenfassung"),
+    ("DELETE", r"/api/support/history(/entry)?",        "Support · Verlauf gelöscht"),
+    ("POST",   r"/api/sap/ask",                         "SAP · Frage gestellt"),
+    ("POST",   r"/api/sap/sql",                         "SAP · Abfrage ausgeführt"),
+    ("POST",   r"/api/vemas/ask",                       "VEMAS · Frage gestellt"),
+    ("POST",   r"/api/excel/ask",                       "Excel · Frage gestellt"),
+    ("POST",   r"/api/ai-mouse/analyze",                "AI-Maus · Analyse"),
+    ("POST",   r"/api/jira/assist",                     "Jira · Assistent"),
+    ("POST",   r"/api/avatar/ask",                      "Avatar-Frage"),
+    ("POST",   r"/api/userchat/search",                 "Benutzer-Chat · Suche"),
+    ("POST",   r"/api/claude/jobs",                     "Claude · Auftrag gestartet"),
+    # E-Mail
+    ("POST",   r"/api/email/reply/preview",             "E-Mail · Antwortvorschlag"),
+    ("POST",   r"/api/email/reply/send",                "E-Mail · Antwort gesendet"),
+    ("POST",   rf"/api/email/rules/{_ID}/run(_message)?", "E-Mail · Regel ausgeführt"),
+    ("POST",   r"/api/email/rules",                     "E-Mail · Regel angelegt"),
+    ("POST",   r"/api/email/(signatures(/import)?|styles)", "E-Mail · Vorlage angelegt"),
+    # Feedback, Meldungen
+    ("POST",   r"/api/feedback(/abgabe)?",              "Feedback · abgegeben"),
+    ("POST",   r"/api/issues",                          "Meldungen · Meldung erstellt"),
+    ("POST",   rf"/api/issues/{_ID}/attachments",       "Meldungen · Anhang hinzugefügt"),
+    ("POST",   r"/api/issues/notifications/seen",       "Meldungen · gelesen"),
+    # Auftraege
+    ("POST",   r"/api/(cron|watchers)",                 "Aufträge · angelegt"),
+    ("POST",   rf"/api/cron/{_ID}/run",                 "Aufträge · Auftrag gestartet"),
+    # Konto
+    ("POST",   r"/api/change-password",                 "Konto · Kennwort geändert"),
+    ("POST",   r"/api/auth/totp/.*",                    "Konto · Zwei-Faktor-Anmeldung"),
+]
+_ACTION_DETAILS = [(m, re.compile(muster), label) for m, muster, label in _ACTION_DETAILS]
+
 _ACTION_LABELS = [
-    ("/api/agent/task",        "Chat-Anfrage"),
-    ("/api/support/",          "Support-Suche"),
-    ("/api/avatar/ask",        "Avatar-Frage"),
+    ("/api/tracks/",           "Short Tracks"),
+    ("/api/agent/keys",        "Einstellungen · API-Schlüssel"),
+    ("/api/admin/",            "Einstellungen"),
+    ("/api/agent/",            "Chat"),
+    ("/api/support/",          "Support"),
+    ("/api/avatar/",           "Avatar"),
     ("/api/wissen/",           "Wissen"),
     ("/api/knowledge/",        "Wissen"),
     ("/api/userchat/",         "Benutzer-Chat"),
     ("/api/chat/",             "Chat"),
     ("/api/documents",         "Dokumente"),
-    ("/api/skills/",           "Einstellungen"),
+    ("/api/email/",            "E-Mail"),
+    ("/api/sap/",              "SAP"),
+    ("/api/vemas/",            "VEMAS"),
+    ("/api/excel/",            "Excel"),
+    ("/api/ai-mouse/",         "AI-Maus"),
+    ("/api/feedback",          "Feedback"),
+    ("/api/claude/",           "Claude"),
+    ("/api/skills/",           "Einstellungen · Skills"),
+    ("/api/mcp/",              "Einstellungen · MCP"),
+    ("/api/branding/",         "Einstellungen · Erscheinungsbild"),
+    ("/api/security/",         "Einstellungen · Sicherheit"),
+    ("/api/agent_roles",       "Einstellungen · Agenten-Rollen"),
+    ("/api/instructions/",     "Einstellungen · Anweisungen"),
+    ("/api/google/",           "Einstellungen · Google"),
+    ("/api/llm/",              "KI-Profile"),
     ("/api/settings",          "Einstellungen"),
     ("/api/profiles",          "KI-Profile"),
-    ("/api/cron",              "Auftraege"),
-    ("/api/watchers",          "Auftraege"),
+    ("/api/cron",              "Aufträge"),
+    ("/api/watchers",          "Aufträge"),
+    ("/api/reminders/",        "Erinnerungen"),
     ("/api/issues",            "Meldungen"),
     ("/api/whatsapp/",         "WhatsApp"),
     ("/api/vision/",           "Vision"),
     ("/api/jira/",             "Jira"),
     ("/api/confluence/",       "Confluence"),
+    ("/api/sessions/",         "Benutzerverwaltung"),
+    ("/api/ldap/",             "Benutzerverwaltung"),
+    ("/api/auth/",             "Konto"),
+    ("/api/update",            "System · Update"),
+    ("/api/system/",           "System"),
+    ("/api/license",           "System · Lizenz"),
+    ("/api/broker/",           "System · Rechteverwaltung"),
+    ("/api/logs/",             "System · Protokolle"),
+    ("/api/conv_log",          "System · Protokolle"),
+    ("/api/audit_log",         "System · Protokolle"),
+    ("/api/context/",          "Chat · Kontext"),
+    ("/api/vnc/",              "Desktop"),
+    ("/api/tts",               "Sprachausgabe"),
+    ("/api/addin/",            "Outlook-Add-in"),
+    ("/api/secret/reveal",     "Kennwort angezeigt"),
+    ("/api/prompt/pruefen",    "Aufgabe geprüft"),
 ]
+
+_ACTION_VERBEN = {"PUT": "geändert", "PATCH": "geändert", "DELETE": "gelöscht"}
 
 # Veraendernde Anfragen, die KEINE Benutzerhandlung sind (technisches Rauschen).
 # ``/api/activity`` steht hier, weil der Endpunkt die Handlung SELBST festhaelt –
@@ -1075,13 +1189,26 @@ _ACTIVITY_PAGES = {
     "email": "E-Mail",
     "api": "API-Doku",
     "supportagent": "Support-Agent",
+    "tracks": "Short Tracks",
+    "excel": "Excel",
+    "ai_mouse": "AI-Maus",
+    "feedback": "Feedback",
+    "claude": "Claude",
+    "jira_addon": "Jira",
 }
 
 
-def _action_label(path: str) -> str:
+def _action_label(path: str, method: str = "POST") -> str:
+    """Beschriftung einer Handlung: erst der genaue Endpunkt, dann der Bereich
+    (samt Verb bei Aendern/Loeschen), sonst das neutrale "Aktion"."""
+    m = (method or "").upper()
+    for meth, muster, label in _ACTION_DETAILS:
+        if (meth == "*" or meth == m) and muster.fullmatch(path):
+            return label
     for praefix, label in _ACTION_LABELS:
         if path.startswith(praefix):
-            return label
+            verb = _ACTION_VERBEN.get(m)
+            return f"{label} · {verb}" if verb else label
     return "Aktion"
 
 
@@ -1191,7 +1318,8 @@ def _note_activity(username: str, request: Request) -> None:
         anzeige = _display_name(username)
         if (request.method in ("POST", "PUT", "PATCH", "DELETE")
                 and not pfad.startswith(_ACTION_IGNORE)):
-            _user_sessions.note_action(username, _action_label(pfad), ip, display=anzeige)
+            _user_sessions.note_action(username, _action_label(pfad, request.method), ip,
+                                      display=anzeige)
         else:
             _user_sessions.touch(username, ip, display=anzeige)
     except Exception:  # noqa: BLE001 – Buchhaltung darf keine Anfrage kippen
