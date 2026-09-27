@@ -322,6 +322,42 @@ window.cronManager = new (class JarvisCronManager {
         }
     }
 
+    // ─── Formular-Platzierung ────────────────────────────────────────────
+    // Beim Bearbeiten steht das Formular IN der Box des Eintrags, nicht ueber
+    // der ganzen Liste - sonst ist nicht zu sehen, welcher Eintrag gerade
+    // bearbeitet wird. Die Neuanlage bleibt oberhalb der Liste. Das Formular
+    // wird VERSCHOBEN, nicht neu gebaut: Eingaben und Zuhoerer bleiben erhalten.
+    // Vor jedem Neuzeichnen der Liste wird es zurueckgeholt (innerHTML wuerde es
+    // sonst mitloeschen) und danach wieder in die Box gesetzt.
+    _parkForm(formId, listId) {
+        const form = document.getElementById(formId);
+        const list = document.getElementById(listId);
+        if (!form || !list) return null;
+        const act = document.activeElement;
+        const focus = (act && form.contains(act)) ? act : null;
+        if (form.nextElementSibling !== list) list.parentNode.insertBefore(form, list);
+        return focus;
+    }
+
+    // Liefert false, wenn der bearbeitete Eintrag nicht mehr in der Liste steht.
+    _placeForm(formId, listId, editingId, focus = null) {
+        const form = document.getElementById(formId);
+        const list = document.getElementById(listId);
+        if (!form || !list) return true;
+        if (editingId === null || editingId === undefined) {
+            this._parkForm(formId, listId);
+        } else {
+            const item = [...list.querySelectorAll('.cron-item')]
+                .find(el => el.dataset.id === String(editingId));
+            if (!item) return false;
+            if (form.parentNode !== item) item.appendChild(form);
+        }
+        if (focus && focus.isConnected && document.activeElement !== focus) {
+            try { focus.focus({ preventScroll: true }); } catch (e) {}
+        }
+        return true;
+    }
+
     _bindForms() {
         document.getElementById('cron-save-btn').onclick    = () => this._saveJob();
         document.getElementById('watcher-save-btn').onclick = () => this._saveWatcher();
@@ -369,6 +405,12 @@ window.cronManager = new (class JarvisCronManager {
     _renderJobList() {
         const el = document.getElementById('cron-list');
         if (!el) return;
+        const focus = this._parkForm('cron-form-wrap', 'cron-list');
+        this._renderJobItems(el);
+        if (!this._placeForm('cron-form-wrap', 'cron-list', this._editingJobId, focus)) this._hideJobForm();
+    }
+
+    _renderJobItems(el) {
         if (!this._jobs.length) {
             el.innerHTML = `<p class="kb-empty" style="text-align:center;padding:16px 0;">${window.t('cron.no_jobs')}</p>`;
             return;
@@ -453,6 +495,7 @@ window.cronManager = new (class JarvisCronManager {
         document.getElementById('cron-enabled').checked = job ? job.enabled : true;
         document.getElementById('cron-form-error').style.display = 'none';
         document.getElementById('cron-form-wrap').style.display  = '';
+        this._placeForm('cron-form-wrap', 'cron-list', this._editingJobId);
         // Live-Preview aktualisieren
         const prev = document.getElementById('cron-schedule-preview');
         if (prev) prev.textContent = job ? this._cronToText(job.cron) : '';
@@ -461,6 +504,7 @@ window.cronManager = new (class JarvisCronManager {
 
     _hideJobForm() {
         this._editingJobId = null;
+        this._parkForm('cron-form-wrap', 'cron-list');
         document.getElementById('cron-form-wrap').style.display = 'none';
     }
 
@@ -564,6 +608,12 @@ window.cronManager = new (class JarvisCronManager {
     _renderWatcherList() {
         const el = document.getElementById('watcher-list');
         if (!el) return;
+        const focus = this._parkForm('watcher-form-wrap', 'watcher-list');
+        this._renderWatcherItems(el);
+        if (!this._placeForm('watcher-form-wrap', 'watcher-list', this._editingWatcherId, focus)) this._hideWatcherForm();
+    }
+
+    _renderWatcherItems(el) {
         if (!this._watchers.length) {
             el.innerHTML = `<p class="kb-empty" style="text-align:center;padding:16px 0;">${window.t('cron.no_watchers')}</p>`;
             return;
@@ -634,6 +684,7 @@ window.cronManager = new (class JarvisCronManager {
         this._updateWatcherFormVisibility();
         document.getElementById('watcher-form-error').style.display = 'none';
         document.getElementById('watcher-form-wrap').style.display  = '';
+        this._placeForm('watcher-form-wrap', 'watcher-list', this._editingWatcherId);
         document.getElementById('watcher-label').focus();
     }
 
@@ -649,6 +700,7 @@ window.cronManager = new (class JarvisCronManager {
 
     _hideWatcherForm() {
         this._editingWatcherId = null;
+        this._parkForm('watcher-form-wrap', 'watcher-list');
         document.getElementById('watcher-form-wrap').style.display = 'none';
     }
 
