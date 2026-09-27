@@ -139,7 +139,8 @@ class ConfluenceClient:
 
     def pages_in_space(self, space: str, limit: int = 500,
                        with_parent: bool = False,
-                       with_version: bool = False) -> list[dict]:
+                       with_version: bool = False,
+                       with_labels: bool = False) -> list[dict]:
         """Alle Seiten eines Bereichs (Space) mit ID, Titel und Web-Link.
 
         with_parent=True haengt je Seite `parent` an (ID der direkten
@@ -150,10 +151,17 @@ class ConfluenceClient:
         with_version=True haengt `version` an (Versionsnummer der Seite) -
         daran erkennt der Confluence-Abgleich eine Aenderung, OHNE jede Seite
         mit ihrem Inhalt abzurufen.
+
+        with_labels=True haengt `labels` an (Namen der Tags, klein
+        geschrieben) - Grundlage des Tag-Filters im Confluence-Abgleich.
+        ⚠ FEHLT `metadata.labels` in der Antwort, steht `labels` auf None,
+        NICHT auf []: "keine Tags" und "Tags unbekannt" sind verschiedene
+        Aussagen, und nur die erste darf eine Seite aus dem Wissen nehmen.
         """
         out: list[dict] = []
         start, page = 0, 50
-        expand = [e for e, an in (("ancestors", with_parent), ("version", with_version)) if an]
+        expand = [e for e, an in (("ancestors", with_parent), ("version", with_version),
+                                  ("metadata.labels", with_labels)) if an]
         while len(out) < limit:
             params = {"spaceKey": space, "type": "page", "start": start, "limit": page}
             if expand:
@@ -172,6 +180,12 @@ class ConfluenceClient:
                     item["parent"] = str((anc[-1] or {}).get("id") or "") if anc else ""
                 if with_version:
                     item["version"] = int(((s.get("version") or {}).get("number")) or 0)
+                if with_labels:
+                    lab = (s.get("metadata") or {}).get("labels")
+                    item["labels"] = (
+                        [str(x.get("name") or "").strip().lower()
+                         for x in (lab.get("results") or []) if isinstance(x, dict)]
+                        if isinstance(lab, dict) else None)
                 out.append(item)
             if len(results) < page:
                 break

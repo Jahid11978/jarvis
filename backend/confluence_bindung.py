@@ -57,6 +57,14 @@ Seite wirklich in ihrem Bereich liegt, entscheidet der Abgleich: er nimmt nur
 Seiten, die in der Seitenliste DIESES Bereichs stehen. Eine untergeschobene
 fremde Kennung laeuft dort ins Leere statt in die Wissensdatenbank.
 
+TAGS (Vorgabe 2026-09-27): ``tags`` ist eine Liste von Confluence-Tags
+(Labels). Traegt ein Eintrag Tags, uebernimmt der Abgleich von den markierten
+Seiten NUR die, die mindestens einen davon tragen; ohne Tags alle markierten
+Seiten (wie bisher). Die Tags gehoeren zum EINTRAG, nicht zum Benutzer: der
+Abgleich laeuft im Hintergrund fuer alle, ein Filter je Benutzer haette dort
+keinen Adressaten. Gespeichert wird klein geschrieben – Confluence selbst
+speichert Labels klein, ein ``Handbuch`` fuende sonst nie etwas.
+
 Bauart 1:1 wie ``ai_mouse_fragen``/``jira_vorlagen``: eine Datei, Kennungen aus
 ``secrets``, Deckel je Feld, atomar geschrieben, 0640.
 """
@@ -95,6 +103,15 @@ _SEITE_RE = re.compile(r"^[0-9]+$")
 # in die Ablage geschrieben wird.
 MAX_GRUPPEN = 50
 GRUPPE_MAX = 80
+# Tags je Eintrag. Confluence erlaubt 255 Zeichen je Label; 30 Tags sind schon
+# eine Liste, die niemand mehr ueberblickt.
+MAX_TAGS = 30
+TAG_MAX = 255
+# ⚠ NUR EINE FORM-PRUEFUNG, KEINE ERLAUBNISLISTE: welche Sonderzeichen
+# Confluence in Labels zulaesst, unterscheidet sich zwischen Server und Cloud.
+# Abgewiesen wird, was sicher kein Label ist – Leerraum (Confluence trennt
+# Labels daran), Komma/Semikolon (Listentrenner) und Steuerzeichen.
+_TAG_BOESE_RE = re.compile(r"[\s,;\x00-\x1f\x7f]")
 
 # ⚠ DIE ZEICHENMENGE IST GEMESSEN, NICHT GERATEN. Eine erste Fassung liess
 # `@` weg – am echten Bestand (489 Bereiche) fielen damit **185** durch, naemlich
@@ -229,6 +246,38 @@ def _seiten_pruefen(werte, was: str) -> list[str]:
     return aus
 
 
+def _tags_pruefen(tags) -> list[str]:
+    """Tags normieren und pruefen. Wirft ``BindungFehler``.
+
+    ``None`` und die leere Liste heissen „kein Filter" – beides ist gueltig.
+    Klein geschrieben, ein fuehrendes ``#`` faellt weg (so tippt man Tags),
+    Dubletten still zusammengefasst, Reihenfolge behalten.
+    """
+    if tags is None:
+        return []
+    # ⚠ Ein String ist KEINE Liste – ueber ihn zu iterieren machte aus
+    # "handbuch" acht Tags aus je einem Buchstaben.
+    if isinstance(tags, (str, bytes)) or not isinstance(tags, (list, tuple)):
+        raise BindungFehler("Die Tags wurden in unerwarteter Form uebergeben.")
+    aus: list[str] = []
+    for t in tags:
+        if not isinstance(t, str):
+            raise BindungFehler("Die Tags wurden in unerwarteter Form uebergeben.")
+        k = t.strip().lstrip("#").strip().lower()
+        if not k:
+            continue
+        # ⚠ ABGEWIESEN, NICHT GEKUERZT: ein gekuerzter Tag ist ein ANDERER Tag
+        # und faende im Abgleich still nichts.
+        if len(k) > TAG_MAX or _TAG_BOESE_RE.search(k):
+            raise BindungFehler("Ein Tag hat eine unerwartete Form (keine Leerzeichen, "
+                                "Kommas oder Semikolons innerhalb eines Tags).")
+        if k not in aus:
+            aus.append(k)
+    if len(aus) > MAX_TAGS:
+        raise BindungFehler("Mehr als %d Tags in einem Eintrag sind nicht vorgesehen." % MAX_TAGS)
+    return aus
+
+
 def _auswahl_pruefen(auswahl, namen=None) -> list[dict]:
     """Die markierten Bereiche normieren und pruefen. Wirft ``BindungFehler``.
 
@@ -315,6 +364,14 @@ def _normiert(b: dict) -> dict:
     else:
         c["auswahl"] = [dict(a) for a in c["auswahl"] if isinstance(a, dict)]
     c.setdefault("name", _anzeigename(c["auswahl"]))
+    # Eintraege von vor den Tags: kein Filter. Eine kaputte Angabe wird NICHT
+    # zu "kein Filter" – das wuerde den ganzen Bereich ins Wissen holen; der
+    # Abgleich laesst den Eintrag dann mit Grund liegen (`tags_ungueltig`).
+    try:
+        c["tags"] = _tags_pruefen(c.get("tags"))
+    except BindungFehler:
+        c["tags"] = []
+        c["tags_ungueltig"] = True
     return c
 
 
@@ -329,7 +386,7 @@ def holen(bid: str) -> dict | None:
     return next((b for b in liste() if b.get("id") == i), None) if i else None
 
 
-def hinzufuegen(auswahl, von: str = "", gruppen=None, namen=None) -> dict:
+def hinzufuegen(auswahl, von: str = "", gruppen=None, namen=None, tags=None) -> dict:
     """Die markierten Bereiche als EINEN neuen Eintrag speichern.
 
     ``gruppen`` sind die Kennungen der Wissensgruppen – **mindestens eine**.
@@ -341,6 +398,7 @@ def hinzufuegen(auswahl, von: str = "", gruppen=None, namen=None) -> dict:
     # Bestand nicht blockieren, waehrend sie eine Fehleingabe zurueckweisen.
     aw = _auswahl_pruefen(auswahl, namen)
     gr = _gruppen_pruefen(gruppen)
+    tg = _tags_pruefen(tags)
     with _SPERRE:
         d = _laden()
         bereiche = d["bereiche"]
@@ -356,6 +414,8 @@ def hinzufuegen(auswahl, von: str = "", gruppen=None, namen=None) -> dict:
             "auswahl": aw,
             # Die Zuordnung, ohne die der Abgleich kein Ziel haette.
             "gruppen": gr,
+            # Leer = alle markierten Seiten, sonst nur die mit einem der Tags.
+            "tags": tg,
             "angelegt": jetzt,
             "geaendert": jetzt,
             "von": _kuerzen(von, 120),
@@ -365,13 +425,20 @@ def hinzufuegen(auswahl, von: str = "", gruppen=None, namen=None) -> dict:
         return dict(eintrag)
 
 
-def aendern(bid: str, auswahl, von: str = "", gruppen=None, namen=None) -> dict:
+def aendern(bid: str, auswahl, von: str = "", gruppen=None, namen=None,
+           tags=None) -> dict:
     """Einen gespeicherten Eintrag bearbeiten (Bereiche/Unterbereiche hinzu
-    oder weg, Wissensgruppen). Kennung und Anlagedatum bleiben; ``von`` haelt
-    fest, wer zuletzt geaendert hat. Wirft ``BindungFehler``; ein unbekannter
-    Eintrag ist ``KeyError`` (der Endpunkt macht daraus 404)."""
+    oder weg, Wissensgruppen, Tags). Kennung und Anlagedatum bleiben; ``von``
+    haelt fest, wer zuletzt geaendert hat. Wirft ``BindungFehler``; ein
+    unbekannter Eintrag ist ``KeyError`` (der Endpunkt macht daraus 404).
+
+    ``tags`` wird wie die Auswahl VOLLSTAENDIG ersetzt – ``None`` und ``[]``
+    heissen beide „kein Filter". Ein Aufrufer, der die Tags nicht mitschickt,
+    hebt den Filter damit auf; das ist Absicht, denn die Oberflaeche schickt
+    beim Speichern immer den ganzen Eintrag."""
     aw = _auswahl_pruefen(auswahl, namen)
     gr = _gruppen_pruefen(gruppen)
+    tg = _tags_pruefen(tags)
     i = str(bid or "").strip()
     with _SPERRE:
         d = _laden()
@@ -383,6 +450,7 @@ def aendern(bid: str, auswahl, von: str = "", gruppen=None, namen=None) -> dict:
                     "name": _anzeigename(aw),
                     "auswahl": aw,
                     "gruppen": gr,
+                    "tags": tg,
                     "angelegt": b.get("angelegt") or "",
                     "geaendert": datetime.now().isoformat(timespec="seconds"),
                     "von": _kuerzen(von, 120) or b.get("von") or "",

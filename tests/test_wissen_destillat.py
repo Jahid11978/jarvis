@@ -69,7 +69,8 @@ _NOETIG = ["bloecke", "teile_nach_dateien", "bilder_aus_docx",
            "zusammenfuehr_auftrag", "destilliere", "drossel_pruefen",
            "extrahiere", "_bild_mime", "_code_zaun_weg", "_entschaerfen",
            "BLOCK_ZEICHEN", "MAX_BILDER", "VORGABE_PROMPT",
-           "docx_text_mit_bildern", "_BILD_REGEL"]
+           "docx_text_mit_bildern", "_BILD_REGEL", "filter_pruefen",
+           "MAX_MUSTER", "MUSTER_MAX"]
 _fehlt = [n for n in _NOETIG if not hasattr(wd, n)]
 if _fehlt:
     print(f"  \033[31m✗\033[0m Modul unvollstaendig: {', '.join(_fehlt)} – Abbruch")
@@ -807,6 +808,84 @@ _iStrom = _ext_src.find("_strom()")
 _iDeckel = _ext_src.find("413")
 check("… der Upload-Deckel greift VOR dem Strom", 0 <= _iDeckel < _iStrom, f"{_iDeckel} / {_iStrom}")
 check("… Antworttyp application/x-ndjson", "application/x-ndjson" in _ext_src)
+
+
+
+# ════════════════════════════════════════════════════════════════════════════
+section("14. Dateifilter (Black-/Whitelist, Vorgabe 2026-09-27)")
+FP = wd.filter_pruefen
+check("None/None = kein Filter", sicher(FP, None, None) == {"weiss": [], "schwarz": []})
+r14 = sicher(FP, [" *.pdf ", "", "*.pdf", "*.DOCX"], ["*entwurf*", "  "])
+check("⚠ getrimmt, Leerzeilen weg, Dubletten zusammengefasst, Reihenfolge bleibt",
+      r14 == {"weiss": ["*.pdf", "*.DOCX"], "schwarz": ["*entwurf*"]}, str(r14))
+check("⚠ ein String ist keine Liste (sonst ein Muster je Zeichen)",
+      isinstance(sicher(FP, "*.pdf", []), wd.DestillatFehler)
+      and isinstance(sicher(FP, [], "*.pdf"), wd.DestillatFehler))
+check("ein Nicht-String in der Liste wird abgewiesen", isinstance(sicher(FP, [1], []), wd.DestillatFehler))
+check("⚠ ein zu langes Muster wird ABGEWIESEN, nicht gekuerzt",
+      isinstance(sicher(FP, ["x" * (wd.MUSTER_MAX + 1)], []), wd.DestillatFehler))
+check("ein Muster genau an der Grenze geht",
+      sicher(FP, ["x" * wd.MUSTER_MAX], []) == {"weiss": ["x" * wd.MUSTER_MAX], "schwarz": []})
+check("Steuerzeichen im Muster werden abgewiesen", isinstance(sicher(FP, [], ["a\x00b"]), wd.DestillatFehler))
+check("zu viele Muster werden abgewiesen",
+      isinstance(sicher(FP, [f"*.{i}" for i in range(wd.MAX_MUSTER + 1)], []), wd.DestillatFehler))
+check("⚠ die Fehlermeldung nennt die betroffene Liste",
+      "Blacklist" in str(sicher(FP, [], ["x" * (wd.MUSTER_MAX + 1)])))
+
+_FEP = {"wissen_destillat_filter_lesen": ("get", "/api/wissen/destillat/filter"),
+        "wissen_destillat_filter_speichern": ("put", "/api/wissen/destillat/filter")}
+_ff = {}
+for _k in ast.walk(_baum):
+    if isinstance(_k, (ast.FunctionDef, ast.AsyncFunctionDef)) and _k.name in _FEP:
+        _ff[_k.name] = _k
+for _name, (_meth, _pfad) in _FEP.items():
+    _k = _ff.get(_name)
+    _dek = [ast.unparse(d) for d in (_k.decorator_list if _k else [])]
+    check(f"{_meth.upper()} {_pfad} existiert", f"app.{_meth}('{_pfad}')" in _dek, str(_dek))
+    _src = ast.get_source_segment(MAIN, _k) if _k else ""
+    check(f"{_name}: haengt an require_auth", "Depends(require_auth)" in _src)
+    # Recht VOR jeder Arbeit – am AST: das erste `if` des Rumpfs prueft es und gibt 403.
+    _erstes_if = next((x for x in (_k.body if _k else []) if isinstance(x, ast.If)), None)
+    check(f"{_name}: das ERSTE if prueft _destillat_erlaubt und antwortet 403",
+          _erstes_if is not None and "_destillat_erlaubt(user)" in ast.unparse(_erstes_if.test)
+          and any(isinstance(b, ast.Return) and "403" in ast.unparse(b) for b in _erstes_if.body))
+    _iR = _src.find("_destillat_erlaubt")
+    _iA = min([x for x in (_src.find("await request.json()"), _src.find("_destillat_filter_pfad("))
+               if x >= 0] or [10 ** 9])
+    check(f"{_name}: Rechte VOR Rumpf und Ablage", 0 <= _iR < _iA, f"{_iR} / {_iA}")
+    # ⚠ DER BENUTZER KOMMT AUS DER ANMELDUNG: die Ablage wird aus `user` gebildet.
+    _pfr = [c for c in ast.walk(_k) if isinstance(c, ast.Call)
+            and getattr(c.func, "id", "") == "_destillat_filter_pfad"] if _k else []
+    check(f"{_name}: die Ablage kommt aus der ANMELDUNG (_destillat_filter_pfad(user))",
+          len(_pfr) >= 1 and all(len(c.args) == 1 and ast.unparse(c.args[0]) == "user" for c in _pfr),
+          [ast.unparse(c) for c in _pfr])
+    check(f"{_name}: kein Benutzer aus dem Rumpf",
+          not re.search(r'body\.get\(\s*["\'](user|username|benutzer|von)', _src))
+    check(f"{_name}: geht durch filter_pruefen (EINE Normierung)",
+          any(isinstance(c, ast.Call) and ast.unparse(c.func) == "_wd.filter_pruefen"
+              for c in ast.walk(_k)) if _k else False)
+
+_sp = _ff.get("wissen_destillat_filter_speichern")
+_sp_src = ast.get_source_segment(MAIN, _sp) if _sp else ""
+_iP, _iW = _sp_src.find("_wd.filter_pruefen("), _sp_src.find(".write_text(")
+check("⚠ Speichern: geprueft wird VOR dem Schreiben", 0 <= _iP < _iW, f"{_iP} / {_iW}")
+check("⚠ Speichern: ein Pruef-Fehler antwortet 400 und schreibt nichts",
+      any(isinstance(h, ast.ExceptHandler) and "DestillatFehler" in ast.unparse(h.type or ast.Pass())
+          and any(isinstance(b, ast.Return) and "400" in ast.unparse(b) for b in h.body)
+          for h in ast.walk(_sp)) if _sp else False)
+check("Speichern: atomar (tmp + os.replace)", ".json.tmp" in _sp_src and "os.replace(tmp, f)" in _sp_src)
+check("Speichern: es wird geschrieben, was GEPRUEFT wurde (daten), nicht der Rumpf",
+      "json.dumps(daten" in _sp_src and "json.dumps(body" not in _sp_src)
+_le = _ff.get("wissen_destillat_filter_lesen")
+_le_src = ast.get_source_segment(MAIN, _le) if _le else ""
+check("Lesen: fail-open in die harmlose Richtung (Fehler -> leere Listen, 200)",
+      "except Exception" in _le_src and "'weiss': []" in ast.unparse(_le) if _le else False)
+check("Lesen: schreibt nichts", ".write_text(" not in _le_src and "os.replace" not in _le_src)
+_pf = funktion(MAIN, "_destillat_filter_pfad")
+check("⚠ die Ablage laeuft ueber _benutzer.pfad_teil (EINE Datei je Mensch)",
+      "_benutzer.pfad_teil(user" in _pf and "destillat_filter" in _pf)
+# Das Anwenden (im Browser, VOR dem Hochladen) misst test_wissen_destillat_ui.js
+# durch Ziehen/Waehlen – eine Vorkommens-Pruefung hier waere trivial wahr.
 
 
 print(f"\n\033[1mErgebnis: {OK}/{OK + FAIL}\033[0m")

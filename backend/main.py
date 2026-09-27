@@ -18803,7 +18803,8 @@ async def wissen_cf_bindung_lesen(user: str = Depends(require_auth)):
 
 async def _cfb_auswahl_lesen(request: Request, user: str):
     """Rumpf von POST/PUT lesen und pruefen. Rueckgabe ``(fehlerantwort, auswahl,
-    gruppen, namen)`` – ist die Fehlerantwort gesetzt, wird sie zurueckgegeben.
+    gruppen, namen, tags)`` – ist die Fehlerantwort gesetzt, wird sie
+    zurueckgegeben.
 
     ⚠ REIHENFOLGE IST DIE SICHERHEIT: erst Skill/Konfiguration, dann die
     Wissensgruppen (oertlich), dann die FORM der Auswahl (oertlich), erst dann
@@ -18816,10 +18817,10 @@ async def _cfb_auswahl_lesen(request: Request, user: str):
     skill, conf = _cfb_aktiv()
     if not skill:
         return (JSONResponse({"ok": False, "error": "Der Confluence-Skill ist nicht aktiv."},
-                             status_code=400), None, None, None)
+                             status_code=400), None, None, None, None)
     if not conf:
         return (JSONResponse({"ok": False, "error": "Confluence ist nicht konfiguriert."},
-                             status_code=400), None, None, None)
+                             status_code=400), None, None, None, None)
     try:
         body = await request.json()
     except Exception:  # noqa: BLE001
@@ -18833,18 +18834,20 @@ async def _cfb_auswahl_lesen(request: Request, user: str):
     req_groups = _gruppen_normieren(body.get("groups"))
     ok, err = _wissen_check_groups(user, req_groups)
     if not ok:
-        return (JSONResponse({"ok": False, "error": err}, status_code=403), None, None, None)
+        return (JSONResponse({"ok": False, "error": err}, status_code=403), None, None, None, None)
     # Die FORM vorab (ohne Namen): Muell soll ohne Netzrundreise abgewiesen werden.
     try:
         auswahl = _cfb._auswahl_pruefen(body.get("auswahl"))
+        # Tags ebenfalls VOR der Netzrundreise: rein oertliche Formpruefung.
+        tags = _cfb._tags_pruefen(body.get("tags"))
     except _cfb.BindungFehler as e:
-        return (JSONResponse({"ok": False, "error": str(e)}, status_code=400), None, None, None)
+        return (JSONResponse({"ok": False, "error": str(e)}, status_code=400), None, None, None, None)
     c = _confluence_client()
     try:
         sichtbar = await _wissen_visible_spaces(c)
     except ConfluenceError as e:
         return (JSONResponse({"ok": False, "status": e.status, "error": str(e)},
-                             status_code=502), None, None, None)
+                             status_code=502), None, None, None, None)
     # ⚠ JEDER Bereich der Auswahl muss SICHTBAR sein – dieselbe Schranke wie
     # `wissen_confluence_pages`. Die Anzeigenamen kommen von HIER, nie aus dem
     # Rumpf.
@@ -18852,15 +18855,16 @@ async def _cfb_auswahl_lesen(request: Request, user: str):
     fremd = [a["key"] for a in auswahl if a["key"] not in namen]
     if fremd:
         return (JSONResponse({"ok": False, "error": "Bereich nicht sichtbar/erlaubt: "
-                              + ", ".join(fremd[:5])}, status_code=403), None, None, None)
-    return None, body.get("auswahl"), req_groups, namen
+                              + ", ".join(fremd[:5])}, status_code=403), None, None, None, None)
+    return None, body.get("auswahl"), req_groups, namen, tags
 
 
 @app.post("/api/wissen/confluence/bindung")
 async def wissen_cf_bindung_anlegen(request: Request, user: str = Depends(require_auth)):
     """Die markierten Bereiche als EINEN Eintrag speichern.
 
-    Body: ``{auswahl: [{key, start, ganz, seiten, zweige}], groups: [...]}``.
+    Body: ``{auswahl: [{key, start, ganz, seiten, zweige}], groups: [...],
+    tags: [...]}`` – ``tags`` optional; leer = alle markierten Seiten.
 
     ⚠ DER ANZEIGENAME KOMMT VOM SERVER, nicht aus dem Rumpf – und jeder
     Schluessel muss in den SICHTBAREN Bereichen stehen. Ohne diese Schranke
@@ -18878,11 +18882,11 @@ async def wissen_cf_bindung_anlegen(request: Request, user: str = Depends(requir
         return JSONResponse({"ok": False, "error": "Dir ist kein Wissensbereich zugewiesen."},
                             status_code=403)
     import backend.confluence_bindung as _cfb
-    fehler, auswahl, req_groups, namen = await _cfb_auswahl_lesen(request, user)
+    fehler, auswahl, req_groups, namen, tags = await _cfb_auswahl_lesen(request, user)
     if fehler is not None:
         return fehler
     try:
-        eintrag = _cfb.hinzufuegen(auswahl, _display_name(user), req_groups, namen)
+        eintrag = _cfb.hinzufuegen(auswahl, _display_name(user), req_groups, namen, tags)
     except _cfb.BindungFehler as e:
         return JSONResponse({"ok": False, "error": str(e)}, status_code=400)
     except Exception as e:  # noqa: BLE001
@@ -18912,14 +18916,14 @@ async def wissen_cf_bindung_aendern(bid: str, request: Request,
     alt = _cfb.holen(bid)
     if alt is None:
         return JSONResponse({"ok": False, "error": "Einbindung nicht gefunden."}, status_code=404)
-    fehler, auswahl, req_groups, namen = await _cfb_auswahl_lesen(request, user)
+    fehler, auswahl, req_groups, namen, tags = await _cfb_auswahl_lesen(request, user)
     if fehler is not None:
         return fehler
     eigene = {g.get("id") for g in (_editable_groups_for(user) or []) if isinstance(g, dict)}
     gruppen = list(req_groups) + [g for g in (alt.get("gruppen") or [])
                                   if g not in eigene and g not in req_groups]
     try:
-        eintrag = _cfb.aendern(bid, auswahl, _display_name(user), gruppen, namen)
+        eintrag = _cfb.aendern(bid, auswahl, _display_name(user), gruppen, namen, tags)
     except KeyError:
         return JSONResponse({"ok": False, "error": "Einbindung nicht gefunden."}, status_code=404)
     except _cfb.BindungFehler as e:
@@ -19100,6 +19104,77 @@ def _destillat_erlaubt(user: str) -> bool:
         return bool(_editable_groups_for(user))
     except Exception:  # noqa: BLE001
         return False
+
+
+def _destillat_filter_pfad(user: str) -> Path:
+    """Ablage des Dateifilters (Black-/Whitelist) EINES Benutzers.
+
+    Gleiche Bauart wie ``_excel_instr_path``: der Dateiname laeuft ueber
+    ``_benutzer.pfad_teil`` – ``nexus\\x`` und ``x`` sind derselbe Mensch und
+    bekommen EINE Datei.
+    """
+    return (Path(__file__).parent.parent / "data" / "destillat_filter"
+            / f"{_benutzer.pfad_teil(user, 'unbekannt')}.json")
+
+
+@app.get("/api/wissen/destillat/filter")
+async def wissen_destillat_filter_lesen(user: str = Depends(require_auth)):
+    """Der gespeicherte Dateifilter des Benutzers (leer, wenn keiner da ist).
+
+    Fail-open in die HARMLOSE Richtung: eine unlesbare Datei ergibt leere
+    Listen (= kein Filter, alle Dateien) und eine Protokollzeile – der
+    Container bleibt bedienbar. Die Richtung ist harmlos, weil der Filter nur
+    eine Vorauswahl ist: der Benutzer sieht jede Datei, die hochgeladen wird.
+    """
+    if not _destillat_erlaubt(user):
+        return JSONResponse({"ok": False, "error": "Dir ist kein Wissensbereich zugewiesen."},
+                            status_code=403)
+    from backend import wissen_destillat as _wd
+    daten = {"weiss": [], "schwarz": []}
+    try:
+        f = _destillat_filter_pfad(user)
+        if f.is_file():
+            roh = json.loads(f.read_text(encoding="utf-8"))
+            if isinstance(roh, dict):
+                daten = _wd.filter_pruefen(roh.get("weiss"), roh.get("schwarz"))
+    except Exception as e:  # noqa: BLE001
+        print(f"[Destillat] Dateifilter nicht lesbar: {e}", flush=True)
+    return JSONResponse({"ok": True, **daten})
+
+
+@app.put("/api/wissen/destillat/filter")
+async def wissen_destillat_filter_speichern(request: Request,
+                                            user: str = Depends(require_auth)):
+    """Dateifilter speichern (dauerhaft, je Benutzer). Body ``{weiss, schwarz}``.
+
+    **Der Benutzer kommt ausschliesslich aus der Anmeldung**, nie aus dem Rumpf
+    – sonst liesse sich einem Kollegen ein Filter unterschieben, der ihm still
+    Dateien aus jedem Destillat nimmt.
+    """
+    if not _destillat_erlaubt(user):
+        return JSONResponse({"ok": False, "error": "Dir ist kein Wissensbereich zugewiesen."},
+                            status_code=403)
+    from backend import wissen_destillat as _wd
+    try:
+        body = await request.json()
+    except Exception:  # noqa: BLE001
+        body = {}
+    if not isinstance(body, dict):
+        body = {}
+    try:
+        daten = _wd.filter_pruefen(body.get("weiss"), body.get("schwarz"))
+    except _wd.DestillatFehler as e:
+        return JSONResponse({"ok": False, "error": str(e)}, status_code=400)
+    try:
+        f = _destillat_filter_pfad(user)
+        f.parent.mkdir(parents=True, exist_ok=True)
+        tmp = f.with_suffix(".json.tmp")
+        tmp.write_text(json.dumps(daten, ensure_ascii=False, indent=1), encoding="utf-8")
+        os.replace(tmp, f)
+    except Exception as e:  # noqa: BLE001
+        return JSONResponse({"ok": False, "error": f"Konnte nicht gespeichert werden: {e}"},
+                            status_code=500)
+    return JSONResponse({"ok": True, **daten})
 
 
 @app.post("/api/wissen/destillat/extract")

@@ -43,6 +43,19 @@ Bereichs holt hunderte Seiten; ohne Deckel liefe ein Takt minutenlang und der
 naechste startete mitten hinein. Was offen bleibt, holt der naechste Takt –
 die Oberflaeche nennt die Zahl.
 
+⚠ TAG-FILTER (Vorgabe 2026-09-27): traegt ein Eintrag Tags, zaehlen von den
+markierten Seiten nur die, die mindestens einen davon tragen (``tags_filtern``);
+ohne Tags alle. Die Labels kommen mit DERSELBEN Seitenliste
+(``expand=metadata.labels``), kein Abruf je Seite – und nur, wenn ueberhaupt ein
+Eintrag Tags hat, sonst bleibt der Listenabruf wie er war. Ein neu gesetzter
+oder entfernter Tag aendert die VERSION der Seite nicht; das ist kein Problem,
+weil die Menge der gewollten Seiten in jedem Takt neu gebildet wird: eine
+Seite, die ihren Tag verliert, faellt aus ``gewollt`` und wird aufgeraeumt.
+⚠ LABELS UNBEKANNT ≠ KEINE LABELS. Liefert die Liste fuer eine Seite keine
+Label-Angabe (``labels is None``), gilt der Bereich fuer diesen Eintrag als
+nicht erreichbar – sonst raeumte eine Antwort ohne ``metadata`` still alle
+getaggten Seiten aus dem Wissen.
+
 Stand in ``data/confluence_abgleich.json`` (0640, in den Sperrlisten wie die
 Einbindung selbst): je Seite Version, Datei und Gruppen, je Eintrag das
 Ergebnis des letzten Laufs fuer die Anzeige.
@@ -155,6 +168,29 @@ def seiten_der_auswahl(sel: dict, liste: list, startseite: str = "") -> set:
             aus |= _nachfahren(kinder, z)
     if sel.get("start") is True and startseite and startseite in ids:
         aus.add(startseite)
+    return aus
+
+
+def tags_filtern(ids: set, liste: list, tags) -> set | None:
+    """Von ``ids`` nur die Seiten, die mindestens einen der ``tags`` tragen.
+
+    Leere ``tags`` = kein Filter (``ids`` unveraendert). ``None`` als Rueckgabe
+    heisst: fuer mindestens eine betroffene Seite sind die Labels UNBEKANNT –
+    der Aufrufer behandelt das wie einen gescheiterten Abruf und loescht
+    nichts. Verglichen wird klein geschrieben (Confluence speichert Labels
+    klein, die Ablage ebenfalls).
+    """
+    gesucht = {str(t).lower() for t in (tags or []) if t}
+    if not gesucht:
+        return set(ids)
+    nach_id = {str(p.get("id")): p for p in liste}
+    aus = set()
+    for pid in ids:
+        lab = (nach_id.get(pid) or {}).get("labels")
+        if lab is None:
+            return None
+        if gesucht & {str(x).lower() for x in lab}:
+            aus.add(pid)
     return aus
 
 
@@ -278,6 +314,9 @@ def _lauf(client) -> dict:
     gescheitert: set = set()   # Bereiche, deren Bestand NICHT angefasst wird
     gewollt: dict = {}         # pid -> {space, name, titel, version, link, gruppen}
     je_eintrag: dict = {}
+    # Labels nur holen, wenn ein Eintrag sie braucht – ohne Tags bleibt der
+    # Listenabruf byte-gleich zum Stand vor dem Tag-Filter.
+    mit_labels = any(e.get("tags") for e in eintraege)
 
     for e in eintraege:
         bid = e.get("id") or ""
@@ -291,14 +330,27 @@ def _lauf(client) -> dict:
             for sel in e.get("auswahl") or []:
                 gescheitert.add(sel.get("key") or "")
             continue
+        if e.get("tags_ungueltig"):
+            # Kaputte Tag-Angabe (von Hand geschriebene Ablage): NICHT als
+            # "kein Filter" lesen – das holte den ganzen Bereich ins Wissen.
+            info["fehler"] = "Tags ungueltig"
+            for sel in e.get("auswahl") or []:
+                gescheitert.add(sel.get("key") or "")
+            continue
+        tags = e.get("tags") or []
         for sel in e.get("auswahl") or []:
             key = sel.get("key") or ""
             if not key:
                 continue
             if key not in listen:
                 try:
-                    listen[key] = client.pages_in_space(key, MAX_SEITEN_JE_BEREICH,
-                                                        with_parent=True, with_version=True)
+                    if mit_labels:
+                        listen[key] = client.pages_in_space(
+                            key, MAX_SEITEN_JE_BEREICH, with_parent=True,
+                            with_version=True, with_labels=True)
+                    else:
+                        listen[key] = client.pages_in_space(key, MAX_SEITEN_JE_BEREICH,
+                                                            with_parent=True, with_version=True)
                 except Exception as ex:  # noqa: BLE001 – ConfluenceError wie Netzfehler
                     listen[key] = None
                     print(f"[CF-Abgleich] Seitenliste {key} nicht abrufbar: {ex}", flush=True)
@@ -319,7 +371,11 @@ def _lauf(client) -> dict:
                         print(f"[CF-Abgleich] Startseite {key}: {ex}", flush=True)
                 st = startseiten[key]
             nach_id = {str(p.get("id")): p for p in liste}
-            ids = seiten_der_auswahl(sel, liste, st)
+            ids = tags_filtern(seiten_der_auswahl(sel, liste, st), liste, tags)
+            if ids is None:
+                gescheitert.add(key)
+                info["fehler"] = f"Tags von {key} nicht lesbar"
+                continue
             info["seiten"] += len(ids)
             for pid in ids:
                 p = nach_id.get(pid) or {}

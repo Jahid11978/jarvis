@@ -94,6 +94,51 @@ class DestillatFehler(Exception):
     """Fachlicher Fehlschlag mit Text fuer die Oberflaeche."""
 
 
+# ── Dateifilter (Black-/Whitelist, Vorgabe 2026-09-27) ──────────────────────
+# Muster mit `*` und `?`, je Benutzer gespeichert. ANGEWANDT wird der Filter
+# im BROWSER, bevor hochgeladen wird (`wissen_destillat.js::filterGrund`) – ein
+# Ordner mit 500 Dateien, von denen die Whitelist 50 durchlaesst, liefe
+# serverseitig sonst in MAX_DATEIEN, und ausgeschlossene Dateien wuerden
+# umsonst uebertragen. Hier steht nur die Normierung der gespeicherten Listen;
+# geschrieben wird im Endpunkt (dieses Modul hat keinen dauerhaften Schreibweg).
+MAX_MUSTER = 100            # je Liste
+MUSTER_MAX = 200            # Zeichen je Muster
+
+
+def filter_pruefen(weiss, schwarz) -> dict:
+    """Beide Listen normieren. Wirft ``DestillatFehler``.
+
+    Je Eintrag getrimmt, Leerzeilen weg, Dubletten still zusammengefasst
+    (Reihenfolge bleibt – der Benutzer findet seine Liste so wieder, wie er sie
+    geschrieben hat). ⚠ ABGEWIESEN, NICHT GEKUERZT: ein gekuerztes Muster
+    filtert etwas anderes als das eingegebene.
+    """
+    def eine(werte, was: str) -> list[str]:
+        if werte is None:
+            return []
+        # Ein String ist keine Liste – sonst wird jedes Zeichen ein Muster.
+        if isinstance(werte, (str, bytes)) or not isinstance(werte, (list, tuple)):
+            raise DestillatFehler(f"Die {was} wurde in unerwarteter Form übergeben.")
+        aus: list[str] = []
+        for w in werte:
+            if not isinstance(w, str):
+                raise DestillatFehler(f"Die {was} wurde in unerwarteter Form übergeben.")
+            m = w.strip()
+            if not m:
+                continue
+            if len(m) > MUSTER_MAX or any(ord(c) < 32 or ord(c) == 127 for c in m):
+                raise DestillatFehler(
+                    f"Ein Muster der {was} ist zu lang (höchstens {MUSTER_MAX} Zeichen) "
+                    "oder enthält Steuerzeichen.")
+            if m not in aus:
+                aus.append(m)
+        if len(aus) > MAX_MUSTER:
+            raise DestillatFehler(f"Höchstens {MAX_MUSTER} Muster je Liste.")
+        return aus
+
+    return {"weiss": eine(weiss, "Whitelist"), "schwarz": eine(schwarz, "Blacklist")}
+
+
 # ── Vorgabe-Prompts ─────────────────────────────────────────────────────────
 # Woertlich aus dem Original uebernommen (Punkt 5 nennt die Bild-Marker, die
 # `extrahiere()` erzeugt – der Prompt und der Extraktor muessen dieselbe

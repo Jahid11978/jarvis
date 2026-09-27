@@ -25,7 +25,7 @@
     var destillat = '';      // rohes Markdown der letzten Antwort
     var laeuft = false;
     var liest = false;       // Extraktion laeuft (Fortschrittszeile belegt)
-    var protokoll = null;    // [{name, art: ok|fehler|uebersprungen, grund, zeichen, bilder}]
+    var protokoll = null;    // [{name, art: ok|fehler|uebersprungen|gefiltert, grund, zeichen, bilder}]
 
     function $(id) { return document.getElementById(id); }
     function t(k, vars) {
@@ -200,6 +200,100 @@
         }
     }
 
+    // ── Dateifilter (Black-/Whitelist, Vorgabe 2026-09-27) ──────────────
+    // ⚠ ANGEWANDT WIRD HIER IM BROWSER, VOR DEM HOCHLADEN – nicht auf dem
+    // Server: ein Ordner mit 500 Dateien, von denen die Whitelist 50
+    // durchlaesst, liefe dort in die Obergrenze der Dateizahl, und jede
+    // ausgeschlossene Datei waere umsonst uebertragen. Der Server SPEICHERT nur
+    // die Listen (je Benutzer, /api/wissen/destillat/filter).
+    // Es gilt, was in den FELDERN steht, nicht der zuletzt gespeicherte Stand:
+    // was man sieht, wirkt – auch wenn das Speichern gerade gescheitert ist.
+    function musterListe(id) {
+        var el = $(id);
+        return String((el && el.value) || '').split('\n')
+            .map(function (z) { return z.trim(); })
+            .filter(function (z) { return !!z; });
+    }
+    // Glob -> RegExp: `*` beliebig viele Zeichen (auch `/`), `?` genau eines,
+    // alles andere woertlich. Ein Muster mit `/` am Ende meint den Ordner
+    // samt Inhalt (`archiv/` = `archiv/*`).
+    function musterRegex(m) {
+        if (m.charAt(m.length - 1) === '/') m += '*';
+        var re = m.replace(/[.+^${}()|[\]\\]/g, '\\$&')
+                  .replace(/\*/g, '.*').replace(/\?/g, '.');
+        return new RegExp('^' + re + '$', 'i');
+    }
+    // Geprueft wird gegen JEDES Pfadende ab einer Ordnergrenze: fuer
+    // `projekt/archiv/a.pdf` also `projekt/archiv/a.pdf`, `archiv/a.pdf` und
+    // `a.pdf`. Damit trifft `*.pdf` den Dateinamen und `archiv/*` den Ordner,
+    // egal wie tief er liegt.
+    function musterTrifft(m, pfad) {
+        var re;
+        try { re = musterRegex(m); } catch (e) { return false; }
+        var teile = String(pfad || '').replace(/\\/g, '/').split('/')
+            .filter(function (x) { return !!x; });
+        for (var i = 0; i < teile.length; i++) {
+            if (re.test(teile.slice(i).join('/'))) return true;
+        }
+        return false;
+    }
+    // '' = Datei wird genommen, sonst der Grund fuer das Protokoll.
+    // DIE BLACKLIST GEWINNT; eine leere Whitelist heisst „alles erlaubt".
+    function filterGrund(pfad) {
+        var schwarz = musterListe('wi-dest-schwarz');
+        for (var i = 0; i < schwarz.length; i++) {
+            if (musterTrifft(schwarz[i], pfad)) return t('wissen.dest_filter_black', { m: schwarz[i] });
+        }
+        var weiss = musterListe('wi-dest-weiss');
+        if (weiss.length && !weiss.some(function (m) { return musterTrifft(m, pfad); })) {
+            return t('wissen.dest_filter_notwhite');
+        }
+        return '';
+    }
+    function filterZahlZeichnen() {
+        var z = $('wi-dest-filterzahl'); if (!z) return;
+        var n = musterListe('wi-dest-weiss').length + musterListe('wi-dest-schwarz').length;
+        z.textContent = n ? t('wissen.dest_filter_active', { n: n }) : '';
+    }
+    function filterLaden() {
+        fetch('/api/wissen/destillat/filter', { headers: authH() })
+            .then(function (r) { return r.json(); })
+            .then(function (d) {
+                if (!d || !d.ok) return;
+                // Hat der Benutzer schon getippt, gewinnt seine Eingabe.
+                [['wi-dest-weiss', d.weiss], ['wi-dest-schwarz', d.schwarz]].forEach(function (x) {
+                    var el = $(x[0]);
+                    if (el && !el.dataset.beruehrt) el.value = (x[1] || []).join('\n');
+                });
+                filterZahlZeichnen();
+            })
+            .catch(function () { /* ohne gespeicherten Filter: keiner */ });
+    }
+    function filterSpeichern() {
+        status('wi-dest-filterstatus', '');
+        fetch('/api/wissen/destillat/filter', {
+            method: 'PUT', headers: authH({ 'Content-Type': 'application/json' }),
+            body: JSON.stringify({ weiss: musterListe('wi-dest-weiss'),
+                                   schwarz: musterListe('wi-dest-schwarz') })
+        })
+            .then(function (r) { return r.json(); })
+            .then(function (d) {
+                if (!d || !d.ok) {
+                    status('wi-dest-filterstatus', (d && d.error) || t('wissen.dest_filter_save_err'), 'err');
+                    return;
+                }
+                status('wi-dest-filterstatus', t('wissen.dest_filter_saved'), 'ok');
+                // Ein Erfolg darf verschwinden, ein Fehler nicht (Register).
+                setTimeout(function () {
+                    var e = $('wi-dest-filterstatus');
+                    if (e && e.querySelector('.wi-ok')) e.innerHTML = '';
+                }, 2500);
+            })
+            .catch(function () {
+                status('wi-dest-filterstatus', t('wissen.dest_filter_save_err'), 'err');
+            });
+    }
+
     // ── Extraktion ──────────────────────────────────────────────────────
     // Ein Eintrag ist ein File ODER {datei, name}: aus einem Ordner kommt der
     // RELATIVE Pfad als Name mit. Er steht dann in der Kopfzeile
@@ -215,12 +309,24 @@
         // "Datei 3 von 8" und "Datei 1 von 2" wechselten sich ab.
         if (liest) { status('wi-dest-exstatus', t('wissen.dest_busy_wait'), 'err'); return; }
         var fd = new FormData();
-        var neu = [];
+        var neu = [], gefiltert = [];
         Array.prototype.forEach.call(liste, function (x) {
             var f = x.datei || x, name = x.name && x.datei ? x.name : f.name;
+            // Dateifilter VOR dem Anhaengen: was er auslaesst, wird nicht
+            // uebertragen - steht aber mit Grund im Protokoll.
+            var grund = filterGrund(name);
+            if (grund) { gefiltert.push({ name: name, art: 'gefiltert', grund: grund }); return; }
             fd.append('files', f, name);
             neu.push({ name: name, size: f.size });
         });
+        if (!neu.length) {
+            // Alles ausgelassen: kein Abruf. Gesagt wird es trotzdem - ein
+            // Ziehen, auf das gar nichts folgt, saehe wie ein toter Knopf aus.
+            status('wi-dest-exstatus', t('wissen.dest_filtered_all', { n: gefiltert.length })
+                + (weg ? ' · ' + t('wissen.dest_dir_skipped', { n: weg }) : ''), 'err');
+            protokollSetzen(gefiltert);
+            return;
+        }
         dateien = dateien.concat(neu);
         dateilisteZeichnen();
         status('wi-dest-exstatus', '');
@@ -248,7 +354,7 @@
                                          : t('wissen.dest_extract_failed')), 'err');
                     return;
                 }
-                extraktUebernehmen(fertig, weg);
+                extraktUebernehmen(fertig, weg, gefiltert);
             })
             .catch(function (e) {
                 leseEnde(false);
@@ -285,7 +391,7 @@
         return r.text().then(function (txt) { rest = String(txt || ''); zerlegen(true); });
     }
 
-    function extraktUebernehmen(d, weg) {
+    function extraktUebernehmen(d, weg, gefiltert) {
         // Fehler je Datei an der ZEILE vermerken, nicht nur als Summe:
         // "3 Fehler" sagt nicht, WELCHE Datei nicht lesbar war.
         dateien.forEach(function (x) {
@@ -303,12 +409,15 @@
                 ? ta.value.replace(/\s*$/, '') + '\n\n' + d.text : d.text;
             zaehlerZeichnen();
         }
-        var prot = d.protokoll || [];
+        // Die vom Dateifilter ausgelassenen Dateien kennt nur der Browser -
+        // sie gehoeren trotzdem ins selbe Protokoll, sonst waeren sie spurlos weg.
+        var prot = (gefiltert || []).concat(d.protokoll || []);
         var teile = [t('wissen.dest_extracted', { n: (d.ok || []).length })];
         var fehlZahl = Object.keys(d.fehler || {}).length;
         var wegZahl = prot.filter(function (p) { return p.art === 'uebersprungen'; }).length;
         if (fehlZahl) teile.push(t('wissen.dest_failed_n', { n: fehlZahl }));
         if (wegZahl) teile.push(t('wissen.dest_skipped_n', { n: wegZahl }));
+        if ((gefiltert || []).length) teile.push(t('wissen.dest_filtered_n', { n: gefiltert.length }));
         // Eine Kuerzung wird BEZIFFERT, nie stillschweigend gemacht.
         if (d.gekappt) teile.push(t('wissen.dest_capped'));
         if (weg) teile.push(t('wissen.dest_dir_skipped', { n: weg }));
@@ -385,10 +494,12 @@
                 if (p.bilder) gr += ' · ' + t('wissen.dest_log_images', { n: p.bilder });
             } else if (p.art === 'uebersprungen') {
                 gr = t('wissen.dest_log_skipped');
+            } else if (p.art === 'gefiltert') {
+                gr = p.grund || '';
             } else {
                 gr = p.grund || t('wissen.dest_unreadable');
             }
-            var art = { ok: 1, fehler: 1, uebersprungen: 1 }[p.art] ? p.art : 'fehler';
+            var art = { ok: 1, fehler: 1, uebersprungen: 1, gefiltert: 1 }[p.art] ? p.art : 'fehler';
             return '<div class="wi-dest-logzeile ' + art + '">'
                 + '<span class="zei" aria-hidden="true">' + zei + '</span>'
                 + '<span class="nm">' + esc(p.name) + '</span>'
@@ -649,6 +760,15 @@
 
         vorgabenSetzen();
         zaehlerZeichnen();
+        filterLaden();
+        ['wi-dest-weiss', 'wi-dest-schwarz'].forEach(function (id) {
+            var e = $(id);
+            if (!e) return;
+            e.addEventListener('input', function () { e.dataset.beruehrt = '1'; filterZahlZeichnen(); });
+            // Gespeichert wird beim Verlassen des Feldes (`change`), nicht bei
+            // jedem Tastendruck - jeder waere ein Schreibzugriff auf dem Server.
+            e.addEventListener('change', filterSpeichern);
+        });
 
         var drop = $('wi-dest-drop'), input = $('wi-dest-files');
         var dirIn = $('wi-dest-dir'), dirBtn = $('wi-dest-dirbtn');
@@ -736,6 +856,7 @@
             if (g && !g.dataset.beruehrt) g.value = t('wissen.dest_gruppen_default');
             zaehlerZeichnen();
             protokollZeichnen();
+            filterZahlZeichnen();
         });
         ['wi-dest-prompt', 'wi-dest-gruppen'].forEach(function (id) {
             var e = $(id);
@@ -743,5 +864,6 @@
         });
     }
 
-    window.WissenDestillat = { init: init, _md: md, _mitBildern: mitBildern };
+    window.WissenDestillat = { init: init, _md: md, _mitBildern: mitBildern,
+                               _filterGrund: filterGrund, _musterTrifft: musterTrifft };
 })();

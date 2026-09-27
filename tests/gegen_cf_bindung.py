@@ -34,6 +34,7 @@ MARKE = ABL / "LAUF"
 DATEIEN = [
     "backend/confluence_bindung.py",
     "backend/confluence_abgleich.py",
+    "backend/confluence_client.py",
     "backend/main.py",
     "backend/sandbox.py",
     "backend/scheduler.py",
@@ -95,6 +96,7 @@ def bewerte(cmd) -> tuple[bool, str]:
 # ── Proben ──────────────────────────────────────────────────────────────────
 CFB = "backend/confluence_bindung.py"
 CFA = "backend/confluence_abgleich.py"
+CCL = "backend/confluence_client.py"
 MAIN = "backend/main.py"
 SB = "backend/sandbox.py"
 SCH = "backend/scheduler.py"
@@ -113,6 +115,18 @@ def _tausche_bloecke(s: str) -> str:
     if not (0 < a < b < e):
         return s
     return s[:a] + s[b:e] + s[a:b] + s[e:]
+
+
+def _tags_hinter_baum(s: str) -> str:
+    """Verschiebt das Tag-Feld (samt Hinweis) HINTER den Baum."""
+    a = s.find("            <!-- Tags (Vorgabe 2026-09-27)")
+    b = s.find("</p>\n", s.find('data-i18n="wissen.cfb_tags_hint"', a if a > 0 else 0))
+    t = s.find('            <div class="wi-cf-tree wi-cfb-tree" id="wi-cfb-tree"')
+    te = s.find("\n", t)
+    if not (0 < a < b < t < te):
+        return s
+    b += len("</p>\n")
+    return s[:a] + s[b:te + 1] + s[a:b] + s[te + 1:]
 
 
 PROBEN = [
@@ -146,8 +160,8 @@ PROBEN = [
      '    req_groups = _gruppen_normieren(body.get("groups"))\n    ok, err = _wissen_check_groups(user, req_groups)\n',
      '    req_groups = _gruppen_normieren(body.get("groups"))\n    ok, err = True, ""\n', PY_W),
     ("Namen vom Server werden nicht uebergeben", MAIN,
-     "        eintrag = _cfb.hinzufuegen(auswahl, _display_name(user), req_groups, namen)\n",
-     "        eintrag = _cfb.hinzufuegen(auswahl, _display_name(user), req_groups)\n", PY_W),
+     "        eintrag = _cfb.hinzufuegen(auswahl, _display_name(user), req_groups, namen, tags)\n",
+     "        eintrag = _cfb.hinzufuegen(auswahl, _display_name(user), req_groups, None, tags)\n", PY_W),
     ("Liste traegt kein Abgleichsergebnis mehr", MAIN,
      '        c["abgleich"] = staende.get(c.get("id") or "")\n', "", PY_W),
     ("eigene Gruppen als dicts statt Kennungen", MAIN,
@@ -240,7 +254,8 @@ PROBEN = [
      "if (cfbKind(pg, 'wi-cf-kids') && cfbKomplett(pg)) zweige.push(id);",
      "if (!cfbKind(pg, 'wi-cf-kids') || cfbKomplett(pg)) zweige.push(id);", JS_W),
     ("Wissensgruppen gehen nicht mit", WJS,
-     "body: JSON.stringify({ auswahl: auswahl, groups: grp })", "body: JSON.stringify({ auswahl: auswahl })", JS_W),
+     "body: JSON.stringify({ auswahl: auswahl, groups: grp, tags: cfbTagsLesen() })",
+     "body: JSON.stringify({ auswahl: auswahl, tags: cfbTagsLesen() })", JS_W),
     ("⚠ Bearbeiten legt einen NEUEN Eintrag an", WJS,
      "method: edit ? 'PUT' : 'POST'", "method: 'POST'", JS_W),
     ("Baum bleibt nach dem Uebernehmen markiert", WJS,
@@ -274,6 +289,75 @@ PROBEN = [
 
     # ── i18n ────────────────────────────────────────────────────────────────
     ("EN-Schluessel fehlt", I18N, "        'wissen.cfb_save': 'Save',\n", "", PY_W),
+
+    # ── Tags je Eintrag (Vorgabe 2026-09-27) ────────────────────────────────
+    ("Tags werden nicht klein geschrieben", CFB,
+     '        k = t.strip().lstrip("#").strip().lower()\n', '        k = t.strip().lstrip("#").strip()\n', PY_W),
+    ("Tag mit Leerraum/Trenner wird angenommen", CFB,
+     "        if len(k) > TAG_MAX or _TAG_BOESE_RE.search(k):\n", "        if len(k) > TAG_MAX:\n", PY_W),
+    ("zu langer Tag wird angenommen", CFB,
+     "        if len(k) > TAG_MAX or _TAG_BOESE_RE.search(k):\n", "        if _TAG_BOESE_RE.search(k):\n", PY_W),
+    ("ein String wird Zeichen fuer Zeichen zu Tags", CFB,
+     "    if isinstance(tags, (str, bytes)) or not isinstance(tags, (list, tuple)):\n",
+     "    if not isinstance(tags, (list, tuple, str)):\n", PY_W),
+    ("hinzufuegen legt die Tags nicht ab", CFB,
+     '            "tags": tg,\n            "angelegt": jetzt,\n', '            "angelegt": jetzt,\n', PY_W),
+    ("aendern behaelt die alten Tags", CFB,
+     '                    "tags": tg,\n                    "angelegt": b.get("angelegt") or "",\n',
+     '                    "tags": b.get("tags") or [],\n                    "angelegt": b.get("angelegt") or "",\n', PY_W),
+    ("⚠ kaputte Tag-Angabe wird zu 'kein Filter'", CFB,
+     '        c["tags_ungueltig"] = True\n', "", CA_W),
+    ("Tags werden im Endpunkt nicht geprueft", MAIN,
+     '        tags = _cfb._tags_pruefen(body.get("tags"))\n', '        tags = body.get("tags")\n', PY_W),
+    ("POST speichert die Tags nicht", MAIN,
+     "        eintrag = _cfb.hinzufuegen(auswahl, _display_name(user), req_groups, namen, tags)\n",
+     "        eintrag = _cfb.hinzufuegen(auswahl, _display_name(user), req_groups, namen)\n", PY_W),
+    ("PUT speichert die Tags nicht", MAIN,
+     "        eintrag = _cfb.aendern(bid, auswahl, _display_name(user), gruppen, namen, tags)\n",
+     "        eintrag = _cfb.aendern(bid, auswahl, _display_name(user), gruppen, namen)\n", PY_W),
+    ("⚠ der Abgleich ignoriert die Tags", CFA,
+     "            ids = tags_filtern(seiten_der_auswahl(sel, liste, st), liste, tags)\n",
+     "            ids = seiten_der_auswahl(sel, liste, st)\n", CA_W),
+    ("⚠ unbekannte Labels gelten als 'kein Tag' (loescht Wissen)", CFA,
+     "        if lab is None:\n            return None\n", "        if lab is None:\n            continue\n", CA_W),
+    ("Tag-Vergleich achtet auf Gross-/Kleinschreibung", CFA,
+     "    gesucht = {str(t).lower() for t in (tags or []) if t}\n",
+     "    gesucht = {str(t) for t in (tags or []) if t}\n", CA_W),
+    ("Labels werden nie verlangt", CFA,
+     '    mit_labels = any(e.get("tags") for e in eintraege)\n', "    mit_labels = False\n", CA_W),
+    ("Labels werden immer verlangt (Abruf ohne Tags veraendert)", CFA,
+     '    mit_labels = any(e.get("tags") for e in eintraege)\n', "    mit_labels = True\n", CA_W),
+    ("kaputte Tags: Eintrag wird ungefiltert abgeglichen", CFA,
+     '        if e.get("tags_ungueltig"):\n', "        if False:\n", CA_W),
+    ("⚠ Client: fehlende metadata wird zu 'keine Labels'", CCL,
+     "                        if isinstance(lab, dict) else None)\n", "                        if isinstance(lab, dict) else [])\n", CA_W),
+    ("Client: Labels nicht klein geschrieben", CCL,
+     '                        [str(x.get("name") or "").strip().lower()\n',
+     '                        [str(x.get("name") or "").strip()\n', CA_W),
+    ("Client: expand verlangt die Labels nicht", CCL,
+     '("metadata.labels", with_labels)', '("metadata.labels", False)', CA_W),
+    ("Tag-Feld steht HINTER dem Baum", HTML, _tags_hinter_baum, None, JS_W),
+    ("Rueckfall-Markup des Tag-Hinweises weicht von DE ab", HTML,
+     '<p class="desc" data-i18n="wissen.cfb_tags_hint">Nur Seiten,',
+     '<p class="desc" data-i18n="wissen.cfb_tags_hint">Alle Seiten,', PY_W),
+    ("Tags gehen nicht mit", WJS,
+     "body: JSON.stringify({ auswahl: auswahl, groups: grp, tags: cfbTagsLesen() })",
+     "body: JSON.stringify({ auswahl: auswahl, groups: grp })", JS_W),
+    ("Tags nur an Komma getrennt", WJS,
+     "        return String((el && el.value) || '').split(/[\\s,;]+/)",
+     "        return String((el && el.value) || '').split(/,/)", JS_W),
+    ("⚠ Tag-Feld wird nach dem Eintrag nicht geleert", WJS,
+     "        if (tg) tg.value = b ? (b.tags || []).join(', ') : '';\n",
+     "        if (tg && b) tg.value = (b.tags || []).join(', ');\n", JS_W),
+    ("Bearbeiten fuellt die Tags nicht ein", WJS,
+     "        if (tg) tg.value = b ? (b.tags || []).join(', ') : '';\n",
+     "        if (tg && !b) tg.value = '';\n", JS_W),
+    ("Liste nennt die Tags nicht", WJS,
+     "                + ((b.tags || []).length\n", "                + ((b.tags || []).length && false\n", JS_W),
+    ("⚠ Tags in der Liste unmaskiert", WJS,
+     "                      + esc(t('wissen.cfb_sum_tags', { t: b.tags.join(', ') })) + '</div>'",
+     "                      + t('wissen.cfb_sum_tags', { t: b.tags.join(', ') }) + '</div>'", JS_W),
+    ("EN-Tag-Text fehlt", I18N, "        'wissen.cfb_tags_ph': 'e.g. handbook, approved',\n", "", PY_W),
 ]
 
 # ── REGEL: jede angefasste Datei muss gesichert sein ────────────────────────

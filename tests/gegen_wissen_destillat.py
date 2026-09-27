@@ -126,6 +126,31 @@ def _rechte_verschieben(s: str) -> str:
     return s.replace(block, ersatz)
 
 
+def _erstes_recht_weg(funktion: str):
+    """Sabotage-Fabrik: in GENAU EINER Funktion die Rechte-Pruefung stilllegen
+    (die Zeile steht in jedem Destillat-Endpunkt gleich – ein Textersatz
+    traefe den falschen)."""
+    def sab(s: str) -> str:
+        a = s.find(f"async def {funktion}(")
+        z = "    if not _destillat_erlaubt(user):\n"
+        b = s.find(z, a) if a >= 0 else -1
+        if a < 0 or b < 0 or s.find("\n@app.", a) < b:
+            return s
+        return s[:b] + "    if False:\n" + s[b + len(z):]
+    return sab
+
+
+def _filter_hinter_ablage(s: str) -> str:
+    """Verschiebt den Filterkasten HINTER die Ablage."""
+    a = s.find("            <!-- 0. Dateifilter (Vorgabe 2026-09-27)")
+    b = s.find("            </details>\n", a if a > 0 else 0)
+    d = s.find("            <div class=\"wi-list\" id=\"wi-dest-filelist\">")
+    if not (0 < a < b < d):
+        return s
+    b += len("            </details>\n")
+    return s[:a] + s[b:d] + s[a:b] + s[d:]
+
+
 PROBEN = [
     # ── Die zentrale Zusage: KEIN AGENT ────────────────────────────────────
     ("⚠ tools=[] raus (aus der Hilfe wird eine Hintertuer)", WD,
@@ -447,6 +472,67 @@ PROBEN = [
      '<span id="wi-dest-exbusy-text">', JS_W),
     ("neuer Text fehlt im Englischen", I18N,
      "        'wissen.dest_log_hide': 'Hide log',\n", "", JS_W),
+
+    # ── Dateifilter (Black-/Whitelist, 2026-09-27) ─────────────────────────
+    ("Filter: ein String wird Zeichen fuer Zeichen zu Mustern", WD,
+     "        if isinstance(werte, (str, bytes)) or not isinstance(werte, (list, tuple)):\n",
+     "        if not isinstance(werte, (list, tuple, str)):\n", PY_W),
+    ("Filter: zu langes Muster wird angenommen", WD,
+     "            if len(m) > MUSTER_MAX or any(", "            if any(", PY_W),
+    ("Filter: Dubletten bleiben stehen", WD,
+     "            if m not in aus:\n                aus.append(m)\n", "            aus.append(m)\n", PY_W),
+    ("⚠ Filter speichern ohne Rechtepruefung", MAIN,
+     None, _erstes_recht_weg("wissen_destillat_filter_speichern"), PY_W),
+    ("Filter lesen ohne Rechtepruefung", MAIN,
+     None, _erstes_recht_weg("wissen_destillat_filter_lesen"), PY_W),
+    ("⚠ Filter: Benutzer aus dem Rumpf (fremden Filter unterschieben)", MAIN,
+     "        f = _destillat_filter_pfad(user)\n        f.parent.mkdir(",
+     "        f = _destillat_filter_pfad(body.get(\"user\") or user)\n        f.parent.mkdir(", PY_W),
+    ("Filter: der ungepruefte Rumpf wird gespeichert", MAIN,
+     "        tmp.write_text(json.dumps(daten, ", "        tmp.write_text(json.dumps(body, ", PY_W),
+    ("Filter: ein Pruef-Fehler speichert trotzdem", MAIN,
+     "    except _wd.DestillatFehler as e:\n        return JSONResponse({\"ok\": False, \"error\": str(e)}, status_code=400)\n"
+     "    try:\n        f = _destillat_filter_pfad(user)\n",
+     "    except _wd.DestillatFehler as e:\n        daten = {}\n"
+     "    try:\n        f = _destillat_filter_pfad(user)\n", PY_W),
+    ("Filter-Ablage ohne pfad_teil (zwei Dateien je Mensch)", MAIN,
+     "            / f\"{_benutzer.pfad_teil(user, 'unbekannt')}.json\")", "            / f\"{user}.json\")", PY_W),
+    ("⚠ der Filter greift beim Hochladen nicht", JS,
+     "            var grund = filterGrund(name);\n", "            var grund = '';\n", JS_W),
+    ("⚠ die Blacklist wird ignoriert", JS,
+     "            if (musterTrifft(schwarz[i], pfad)) return", "            if (false) return", JS_W),
+    ("⚠ die Whitelist wird ignoriert", JS,
+     "        if (weiss.length && !weiss.some(", "        if (false && !weiss.some(", JS_W),
+    ("Muster trifft als Teilstring", JS,
+     "        return new RegExp('^' + re + '$', 'i');", "        return new RegExp(re, 'i');", JS_W),
+    ("Gross-/Kleinschreibung zaehlt", JS,
+     "        return new RegExp('^' + re + '$', 'i');", "        return new RegExp('^' + re + '$');", JS_W),
+    ("Ordnermuster greift nur am Pfadanfang", JS,
+     "        for (var i = 0; i < teile.length; i++) {\n            if (re.test(",
+     "        for (var i = 0; i < 1; i++) {\n            if (re.test(", JS_W),
+    ("⚠ ausgelassene Dateien fehlen im Protokoll", JS,
+     "        var prot = (gefiltert || []).concat(d.protokoll || []);", "        var prot = d.protokoll || [];", JS_W),
+    ("ausgelassene Zeile ohne Grund", JS, "                gr = p.grund || '';\n", "                gr = '';\n", JS_W),
+    ("alles ausgelassen: trotzdem eine Anfrage", JS,
+     "        if (!neu.length) {\n            // Alles ausgelassen", "        if (false) {\n            // Alles ausgelassen", JS_W),
+    ("alles ausgelassen: stilles Nichts", JS,
+     "            status('wi-dest-exstatus', t('wissen.dest_filtered_all'",
+     "            (function () {})('wi-dest-exstatus', t('wissen.dest_filtered_all'", JS_W),
+    ("⚠ Laden ueberschreibt eine begonnene Eingabe", JS,
+     "                    if (el && !el.dataset.beruehrt) el.value", "                    if (el) el.value", JS_W),
+    ("Filter wird nie gespeichert", JS, "            e.addEventListener('change', filterSpeichern);\n", "", JS_W),
+    ("Speicherfehler verschwindet von selbst", JS,
+     "                    status('wi-dest-filterstatus', (d && d.error) || t('wissen.dest_filter_save_err'), 'err');\n"
+     "                    return;\n",
+     "                    status('wi-dest-filterstatus', (d && d.error) || t('wissen.dest_filter_save_err'), 'err');\n"
+     "                    setTimeout(function () { status('wi-dest-filterstatus', ''); }, 2500);\n"
+     "                    return;\n", JS_W),
+    ("Filterkasten steht HINTER der Ablage", HTML, None, _filter_hinter_ablage, JS_W),
+    ("Rueckfall-Markup des Filter-Hinweises weicht von DE ab", HTML,
+     'data-i18n="wissen.dest_filter_hint">Ein Muster je Zeile:', 'data-i18n="wissen.dest_filter_hint">Muster je Zeile:', JS_W),
+    ("Filter-Text fehlt im Englischen", I18N,
+     "        'wissen.dest_filtered_all': 'All {n} file(s) were skipped by the file filter – nothing was uploaded.',\n",
+     "", JS_W),
 ]
 
 

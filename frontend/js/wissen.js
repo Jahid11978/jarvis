@@ -1752,6 +1752,15 @@
             : (!n ? t('wissen.cfb_add_hint') : t('wissen.cfb_need_group'));
     }
 
+    // Tags aus dem Eingabefeld. Getrennt wird an Komma, Semikolon und
+    // Leerraum - Confluence-Tags enthalten keines davon. Die Normierung
+    // (klein, ohne fuehrendes #) macht der SERVER (`_tags_pruefen`); hier nur
+    // zerlegen, damit es EINE Fassung der Regel gibt.
+    function cfbTagsLesen() {
+        var el = $('wi-cfb-tags');
+        return String((el && el.value) || '').split(/[\s,;]+/).filter(function (x) { return !!x; });
+    }
+
     function cfbZusammenfassung(b) {
         return (b.auswahl || []).map(function (a) {
             var teile = [];
@@ -1818,6 +1827,10 @@
                 + '<div class="wi-fmeta">'
                 + '<span class="nm">' + esc(b.name || b.id) + '</span>'
                 + '<div class="wi-fpath wi-cfb-sum">' + esc(cfbZusammenfassung(b)) + '</div>'
+                + ((b.tags || []).length
+                    ? '<div class="wi-fpath wi-cfb-sum wi-cfb-tagsum">'
+                      + esc(t('wissen.cfb_sum_tags', { t: b.tags.join(', ') })) + '</div>'
+                    : '')
                 + cfbSyncZeile(b)
                 + '</div>'
                 + chips
@@ -1849,6 +1862,10 @@
             note.style.display = b ? '' : 'none';
             note.textContent = b ? t('wissen.cfb_editing', { n: b.name || b.id }) : '';
         }
+        // Die Tags gehoeren zum Eintrag: beim Bearbeiten seine, danach leer -
+        // sonst truege der naechste NEUE Eintrag still den Filter des alten.
+        var tg = $('wi-cfb-tags');
+        if (tg) tg.value = b ? (b.tags || []).join(', ') : '';
     }
 
     // Einen gespeicherten Eintrag in den Baum laden: Haken und Gruppen so, wie
@@ -1905,7 +1922,7 @@
         cfbStatus(t('common.loading'));
         fetch('/api/wissen/confluence/bindung' + (edit ? '/' + encodeURIComponent(edit) : ''), {
             method: edit ? 'PUT' : 'POST', headers: authH({ 'Content-Type': 'application/json' }),
-            body: JSON.stringify({ auswahl: auswahl, groups: grp })
+            body: JSON.stringify({ auswahl: auswahl, groups: grp, tags: cfbTagsLesen() })
         }).then(function (r) { return r.json(); })
           .then(function (d) {
               _cfbLaeuft = false;

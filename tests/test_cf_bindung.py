@@ -512,7 +512,7 @@ check("⚠ nur Seiten MIT Unterseiten werden Zweig (ein Blatt ist kein Zweig)",
       "cfbKind(pg, 'wi-cf-kids') && cfbKomplett(pg)" in au)
 ad = js_fn("cfbAdd")
 check("⚠ die Auswahl UND die Gruppen gehen mit dem Rumpf raus",
-      "JSON.stringify({ auswahl: auswahl, groups: grp })" in ad)
+      "JSON.stringify({ auswahl: auswahl, groups: grp, tags: cfbTagsLesen() })" in ad)
 check("⚠ Bearbeiten speichert per PUT auf den Eintrag, Neues per POST",
       "edit ? 'PUT' : 'POST'" in ad and "encodeURIComponent(edit)" in ad)
 check("der Knopf verlangt Markierung UND Wissensgruppe",
@@ -566,6 +566,95 @@ mm = re.search(r'data-i18n="wissen\.cfb_tree_hint">([^<]*)<', HTML)
 mt = re.search(r"'wissen\.cfb_tree_hint':\s*'([^']*)'", I18N)
 check("die Bedienhilfe am Baum: Markup = DE",
       bool(mm) and bool(mt) and mm.group(1) == mt.group(1))
+
+
+# ════════════════════════════════════════════════════════════════════════════
+section("8. Tags je Eintrag (Vorgabe 2026-09-27)")
+T = cfb._tags_pruefen
+check("None = kein Filter", sicher(T, None) == [])
+check("leere Liste = kein Filter", sicher(T, []) == [])
+check("⚠ klein geschrieben, fuehrendes # weg, getrimmt, Dubletten zusammengefasst",
+      sicher(T, [" Handbuch ", "#freigegeben", "HANDBUCH", "", "  "]) == ["handbuch", "freigegeben"],
+      str(sicher(T, [" Handbuch ", "#freigegeben", "HANDBUCH", "", "  "])))
+check("Reihenfolge bleibt", sicher(T, ["b", "a", "c"]) == ["b", "a", "c"])
+check("⚠ ein String ist keine Liste (sonst ein Tag je Buchstabe)",
+      isinstance(sicher(T, "handbuch"), cfb.BindungFehler))
+check("ein Nicht-String in der Liste wird abgewiesen", isinstance(sicher(T, ["a", 5]), cfb.BindungFehler))
+for boes in ["zwei worte", "a,b", "a;b", "tab\tx", "zeile\nx", "nul\x00x"]:
+    check(f"⚠ Tag {boes!r} wird abgewiesen (Leerraum/Trenner/Steuerzeichen)",
+          isinstance(sicher(T, [boes]), cfb.BindungFehler))
+check("⚠ ein zu langer Tag wird ABGEWIESEN, nicht gekuerzt",
+      isinstance(sicher(T, ["x" * (cfb.TAG_MAX + 1)]), cfb.BindungFehler))
+check("ein Tag genau an der Grenze geht", sicher(T, ["x" * cfb.TAG_MAX]) == ["x" * cfb.TAG_MAX])
+check("zu viele Tags werden abgewiesen",
+      isinstance(sicher(T, [f"t{i}" for i in range(cfb.MAX_TAGS + 1)]), cfb.BindungFehler))
+check("Sonderzeichen ohne Leerraum gehen durch (Confluence entscheidet selbst)",
+      sicher(T, ["ä-ö_ü.1"]) == ["ä-ö_ü.1"])
+
+et = sicher(cfb.hinzufuegen, [{"key": "TAGS", "start": True}], "x", ["technik"], None,
+            ["Handbuch", "#Intern"])
+check("(Positivkontrolle) Eintrag mit Tags angelegt", isinstance(et, dict), str(et))
+check("⚠ die Tags stehen normiert im Eintrag", isinstance(et, dict) and et.get("tags") == ["handbuch", "intern"],
+      str(et))
+gespeichert = json.loads(cfb._pfad().read_text(encoding="utf-8"))["bereiche"]
+check("⚠ und in der Ablage", any(b.get("tags") == ["handbuch", "intern"] for b in gespeichert), str(gespeichert))
+check("hinzufuegen OHNE Tags legt die leere Liste ab",
+      (sicher(cfb.hinzufuegen, [{"key": "OHNE", "start": True}], "x", ["technik"]) or {}).get("tags") == [])
+check("ungueltige Tags verhindern das Anlegen (nichts geschrieben)",
+      isinstance(sicher(cfb.hinzufuegen, [{"key": "B", "start": True}], "x", ["technik"], None, ["a b"]),
+                 cfb.BindungFehler)
+      and not any(b.get("name") == "B" for b in cfb.liste()))
+ga = sicher(cfb.aendern, et["id"] if isinstance(et, dict) else "", [{"key": "TAGS", "start": True}], "y",
+            ["technik"], None, ["neu"])
+check("⚠ aendern ERSETZT die Tags", isinstance(ga, dict) and ga.get("tags") == ["neu"], str(ga))
+gb = sicher(cfb.aendern, et["id"] if isinstance(et, dict) else "", [{"key": "TAGS", "start": True}], "y",
+            ["technik"])
+check("⚠ aendern ohne Tags hebt den Filter auf (die Oberflaeche schickt immer den ganzen Eintrag)",
+      isinstance(gb, dict) and gb.get("tags") == [], str(gb))
+check("liste() liefert Tags je Eintrag", all(isinstance(b.get("tags"), list) for b in cfb.liste()))
+for b in cfb.liste():
+    cfb.entfernen(b["id"])
+
+roh = json.dumps({"version": 1, "bereiche": [
+    {"id": "t1", "typ": "auswahl", "name": "vorher", "gruppen": ["technik"],
+     "auswahl": [{"key": "A", "start": True}]},
+    {"id": "t2", "typ": "auswahl", "name": "kaputt", "gruppen": ["technik"],
+     "auswahl": [{"key": "A", "start": True}], "tags": "handbuch"}]})
+cfb._pfad().write_text(roh, encoding="utf-8")
+ll = cfb.liste()
+check("Eintrag von vor den Tags: kein Filter", len(ll) == 2 and ll[0].get("tags") == [] and not ll[0].get("tags_ungueltig"))
+check("⚠ kaputte Tag-Angabe wird MARKIERT, nicht zu 'kein Filter' gelesen",
+      len(ll) == 2 and ll[1].get("tags_ungueltig") is True, str(ll[1] if len(ll) > 1 else ll))
+check("das Lesen schreibt die Ablage nicht um", cfb._pfad().read_text(encoding="utf-8") == roh)
+cfb._pfad().unlink()
+
+# Endpunkte: die Tags gehen durch die gemeinsame Pruefung und werden gespeichert.
+lf = rufe(LESEN)
+i_tag, i_sicht = pos(lf, "_tags_pruefen"), pos(lf, "_wissen_visible_spaces")
+check("⚠ die Tags werden in _cfb_auswahl_lesen geprueft", i_tag >= 0, str(lf))
+check("⚠ billig vor teuer: Tags VOR dem Confluence-Abruf", 0 <= i_tag < i_sicht, f"{i_tag}/{i_sicht}")
+_tp = next((n for n in ast.walk(LESEN) if isinstance(n, ast.Call) and isinstance(n.func, ast.Attribute)
+            and n.func.attr == "_tags_pruefen"), None) if LESEN else None
+check("die Tags kommen aus body['tags']",
+      _tp is not None and "body.get('tags')" in ast.unparse(_tp), ast.unparse(_tp) if _tp else "")
+_ret = [n for n in ast.walk(LESEN) if isinstance(n, ast.Return) and isinstance(n.value, ast.Tuple)
+        and isinstance(n.value.elts[0], ast.Constant) and n.value.elts[0].value is None] if LESEN else []
+check("die Erfolgsrueckgabe traegt die GEPRUEFTEN Tags",
+      len(_ret) == 1 and isinstance(_ret[0].value.elts[-1], ast.Name) and _ret[0].value.elts[-1].id == "tags",
+      ast.unparse(_ret[0]) if _ret else "keine")
+for nm, k, schreib in [("POST", POST, "hinzufuegen"), ("PUT", PUT, "aendern")]:
+    call = next((n for n in ast.walk(k) if isinstance(n, ast.Call)
+                 and isinstance(n.func, ast.Attribute) and n.func.attr == schreib), None) if k else None
+    argn = [a.id for a in (call.args if call else []) if isinstance(a, ast.Name)]
+    check(f"⚠ {nm}: die geprueften Tags werden an {schreib} UEBERGEBEN", "tags" in argn, str(argn))
+    zuw = [n for n in ast.walk(k) if isinstance(n, ast.Assign) and isinstance(n.value, ast.Await)
+           and "_cfb_auswahl_lesen" in ast.unparse(n.value)] if k else []
+    check(f"{nm}: tags stammt aus _cfb_auswahl_lesen (nicht aus dem Rumpf)",
+          len(zuw) == 1 and "tags" in ast.unparse(zuw[0].targets[0]) and "body.get('tags')" not in rumpf(k))
+mm = re.search(r'data-i18n="wissen\.cfb_tags_hint">([^<]*)<', HTML)
+mt = re.search(r"'wissen\.cfb_tags_hint':\s*'([^']*)'", I18N)
+check("der Tag-Hinweis: Markup = DE", bool(mm) and bool(mt) and mm.group(1) == mt.group(1))
+check("⚠ der Hinweis sagt, was OHNE Tags passiert", bool(mt) and "Ohne Tags" in mt.group(1))
 
 
 # ── Aufraeumen ──────────────────────────────────────────────────────────────

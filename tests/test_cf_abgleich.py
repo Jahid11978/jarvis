@@ -119,14 +119,19 @@ class Attrappe:
         self.weg: set = set()          # Bereiche, deren Liste scheitert
         self.page_rufe: list = []
         self.listen_rufe: list = []
+        self.label_rufe: list = []     # je Listenabruf: wurden Labels verlangt?
+        self.ohne_labels: set = set()  # Bereiche, deren Antwort KEINE metadata traegt
 
-    def seite(self, key, pid, titel, parent="", version=1, body=None):
+    def seite(self, key, pid, titel, parent="", version=1, body=None, labels=None):
         self.raeume.setdefault(key, {})[pid] = {
             "title": titel, "parent": parent, "version": version,
+            "labels": list(labels or []),
             "body": body if body is not None else f"<p>Inhalt {titel} v{version}</p>"}
 
-    def pages_in_space(self, space, limit=500, with_parent=False, with_version=False):
+    def pages_in_space(self, space, limit=500, with_parent=False, with_version=False,
+                       with_labels=False):
         self.listen_rufe.append(space)
+        self.label_rufe.append(with_labels)
         if space in self.weg:
             raise ConfluenceError(503, "Wartung")
         aus = []
@@ -136,6 +141,9 @@ class Attrappe:
                 it["parent"] = s["parent"]
             if with_version:
                 it["version"] = s["version"]
+            if with_labels:
+                # Wie der echte Client: fehlt metadata.labels, steht None da.
+                it["labels"] = None if space in self.ohne_labels else [x.lower() for x in s["labels"]]
             aus.append(it)
         return aus[:limit]
 
@@ -154,7 +162,7 @@ class Attrappe:
 
 
 def lauf(c, aktiv=(True, "")):
-    c.page_rufe.clear(); c.listen_rufe.clear()
+    c.page_rufe.clear(); c.listen_rufe.clear(); c.label_rufe.clear()
     return cfa.lauf(client=c, aktiv=aktiv)
 
 def dateien():
@@ -387,6 +395,117 @@ check("⚠ der Zweig startet keinen Agenten",
       and "run_task_headless" in ast.unparse(zweig))   # Positivkontrolle: der Schnitt trennt wirklich
 check("die Stand-Datei steht in den Sperrlisten",
       "confluence_abgleich.json" in (ROOT / "backend" / "sandbox.py").read_text(encoding="utf-8"))
+
+
+# ════════════════════════════════════════════════════════════════════════════
+section("11. Tag-Filter je Eintrag (Vorgabe 2026-09-27)")
+F = cfa.tags_filtern
+L = [{"id": "1", "labels": ["handbuch"]}, {"id": "2", "labels": []},
+     {"id": "3", "labels": ["intern", "handbuch"]}, {"id": "4", "labels": None}]
+check("leere Tags = kein Filter", F({"1", "2"}, L, []) == {"1", "2"})
+check("nur Seiten mit mindestens einem Tag", F({"1", "2", "3"}, L, ["handbuch"]) == {"1", "3"})
+check("ODER-Verknuepfung ueber mehrere Tags", F({"1", "2", "3"}, L, ["intern", "gibtsnicht"]) == {"3"})
+check("Gross-/Kleinschreibung spielt keine Rolle", F({"1"}, L, ["HANDBUCH"]) == {"1"})
+check("⚠ Labels UNBEKANNT (None) -> None, nicht 'kein Tag'", F({"1", "4"}, L, ["handbuch"]) is None)
+check("unbekannte Labels ausserhalb der Auswahl stoeren nicht", F({"1"}, L, ["handbuch"]) == {"1"})
+check("ohne Filter sind auch unbekannte Labels egal", F({"4"}, L, []) == {"4"})
+
+C = Attrappe()
+C.seite("DOC", "700", "Wurzel")
+C.seite("DOC", "701", "Handbuch Teil 1", parent="700", labels=["Handbuch"])
+C.seite("DOC", "702", "Notiz", parent="700")
+C.seite("DOC", "703", "Handbuch Teil 2", parent="700", labels=["handbuch", "intern"])
+C.seite("DOC", "704", "Nur intern", parent="700", labels=["intern"])
+et = cfb.hinzufuegen([{"key": "DOC", "start": True, "ganz": True}], "tester", ["technik"],
+                     None, ["Handbuch"])
+check("(Positivkontrolle) Eintrag mit Tag angelegt", et.get("tags") == ["handbuch"], str(et))
+r = lauf(C)
+fs = dateien()
+check("⚠ die Labels werden MIT der Seitenliste verlangt", C.label_rufe == [True], str(C.label_rufe))
+check("⚠ nur getaggte Seiten kommen ins Wissen", sorted(f.split("/")[-1][:3] for f in fs) == ["701", "703"], str(fs))
+check("⚠ ungetaggte Seiten werden nicht einmal geholt",
+      not ({"700", "702", "704"} & set(C.page_rufe)), str(C.page_rufe))
+check("die Zaehlung am Eintrag nennt die gefilterten Seiten",
+      (stand()["eintraege"].get(et["id"]) or {}).get("seiten") == 2, str(stand()["eintraege"]))
+
+# Tag an einer Seite ENTFERNT, an einer anderen GESETZT – ohne Versionswechsel.
+C.raeume["DOC"]["701"]["labels"] = []
+C.raeume["DOC"]["702"]["labels"] = ["handbuch"]
+r = lauf(C)
+fs = dateien()
+check("⚠ Tag entfernt (Version gleich): die Seite verschwindet aus dem Wissen",
+      not any("/701_" in f for f in fs), str(fs))
+check("⚠ Tag gesetzt (Version gleich): die Seite kommt ins Wissen", any("/702_" in f for f in fs), str(fs))
+check("die unveraenderte getaggte Seite wird nicht neu geholt", "703" not in C.page_rufe, str(C.page_rufe))
+
+# ⚠ Labels unbekannt: NICHTS loeschen.
+vorher = dateien()
+C.ohne_labels.add("DOC")
+r = lauf(C)
+check("(Positivkontrolle) die Antwort trug wirklich keine Labels", C.label_rufe == [True])
+check("⚠ Labels unbekannt: kein getaggtes Wissen verschwindet", dateien() == vorher, f"{vorher} -> {dateien()}")
+check("und der Eintrag nennt den Grund",
+      "nicht lesbar" in ((stand()["eintraege"].get(et["id"]) or {}).get("fehler") or ""), str(stand()["eintraege"]))
+C.ohne_labels.clear()
+
+# Zwei Eintraege auf DENSELBEN Bereich: einer mit Tag, einer ohne.
+eo = cfb.hinzufuegen([{"key": "DOC", "seiten": ["704"]}], "tester", ["vertrieb"])
+r = lauf(C)
+fs = dateien()
+check("ein Eintrag OHNE Tags nimmt seine Seite ungefiltert", any("/704_" in f for f in fs), str(fs))
+check("⚠ und sie traegt nur SEINE Gruppe (der getaggte Eintrag deckt sie nicht ab)",
+      [v for k, v in ZUORDNUNG.items() if "704_" in k] == [["vertrieb"]], str(ZUORDNUNG))
+cfb.entfernen(eo["id"])
+
+# Tags weg: der ganze markierte Bereich kommt.
+cfb.aendern(et["id"], [{"key": "DOC", "start": True, "ganz": True}], "tester", ["technik"], None, [])
+C.start["DOC"] = "700"
+r = lauf(C)
+check("⚠ Tag-Liste leer: alle markierten Seiten des Bereichs kommen",
+      sorted(f.split("/")[-1][:3] for f in dateien()) == ["700", "701", "702", "703", "704"], str(dateien()))
+check("⚠ ohne Tags werden KEINE Labels verlangt (Abruf wie vor dem Filter)",
+      C.label_rufe == [False], str(C.label_rufe))
+cfb.entfernen(et["id"]); lauf(C)
+check("(Aufraeumen) Wissen leer", dateien() == [], str(dateien()))
+
+# Kaputte Tag-Angabe in der Ablage: der Eintrag wird NICHT ungefiltert abgeglichen.
+cfb._pfad().write_text(json.dumps({"version": 1, "bereiche": [
+    {"id": "k1", "typ": "auswahl", "name": "K", "gruppen": ["technik"], "tags": "handbuch",
+     "auswahl": [{"key": "DOC", "start": True, "ganz": True, "seiten": [], "zweige": []}]}]}),
+    encoding="utf-8")
+r = lauf(C)
+check("⚠ kaputte Tags: kein Abruf, kein Wissen (statt des ganzen Bereichs)",
+      C.page_rufe == [] and dateien() == [], str(C.page_rufe))
+check("und der Grund steht beim Eintrag",
+      "Tags" in ((stand()["eintraege"].get("k1") or {}).get("fehler") or ""), str(stand()["eintraege"]))
+cfb._pfad().unlink(); lauf(C)
+
+
+# ════════════════════════════════════════════════════════════════════════════
+section("12. Der echte Client liest die Labels (Antwortform von /rest/api/content)")
+import importlib  # noqa: E402
+sys.modules.pop("backend.confluence_client", None)
+cc = importlib.import_module("backend.confluence_client")
+kl = cc.ConfluenceClient({"base_url": "https://cf.invalid", "api_token": "x"})
+PARAMS: list = []
+def _req(method, path, params=None, **kw):
+    PARAMS.append(dict(params or {}))
+    return {"_links": {"base": "https://cf.invalid"}, "results": [
+        {"id": "1", "title": "A", "_links": {"webui": "/a"},
+         "metadata": {"labels": {"results": [{"prefix": "global", "name": "Handbuch"},
+                                             {"prefix": "my", "name": "privat"}]}}},
+        {"id": "2", "title": "B", "_links": {}, "metadata": {"labels": {"results": []}}},
+        {"id": "3", "title": "C", "_links": {}}]}
+kl._request = _req
+mit = kl.pages_in_space("DOC", 50, with_labels=True)
+check("expand verlangt metadata.labels", "metadata.labels" in (PARAMS[-1].get("expand") or ""), str(PARAMS[-1]))
+check("die Label-Namen kommen klein geschrieben", mit[0].get("labels") == ["handbuch", "privat"], str(mit[0]))
+check("eine Seite ohne Labels hat die LEERE Liste", mit[1].get("labels") == [], str(mit[1]))
+check("⚠ fehlt metadata ganz, steht None da (unbekannt, nicht 'keine')",
+      "labels" in mit[2] and mit[2]["labels"] is None, str(mit[2]))
+ohne = kl.pages_in_space("DOC", 50, with_parent=True, with_version=True)
+check("⚠ ohne with_labels kein metadata im expand (Abruf unveraendert)",
+      "metadata" not in (PARAMS[-1].get("expand") or "") and "labels" not in ohne[0], str(PARAMS[-1]))
 
 
 # ── Aufraeumen ──────────────────────────────────────────────────────────────

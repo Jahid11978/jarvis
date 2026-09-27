@@ -351,7 +351,7 @@ abschnitt('9. Klapp-Registrierung und Einbindung');
           WJS.indexOf('window.WissenPortal') >= 0 && WJS.indexOf('reloadPending') >= 0);
 }
 
-ordnerProbe().then(fortschrittProbe).then(abschluss, function (e) {
+ordnerProbe().then(fortschrittProbe).then(filterProbe).then(abschluss, function (e) {
     check('Abschnitt 10/11 lief ohne Wurf', false, String(e && e.stack || e));
     abschluss();
 });
@@ -686,6 +686,185 @@ async function fortschrittProbe() {
         check('neue Texte stehen in DE und EN', fehlt.length === 0, fehlt.join(', '));
         check('kein Sanduhr-Emoji mehr in "Lese Dateien" (der Drehkreis ersetzt es)',
               !/'wissen\.dest_extracting':\s*'⏳/.test(I18N));
+    }
+}
+
+// ════════════════════════════════════════════════════════════════════════════
+// 12. Dateifilter (Black-/Whitelist, Vorgabe 2026-09-27). Angewandt wird er im
+// BROWSER vor dem Hochladen – gemessen wird deshalb, was im FormData landet.
+async function filterProbe() {
+    abschnitt('12. Dateifilter: Whitelist / Blacklist');
+    const EXTRAKT = function () {
+        return { __zeilen: [{ art: 'fertig', ok: ['P/a.pdf'], text: 'Inhalt', fehler: {},
+                              protokoll: [{ name: 'P/a.pdf', art: 'ok', zeichen: 7 }] }] };
+    };
+    function feld(doc, id, wert) {
+        const el = doc.getElementById(id);
+        el.value = wert;
+        el.dispatchEvent(new el.ownerDocument.defaultView.Event('input'));
+        return el;
+    }
+    function ordner(w, doc, pfade) {
+        const dirIn = doc.getElementById('wi-dest-dir');
+        Object.defineProperty(dirIn, 'files', { configurable: true,
+            value: pfade.map(function (p) { return datei(w, p); }) });
+        dirIn.dispatchEvent(new w.Event('change'));
+    }
+    {
+        const { doc } = seite(GRUPPEN, {});
+        const box = doc.getElementById('wi-dest-filterbox');
+        const drop = doc.getElementById('wi-dest-drop');
+        check('(Positivkontrolle) Filterkasten und Ablage sind da', !!box && !!drop);
+        check('der Filter liegt IM Destillat', !!box && !!box.closest('#wi-sec-destillat'));
+        check('⚠ und VOR der Ablage (er greift beim Ziehen)',
+              !!box && !!drop && !!(box.compareDocumentPosition(drop) & 4));
+        check('er ist eingeklappt (im Regelfall braucht man ihn nicht)', !!box && !box.open);
+        ['wi-dest-weiss', 'wi-dest-schwarz'].forEach(function (id) {
+            const lab = doc.querySelector('label[for="' + id + '"]');
+            const ta = doc.getElementById(id);
+            check(id + ': Beschriftung mit i18n', !!lab && /^wissen\.dest_(white|black)$/.test(lab.getAttribute('data-i18n') || ''));
+            check(id + ': Platzhalter mit i18n', !!ta && /_ph$/.test(ta.getAttribute('data-i18n-placeholder') || ''));
+        });
+        check('die Überschrift ist übersetzbar',
+              !!doc.querySelector('#wi-dest-filterbox summary [data-i18n="wissen.dest_filter"]'));
+    }
+    {
+        // Gespeicherter Filter wird geladen – und die Zahl steht AUCH ZUGEKLAPPT da.
+        const { w, doc, gesendet } = seite(GRUPPEN, { '/api/wissen/destillat/filter':
+            { ok: true, weiss: ['*.pdf'], schwarz: ['*entwurf*', 'archiv/'] } });
+        await warte(20);
+        check('der gespeicherte Filter wird geholt',
+              gesendet.some(function (g) { return g.pfad === '/api/wissen/destillat/filter'
+                  && !(g.opt.method && g.opt.method !== 'GET'); }));
+        check('⚠ Whitelist aus der Ablage eingetragen', doc.getElementById('wi-dest-weiss').value === '*.pdf');
+        check('⚠ Blacklist aus der Ablage eingetragen (eine Zeile je Muster)',
+              doc.getElementById('wi-dest-schwarz').value === '*entwurf*\narchiv/',
+              JSON.stringify(doc.getElementById('wi-dest-schwarz').value));
+        check('die Zahl der aktiven Muster steht im Titel',
+              doc.getElementById('wi-dest-filterzahl').textContent === tr(w, 'wissen.dest_filter_active', { n: 3 }),
+              doc.getElementById('wi-dest-filterzahl').textContent);
+
+        const W = w.WissenDestillat;
+        check('*.pdf trifft den Dateinamen', W._filterGrund('a.PDF') === '');
+        check('⚠ Blacklist gewinnt gegen Whitelist', W._filterGrund('Entwurf_1.pdf')
+              === tr(w, 'wissen.dest_filter_black', { m: '*entwurf*' }), W._filterGrund('Entwurf_1.pdf'));
+        check('⚠ "archiv/" meint den Ordner – in jeder Tiefe',
+              W._filterGrund('proj/archiv/x.pdf') !== '' && W._filterGrund('archivx/x.pdf') === '');
+        check('nicht in der Whitelist -> ausgelassen, mit Grund',
+              W._filterGrund('notiz.txt') === tr(w, 'wissen.dest_filter_notwhite'));
+        check('Windows-Trenner zählen als Ordnergrenze', W._filterGrund('proj\\archiv\\x.pdf') !== '');
+        check('? steht für genau ein Zeichen',
+              W._musterTrifft('a?.pdf', 'ab.pdf') && !W._musterTrifft('a?.pdf', 'abc.pdf'));
+        check('Regex-Zeichen im Muster sind wörtlich',
+              W._musterTrifft('(1).pdf', 'x/(1).pdf') && !W._musterTrifft('a.b', 'axb'));
+        check('das Muster muss den GANZEN Namen treffen (kein Teilstring)',
+              !W._musterTrifft('pdf', 'a.pdf') && W._musterTrifft('*pdf', 'a.pdf'));
+
+        ordner(w, doc, ['P/a.pdf', 'P/Entwurf_x.pdf', 'P/b.txt', 'P/archiv/c.pdf']);
+        await warte(30);
+        const namen = gesendeteNamen(gesendet);
+        check('⚠ nur die erlaubte Datei wird ÜBERTRAGEN', JSON.stringify(namen) === '["P/a.pdf"]',
+              JSON.stringify(namen));
+    }
+    {
+        const { w, doc, gesendet } = seite(GRUPPEN, { '/api/wissen/destillat/extract': EXTRAKT });
+        feld(doc, 'wi-dest-weiss', '*.pdf');
+        feld(doc, 'wi-dest-schwarz', '*entwurf*');
+        ordner(w, doc, ['P/a.pdf', 'P/Entwurf_x.pdf', 'P/b.txt']);
+        await warte(30);
+        check('(Positivkontrolle) die Extraktion lief', JSON.stringify(gesendeteNamen(gesendet)) === '["P/a.pdf"]');
+        const st = doc.getElementById('wi-dest-exstatus').textContent || '';
+        check('⚠ die Statuszeile nennt die ausgelassenen Dateien (2)',
+              st.indexOf(tr(w, 'wissen.dest_filtered_n', { n: 2 })) >= 0, st);
+        check('nur-Filter ist kein Fehler (Status grün)',
+              !!doc.querySelector('#wi-dest-exstatus .wi-ok'), doc.getElementById('wi-dest-exstatus').innerHTML);
+        check('das Protokoll ist verfügbar', !doc.getElementById('wi-dest-logbtn').hidden);
+        doc.getElementById('wi-dest-logbtn').click();
+        const zeilen = Array.prototype.map.call(doc.querySelectorAll('#wi-dest-log .wi-dest-logzeile'),
+            function (z) { return { k: z.className, t: z.textContent }; });
+        check('⚠ das Protokoll nennt JEDE Datei – auch die ausgelassenen', zeilen.length === 3, JSON.stringify(zeilen));
+        const e = zeilen.filter(function (z) { return z.t.indexOf('P/Entwurf_x.pdf') >= 0; })[0];
+        check('… mit Grund (welches Muster)', !!e && /gefiltert/.test(e.k)
+              && e.t.indexOf(tr(w, 'wissen.dest_filter_black', { m: '*entwurf*' })) >= 0, JSON.stringify(e));
+        const b = zeilen.filter(function (z) { return z.t.indexOf('P/b.txt') >= 0; })[0];
+        check('… und für die Whitelist', !!b && b.t.indexOf(tr(w, 'wissen.dest_filter_notwhite')) >= 0, JSON.stringify(b));
+        const liste = doc.getElementById('wi-dest-filelist').textContent || '';
+        check('ausgelassene Dateien stehen NICHT in der Dateiliste (sie wurden nicht übertragen)',
+              liste.indexOf('P/b.txt') < 0 && liste.indexOf('P/a.pdf') >= 0, liste);
+    }
+    {
+        const { w, doc, gesendet } = seite(GRUPPEN, { '/api/wissen/destillat/extract': EXTRAKT });
+        feld(doc, 'wi-dest-schwarz', '*');
+        ablegen(w, doc, ['a.pdf', 'b.docx']);
+        await warte(30);
+        check('⚠ alles ausgelassen: KEINE Übertragung', gesendeteNamen(gesendet) === null);
+        const st = doc.getElementById('wi-dest-exstatus').textContent || '';
+        check('… und das wird gesagt (kein stummes Nichts)',
+              st.indexOf(tr(w, 'wissen.dest_filtered_all', { n: 2 })) >= 0, st);
+        check('… samt Protokoll', !doc.getElementById('wi-dest-logbtn').hidden
+              && doc.querySelectorAll('#wi-dest-log .wi-dest-logzeile').length === 2);
+        check('… und die Ablage ist nicht gesperrt', !doc.getElementById('wi-dest-drop').classList.contains('disabled'));
+    }
+    {
+        // Leerer Filter: alles wie bisher.
+        const { w, doc, gesendet } = seite(GRUPPEN, { '/api/wissen/destillat/extract': EXTRAKT });
+        ablegen(w, doc, ['a.pdf', 'b.txt']);
+        await warte(30);
+        check('⚠ ohne Muster geht jede Datei durch', JSON.stringify(gesendeteNamen(gesendet)) === '["a.pdf","b.txt"]',
+              JSON.stringify(gesendeteNamen(gesendet)));
+        check('ohne Muster keine Zahl im Titel', doc.getElementById('wi-dest-filterzahl').textContent === '');
+    }
+    {
+        // Speichern beim Verlassen des Feldes – mit den GEPRUEFTEN Zeilen.
+        let put = null;
+        const { w, doc } = seite(GRUPPEN, { '/api/wissen/destillat/filter': function (url, opt) {
+            if (opt && opt.method === 'PUT') { put = JSON.parse(opt.body); return { ok: true, weiss: put.weiss, schwarz: put.schwarz }; }
+            return { ok: true, weiss: ['*.alt'], schwarz: [] };
+        } });
+        // ⚠ Getippt wird, BEVOR der Ladeabruf zurueck ist: die Eingabe gewinnt.
+        const ta = feld(doc, 'wi-dest-weiss', ' *.pdf \n\n*.docx');
+        await warte(20);
+        check('⚠ eine schon begonnene Eingabe wird vom Laden NICHT überschrieben',
+              ta.value === ' *.pdf \n\n*.docx', JSON.stringify(ta.value));
+        check('die Zahl folgt der Eingabe', doc.getElementById('wi-dest-filterzahl').textContent
+              === tr(w, 'wissen.dest_filter_active', { n: 2 }));
+        check('(Positivkontrolle) ohne change noch kein Speichern', put === null);
+        ta.dispatchEvent(new w.Event('change'));
+        await warte(20);
+        check('⚠ change speichert – Zeilen getrimmt, Leerzeilen weg',
+              !!put && JSON.stringify(put) === '{"weiss":["*.pdf","*.docx"],"schwarz":[]}', JSON.stringify(put));
+        check('… und bestätigt es', (doc.getElementById('wi-dest-filterstatus').textContent || '')
+              .indexOf(w.t('wissen.dest_filter_saved')) >= 0);
+    }
+    {
+        const { w, doc } = seite(GRUPPEN, { '/api/wissen/destillat/filter': function (url, opt) {
+            if (opt && opt.method === 'PUT') return { __status: 400, ok: false, error: 'Höchstens 100 Muster je Liste.' };
+            return { ok: true, weiss: [], schwarz: [] };
+        } });
+        const ta = feld(doc, 'wi-dest-schwarz', '*.tmp');
+        ta.dispatchEvent(new w.Event('change'));
+        await warte(3000);
+        const st = doc.getElementById('wi-dest-filterstatus');
+        check('⚠ ein Speicherfehler steht da – mit dem Servertext – und verschwindet NICHT von selbst',
+              st.textContent.indexOf('Höchstens 100 Muster') >= 0 && !!st.querySelector('.wi-err'), st.textContent);
+        check('⚠ der Filter WIRKT trotzdem (es gilt, was im Feld steht)',
+              w.WissenDestillat._filterGrund('x.tmp') !== '');
+    }
+    {
+        const { w, doc } = seite(GRUPPEN, {});
+        w.setLang ? w.setLang('en') : (w.applyLang && w.applyLang('en'));
+        await warte(20);
+        check('Sprachwechsel erreicht den Filterkasten',
+              /Filter files/.test(doc.querySelector('#wi-dest-filterbox summary').textContent)
+              && /Whitelist – process only/.test(doc.querySelector('label[for="wi-dest-weiss"]').textContent));
+        const neu = ['dest_filter', 'dest_filter_active', 'dest_filter_hint', 'dest_white', 'dest_white_ph',
+                     'dest_black', 'dest_black_ph', 'dest_filter_saved', 'dest_filter_save_err',
+                     'dest_filter_black', 'dest_filter_notwhite', 'dest_filtered_n', 'dest_filtered_all'];
+        const fehlt = neu.filter(function (k) { return I18N.split("'wissen." + k + "':").length - 1 !== 2; });
+        check('jeder neue Filter-Text steht in DE und EN', fehlt.length === 0, fehlt.join(', '));
+        const mm = HTML.match(/data-i18n="wissen\.dest_filter_hint">([^<]*)</);
+        const mt = I18N.match(/'wissen\.dest_filter_hint':\s*'([^']*)'/);
+        check('Rückfall-Markup des Hinweises = DE', !!mm && !!mt && mm[1] === mt[1]);
     }
 }
 

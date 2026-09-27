@@ -79,6 +79,8 @@ async function seite(opt) {
         const aw = (body.auswahl || []).map(a => Object.assign({}, a, { name: namen[a.key] || a.key }));
         return { id: id, typ: 'auswahl', name: aw.map(a => a.name).join(' · '), auswahl: aw,
                  gruppen: body.groups || [],
+                 /* wie der Server (`_tags_pruefen`): klein, ohne fuehrendes # */
+                 tags: (body.tags || []).map(x => String(x).replace(/^#+/, '').toLowerCase()).filter(Boolean),
                  gruppen_info: (body.groups || []).map(gid => {
                      const g = o.groups.filter(x => x.id === gid)[0];
                      return { id: gid, name: g ? g.name : gid, color: g ? g.color : '' };
@@ -543,6 +545,95 @@ section('10. Suche, Liste, Loeschen, Altbestand');
     await warten(40);
     const h = s.doc.querySelector('#wi-sec-cfbind h2');
     check('Sprachwechsel erreicht die Ueberschrift', /Dynamic Confluence binding/.test(h.textContent));
+    s.zu();
+}
+
+// ════════════════════════════════════════════════════════════════════════
+section('11. Tags (Vorgabe 2026-09-27)');
+{
+    const s = await seite();
+    const inp = s.doc.getElementById('wi-cfb-tags');
+    const baum = s.doc.getElementById('wi-cfb-tree');
+    check('(Positivkontrolle) Tag-Feld und Baum sind da', !!inp && !!baum);
+    check('das Tag-Feld liegt IN der Einbindung',
+          !!inp && !!inp.closest('#wi-sec-cfbind'));
+    check('⚠ und VOR dem Baum (alles, was „Übernehmen" mitnimmt, steht davor)',
+          !!inp && !!baum && !!(inp.compareDocumentPosition(baum) & s.win.Node.DOCUMENT_POSITION_FOLLOWING));
+    const lab = s.doc.querySelector('label[for="wi-cfb-tags"]');
+    check('das Feld hat eine Beschriftung mit i18n',
+          !!lab && lab.getAttribute('data-i18n') === 'wissen.cfb_tags_label');
+    check('der Platzhalter hat i18n', inp && inp.getAttribute('data-i18n-placeholder') === 'wissen.cfb_tags_ph');
+
+    /* ⚠ KEIN \n: ein <input type=text> entfernt Zeilenumbrueche aus `value`
+       (Wertbereinigung laut HTML-Standard) - "#intern\nneu" wird "#internneu".
+       Ein Tab ist Leerraum und bleibt stehen. */
+    inp.value = 'Handbuch, freigegeben;  #intern\tneu';
+    await s.klick(s.tog(s.sp('OPS')));
+    await s.klick(s.doc.getElementById('wi-cfb-add'));
+    const b = (s.posts()[0] || {}).body || {};
+    check('⚠ die Tags gehen mit dem Rumpf raus – zerlegt an Komma, Semikolon und Leerraum',
+          JSON.stringify(b.tags) === JSON.stringify(['Handbuch', 'freigegeben', '#intern', 'neu']),
+          JSON.stringify(b.tags));
+    check('Auswahl und Gruppen gehen weiterhin mit',
+          (b.auswahl || []).length === 1 && JSON.stringify(b.groups) === '["g1"]', JSON.stringify(b));
+    check('⚠ nach dem Übernehmen ist das Tag-Feld leer (der nächste Eintrag erbt nichts)',
+          inp.value === '', inp.value);
+    const z = s.doc.querySelectorAll('#wi-cfb-list .wi-item');
+    const sum = z[0] && z[0].querySelector('.wi-cfb-tagsum');
+    check('⚠ die Liste nennt die Tags des Eintrags',
+          !!sum && /handbuch, freigegeben, intern, neu/.test(sum.textContent), sum ? sum.textContent : '');
+
+    await s.klick(s.tog(s.sp('NEXUS')));
+    await s.klick(s.doc.getElementById('wi-cfb-add'));
+    const b2 = (s.posts()[1] || {}).body || {};
+    check('⚠ leeres Tag-Feld = leere Liste (kein Filter)',
+          Array.isArray(b2.tags) && b2.tags.length === 0, JSON.stringify(b2.tags));
+    const z2 = s.doc.querySelectorAll('#wi-cfb-list .wi-item');
+    check('ein Eintrag ohne Tags zeigt keine Tag-Zeile',
+          z2.length === 2 && !z2[1].querySelector('.wi-cfb-tagsum'));
+    s.zu();
+}
+{
+    const s = await seite({ bindung: { ok: true, aktiv: true, bereiche: [
+        { id: 'e1', typ: 'auswahl', name: 'X', gruppen: ['g1'], gruppen_info: [{ id: 'g1', name: 'Technik' }],
+          tags: ['handbuch', 'freigegeben'],
+          auswahl: [{ key: 'OPS', start: true, ganz: false, seiten: [], zweige: [] }] }] } });
+    const inp = s.doc.getElementById('wi-cfb-tags');
+    check('(Positivkontrolle) Feld leer vor dem Bearbeiten', inp.value === '');
+    await s.klick(s.doc.querySelector('#wi-cfb-list .wi-cfb-edit'));
+    await warten(60);
+    check('⚠ Bearbeiten füllt die gespeicherten Tags ein', inp.value === 'handbuch, freigegeben', inp.value);
+    await s.klick(s.doc.getElementById('wi-cfb-cancel'));
+    check('⚠ Abbrechen leert das Tag-Feld wieder', inp.value === '', inp.value);
+    await s.klick(s.doc.querySelector('#wi-cfb-list .wi-cfb-edit'));
+    await warten(60);
+    inp.value = 'handbuch';
+    await s.klick(s.doc.getElementById('wi-cfb-add'));
+    const put = s.rufe.filter(r => r.m === 'PUT');
+    check('⚠ geänderte Tags gehen per PUT auf den Eintrag',
+          put.length === 1 && put[0].pfad === '/api/wissen/confluence/bindung/e1'
+          && JSON.stringify(put[0].body.tags) === '["handbuch"]', JSON.stringify(put.map(x => x.body)));
+    await s.klick(s.doc.querySelector('#wi-cfb-list .wi-cfb-edit'));
+    await warten(60);
+    inp.value = '';
+    await s.klick(s.doc.getElementById('wi-cfb-add'));
+    const put2 = s.rufe.filter(r => r.m === 'PUT');
+    check('⚠ alle Tags entfernt: PUT schickt die leere Liste (Filter aufgehoben)',
+          put2.length === 2 && JSON.stringify(put2[1].body.tags) === '[]', JSON.stringify(put2.map(x => x.body.tags)));
+    const z = s.doc.querySelectorAll('#wi-cfb-list .wi-item');
+    check('und die Liste zeigt danach keine Tag-Zeile mehr', z.length === 1 && !z[0].querySelector('.wi-cfb-tagsum'));
+    s.zu();
+}
+{
+    const s = await seite({ bindung: { ok: true, aktiv: true, bereiche: [
+        { id: 'e1', typ: 'auswahl', name: 'X', gruppen: ['g1'], gruppen_info: [{ id: 'g1', name: 'Technik' }],
+          tags: ['<img src=x>'], auswahl: [{ key: 'OPS', start: true }] }] } });
+    check('⚠ Tags werden in der Liste maskiert', s.doc.querySelectorAll('#wi-cfb-list img').length === 0);
+    s.win.setLang ? s.win.setLang('en') : (s.win.applyLang && s.win.applyLang('en'));
+    await warten(40);
+    check('Sprachwechsel erreicht die Tag-Beschriftung und den Hinweis',
+          /Tags \(optional\)/.test(s.doc.querySelector('label[for="wi-cfb-tags"]').textContent)
+          && /Only pages carrying/.test(s.doc.querySelector('[data-i18n="wissen.cfb_tags_hint"]').textContent));
     s.zu();
 }
 
