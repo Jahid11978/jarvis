@@ -885,80 +885,44 @@
         return v.toLocaleString(sprache(), { maximumFractionDigits: i && v < 10 ? 1 : 0 }) + ' ' + stufen[i];
     }
 
-    // ── Maximieren von "Mein Wissen" (Knopf ⛶ in der Kopfzeile) ─────────
-    // Bauform 1:1 aus /feedback -> "Formular ausfuellen" (`maxSetzen`,
-    // `maxUmschalten`, `maxInit` in feedback.js) – dasselbe Bedienelement soll
-    // sich ueberall gleich verhalten. Vorgabe 2026-09-27: der Knopf gehoert
-    // in den Abschnitt, NICHT in die Titelleiste der Seite.
+    // ── Maximieren der Seite (Knopf ⛶ hinter "Angemeldet als ...") ──────
+    // Vorgabe 2026-09-27 (zweite Fassung): der Knopf sitzt ganz oben in der
+    // Seite, maximiert nutzen ALLE Abschnitte die volle Fensterbreite (die
+    // 900-px-Deckelung von `.wi-wrap` faellt weg). Kein Vollbild eines
+    // einzelnen Abschnitts mehr.
     //
-    // ⚠ DER ZUSTAND WIRD BEWUSST NICHT GEMERKT (wie /feedback): ein Vollbild,
-    // das beim naechsten Oeffnen noch an ist, sieht wie ein Fehler aus – man
-    // sucht die uebrigen Abschnitte.
+    // ⚠ DER ZUSTAND WIRD BEWUSST NICHT GEMERKT (wie /feedback): eine Seite,
+    // die beim naechsten Oeffnen noch breit ist, sieht wie ein Fehler aus.
 
-    /** Hoehe der Titelleiste MESSEN statt raten: sie bricht auf schmalen
-     *  Fenstern um und waechst dann. */
-    function topAbstandSetzen() {
-        var bar = document.querySelector('.wi-topbar');
-        var h = bar ? Math.round(bar.getBoundingClientRect().height) : 0;
-        if (h > 0) document.documentElement.style.setProperty('--wi-top', h + 'px');
-    }
-
-    function maxSetzen(sec, an) {
-        sec.classList.toggle('is-max', !!an);
-        document.body.classList.toggle('wi-maxed', !!an);
-        var b = sec.querySelector('.wi-sec-max');
-        if (b) {
-            // DIESELBEN ZEICHEN wie /feedback, /tracks und der Einstellungs-
-            // Dialog: ⛶ maximieren, 🗗 verkleinern (ausdrueckliche Ausnahme
-            // von der Emoji-Regel, Vorgabe 2026-08-18).
-            b.innerHTML = an ? '&#128471;' : '&#9974;';
-            b.classList.toggle('active', !!an);
-            b.setAttribute('aria-pressed', an ? 'true' : 'false');
-            var k = an ? 'wissen.minimize' : 'wissen.maximize';
-            // Die data-i18n-*-Attribute wandern mit, sonst holt der naechste
-            // Sprachwechsel den Text des ANDEREN Zustands zurueck.
-            b.setAttribute('data-i18n-title', k);
-            b.setAttribute('data-i18n-aria', k);
-            b.title = t(k);
-            b.setAttribute('aria-label', t(k));
-        }
-        if (an) topAbstandSetzen();
-    }
-
-    function maxUmschalten(sec) {
-        var an = !sec.classList.contains('is-max');
-        // Ein zugeklappter Abschnitt maximiert ergaebe eine leere Flaeche –
-        // aufklappen ueber den vorhandenen Weg (Zustand und Pfeil gehen mit).
-        if (an && sec.classList.contains('collapsed')) {
-            var h = sec.querySelector('h2');
-            if (h) h.click();
-        }
-        maxSetzen(sec, an);
+    function maxSetzen(an) {
+        document.body.classList.toggle('wi-breit', !!an);
+        var b = $('wi-max');
+        if (!b) return;
+        // DIESELBEN ZEICHEN wie /feedback, /tracks und der Einstellungs-
+        // Dialog: ⛶ maximieren, 🗗 verkleinern (ausdrueckliche Ausnahme
+        // von der Emoji-Regel, Vorgabe 2026-08-18).
+        b.innerHTML = an ? '&#128471;' : '&#9974;';
+        b.classList.toggle('active', !!an);
+        b.setAttribute('aria-pressed', an ? 'true' : 'false');
+        var k = an ? 'wissen.minimize' : 'wissen.maximize';
+        // Die data-i18n-*-Attribute wandern mit, sonst holt der naechste
+        // Sprachwechsel den Text des ANDEREN Zustands zurueck.
+        b.setAttribute('data-i18n-title', k);
+        b.setAttribute('data-i18n-aria', k);
+        b.title = t(k);
+        b.setAttribute('aria-label', t(k));
     }
 
     function maxInit() {
-        var b = $('wi-files-max');
+        var b = $('wi-max');
         if (!b || b._gebunden) return;
         b._gebunden = true;
-        var sec = b.closest('.wi-section');
         b.addEventListener('click', function (ev) {
-            // `preventDefault` UND `stopPropagation`: der Knopf sitzt in der
-            // Klapp-Kopfzeile – ohne das klappte jeder Klick den Abschnitt zu.
             ev.preventDefault();
-            ev.stopPropagation();
-            maxUmschalten(sec);
+            maxSetzen(!document.body.classList.contains('wi-breit'));
         });
-        // Escape verkleinert – der uebliche Weg heraus aus einem Vollbild. Hat
-        // ein anderer Handler die Taste schon verbraucht (z. B. das Leeren des
-        // Suchfelds), bleibt das Vollbild stehen.
-        document.addEventListener('keydown', function (ev) {
-            if (ev.key !== 'Escape' || ev.defaultPrevented) return;
-            var offen = document.querySelector('.wi-section.is-max');
-            if (offen) { ev.preventDefault(); maxSetzen(offen, false); }
-        });
-        window.addEventListener('resize', function () {
-            if (document.querySelector('.wi-section.is-max')) topAbstandSetzen();
-        });
+        // KEIN Escape-Kuerzel mehr: die Seite ist kein Overlay, und Escape
+        // schliesst hier Dialoge – das verkleinerte sonst nebenbei die Seite.
     }
 
     function loadFiles() {

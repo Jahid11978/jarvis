@@ -19,9 +19,9 @@
  *      0 Byte ist "0 B" und kein Strich
  *   5. die Sortierung ueberlebt das Tippen in der Suche
  *   6. eine Tabellenzeile ist eine Tabellenzeile (nicht `.wi-item` = flex)
- *   7. Maximieren sitzt IM Abschnitt "Mein Wissen" (nicht in der
- *      Titelleiste, Vorgabe 2026-09-27), ueberdeckt den Bereich unter der
- *      Titelleiste, klappt nicht zu, Escape verkleinert, nicht gemerkt
+ *   7. Maximieren sitzt hinter "Angemeldet als" ganz oben (weder in der
+ *      Titelleiste noch in "Mein Wissen", Vorgabe 2026-09-27), hebt die
+ *      900-px-Deckelung fuer ALLE Abschnitte auf, nicht gemerkt
  *   8. alle neuen Texte in DE und EN
  */
 'use strict';
@@ -264,57 +264,52 @@ function i18nZahl(key) {
     check('Loeschen fragt nach – mit Ordner und Namen',
           s.bestaetigt.length === 1 && /\//.test(s.bestaetigt[0]), JSON.stringify(s.bestaetigt));
 
-    abschnitt('7 – Maximieren: IM Abschnitt, nicht in der Titelleiste');
-    // Vorgabe 2026-09-27: "darf nicht in die Titelleiste der Seite – er muss
-    // in /wissen selbst wie bei /feedback -> Formular ausfuellen".
+    abschnitt('7 – Maximieren: hinter "Angemeldet als", ganze Seite breit');
+    // Vorgabe 2026-09-27 (zweite Fassung): Knopf hinter "Angemeldet als ..."
+    // ganz oben auf der Seite; maximiert passen sich ALLE Abschnitte an die
+    // Fensterbreite an.
     check('KEIN Maximieren-Knopf in der Titelleiste',
-          !doc.querySelector('.wi-topbar [data-i18n-title="wissen.maximize"], .wi-topbar .wi-sec-max, #wi-max'));
-    const sec = doc.getElementById('wi-sec-files');
-    const b = doc.getElementById('wi-files-max');
-    check('Knopf steht in der Kopfzeile von "Mein Wissen"',
-          !!b && !!sec && b.closest('h2') === sec.querySelector('h2'));
-    if (!b || !sec) { check('Maximieren: abhaengige Pruefungen NICHT PRUEFBAR (Knopf fehlt)', false); }
+          !doc.querySelector('.wi-topbar [data-i18n-title="wissen.maximize"], .wi-topbar .wi-max-btn'));
+    check('KEIN Maximieren-Knopf mehr in "Mein Wissen"',
+          !doc.querySelector('#wi-sec-files .wi-max-btn, #wi-files-max'));
+    const b = doc.getElementById('wi-max');
+    const banner = doc.getElementById('wi-scope-banner');
+    const wrap = doc.getElementById('wi-app');
+    check('Knopf steht direkt hinter dem Banner "Angemeldet als"',
+          !!b && !!banner && banner.nextElementSibling === b);
+    check('… und ist KEIN Kind des Banners (renderScope schreibt es per innerHTML neu)',
+          !!b && !!banner && !banner.contains(b));
+    check('Positivkontrolle: Banner zeigt "Angemeldet als"',
+          !!banner && /Angemeldet als/.test(banner.textContent), banner && banner.textContent);
+    check('… Zeile mit Banner und Knopf ist das erste Element der Seite',
+          !!b && !!wrap && wrap.firstElementChild === b.parentElement);
+    if (!b || !wrap) { check('Maximieren: abhaengige Pruefungen NICHT PRUEFBAR (Knopf fehlt)', false); }
     else {
+        const mw = function () { return s.win.getComputedStyle(wrap).maxWidth; };
         check('vorher: aria-pressed=false, Beschriftung "Maximieren"',
               b.getAttribute('aria-pressed') === 'false' && b.getAttribute('aria-label') === 'Maximieren');
-        check('Positivkontrolle: vorher nicht fixiert',
-              s.win.getComputedStyle(sec).position !== 'fixed', s.win.getComputedStyle(sec).position);
+        check('Positivkontrolle: vorher ist die Seite auf 900px gedeckelt', mw() === '900px', mw());
         const zeichenVor = b.textContent;
         b.click();
-        check('nach Klick: Abschnitt ueberdeckt den Bereich unter der Titelleiste (fixed)',
-              sec.classList.contains('is-max') && s.win.getComputedStyle(sec).position === 'fixed',
-              s.win.getComputedStyle(sec).position);
-        check('… unter der Titelleiste (z-index kleiner als ihrer)',
-              parseInt(s.win.getComputedStyle(sec).zIndex, 10)
-              < parseInt(s.win.getComputedStyle(doc.querySelector('.wi-topbar')).zIndex, 10),
-              s.win.getComputedStyle(sec).zIndex);
-        check('… Klick hat den Abschnitt NICHT zugeklappt (Knopf in der Klapp-Kopfzeile)',
-              !sec.classList.contains('collapsed'));
+        check('nach Klick: Deckelung weg (alle Abschnitte in Fensterbreite)', mw() === 'none', mw());
+        check('… kein einzelner Abschnitt ist fixiert',
+              ![].some.call(doc.querySelectorAll('.wi-section'),
+                  function (x) { return s.win.getComputedStyle(x).position === 'fixed'; }));
         check('… aria-pressed=true, Beschriftung "Verkleinern", Zeichen 🗗',
               b.getAttribute('aria-pressed') === 'true' && b.getAttribute('aria-label') === 'Verkleinern'
               && b.textContent === '\u{1F5D7}' && b.textContent !== zeichenVor, JSON.stringify(b.textContent));
         check('… die i18n-Attribute wandern mit',
               b.getAttribute('data-i18n-title') === 'wissen.minimize');
-        check('… die Seite dahinter scrollt nicht mit', doc.body.classList.contains('wi-maxed'));
         check('… die Tabelle bleibt bedienbar (Sortierkopf-Klick sortiert weiter)',
               klick(doc, 'name') && kopf(doc, 'name').getAttribute('aria-sort') !== 'none');
-        const esc = new s.win.KeyboardEvent('keydown', { key: 'Escape', bubbles: true, cancelable: true });
-        doc.dispatchEvent(esc);
-        check('Escape verkleinert', !sec.classList.contains('is-max') && !doc.body.classList.contains('wi-maxed'));
-        check('… Beschriftung zurueck auf "Maximieren"', b.getAttribute('aria-label') === 'Maximieren');
-        b.click(); b.click();
-        check('zweiter Klick verkleinert ebenfalls', !sec.classList.contains('is-max'));
-        // Zugeklappt maximiert ergaebe eine leere Flaeche.
-        sec.querySelector('h2').click();
-        check('Positivkontrolle: Abschnitt jetzt zugeklappt', sec.classList.contains('collapsed'));
         b.click();
-        check('maximieren klappt einen zugeklappten Abschnitt auf',
-              sec.classList.contains('is-max') && !sec.classList.contains('collapsed'));
+        check('zweiter Klick verkleinert wieder', mw() === '900px'
+              && b.getAttribute('aria-label') === 'Maximieren', mw());
         b.click();
         // Der Zustand wird wie in /feedback NICHT gemerkt.
         const s2 = await seite(bestand());
         check('neue Seite startet NICHT maximiert (Zustand nicht gemerkt)',
-              !s2.doc.getElementById('wi-sec-files').classList.contains('is-max'));
+              !s2.doc.body.classList.contains('wi-breit'));
         try { s2.win.close(); } catch (e) {}
     }
 
