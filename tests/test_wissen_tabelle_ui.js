@@ -19,8 +19,9 @@
  *      0 Byte ist "0 B" und kein Strich
  *   5. die Sortierung ueberlebt das Tippen in der Suche
  *   6. eine Tabellenzeile ist eine Tabellenzeile (nicht `.wi-item` = flex)
- *   7. Maximieren: Seite verliert die 900-px-Deckelung, Beschriftung und
- *      Zeichen wechseln mit dem Zustand, der Zustand wird gemerkt
+ *   7. Maximieren sitzt IM Abschnitt "Mein Wissen" (nicht in der
+ *      Titelleiste, Vorgabe 2026-09-27), ueberdeckt den Bereich unter der
+ *      Titelleiste, klappt nicht zu, Escape verkleinert, nicht gemerkt
  *   8. alle neuen Texte in DE und EN
  */
 'use strict';
@@ -131,7 +132,10 @@ async function seite(dateien, vorher) {
     win.eval(JS_ICONS);
     win.eval(JS_I18N);
     win.eval(JS_WISSEN);
-    win.document.dispatchEvent(new win.Event('DOMContentLoaded', { bubbles: true }));
+    // ⚠ KEIN eigener DOMContentLoaded-Dispatch: jsdom feuert ihn selbst
+    // (readyState steht direkt nach `new JSDOM` auf 'loading', gemessen: 2
+    // Ereignisse mit Dispatch). Doppelt initialisiert haengt jeder Handler
+    // zweimal – ein Klick auf die Klapp-Kopfzeile hob sich dann selbst auf.
     for (let i = 0; i < 80; i++) {
         await new Promise(function (r) { setTimeout(r, 5); });
         if (win.document.querySelectorAll('#wi-files-list .wi-frow').length) break;
@@ -260,41 +264,58 @@ function i18nZahl(key) {
     check('Loeschen fragt nach – mit Ordner und Namen',
           s.bestaetigt.length === 1 && /\//.test(s.bestaetigt[0]), JSON.stringify(s.bestaetigt));
 
-    abschnitt('7 – Maximieren');
-    const b = doc.getElementById('wi-max');
-    check('Knopf steht in der Titelleiste', !!b && !!b.closest('.wi-top-icons'));
-    // Fehlt der Knopf, zaehlen die abhaengigen Pruefungen als FAIL – ein
-    // Abbruch ohne Bilanz waere von "nicht gelaufen" nicht zu unterscheiden.
-    if (!b) { check('Maximieren: abhaengige Pruefungen NICHT PRUEFBAR (Knopf fehlt)', false); }
+    abschnitt('7 – Maximieren: IM Abschnitt, nicht in der Titelleiste');
+    // Vorgabe 2026-09-27: "darf nicht in die Titelleiste der Seite – er muss
+    // in /wissen selbst wie bei /feedback -> Formular ausfuellen".
+    check('KEIN Maximieren-Knopf in der Titelleiste',
+          !doc.querySelector('.wi-topbar [data-i18n-title="wissen.maximize"], .wi-topbar .wi-sec-max, #wi-max'));
+    const sec = doc.getElementById('wi-sec-files');
+    const b = doc.getElementById('wi-files-max');
+    check('Knopf steht in der Kopfzeile von "Mein Wissen"',
+          !!b && !!sec && b.closest('h2') === sec.querySelector('h2'));
+    if (!b || !sec) { check('Maximieren: abhaengige Pruefungen NICHT PRUEFBAR (Knopf fehlt)', false); }
     else {
-    const wrap = doc.getElementById('wi-app');
-    check('Positivkontrolle: vorher gedeckelt (900px)', s.win.getComputedStyle(wrap).maxWidth === '900px',
-          s.win.getComputedStyle(wrap).maxWidth);
-    check('vorher: aria-pressed=false, Beschriftung "Maximieren"',
-          b.getAttribute('aria-pressed') === 'false' && b.getAttribute('aria-label') === 'Maximieren');
-    const zeichenVor = b.textContent;
-    b.click();
-    check('nachher: Deckelung aufgehoben', s.win.getComputedStyle(wrap).maxWidth === 'none',
-          s.win.getComputedStyle(wrap).maxWidth);
-    check('… aria-pressed=true, Beschriftung "Verkleinern"',
-          b.getAttribute('aria-pressed') === 'true' && b.getAttribute('aria-label') === 'Verkleinern'
-          && b.title === 'Verkleinern');
-    check('… das Zeichen wechselt (⛶ → 🗗)', b.textContent !== zeichenVor && b.textContent === '\u{1F5D7}',
-          JSON.stringify(b.textContent));
-    check('… die i18n-Attribute wandern mit (Sprachwechsel holt nicht den alten Text)',
-          b.getAttribute('data-i18n-title') === 'wissen.minimize'
-          && b.getAttribute('data-i18n-aria') === 'wissen.minimize');
-    check('… der Zustand ist gemerkt', s.win.localStorage.getItem('jarvis_wissen_breit') === '1');
-    b.click();
-    check('zweiter Klick: wieder 900px', s.win.getComputedStyle(wrap).maxWidth === '900px');
-    check('… und gemerkt als aus', s.win.localStorage.getItem('jarvis_wissen_breit') === '0');
-
-    const s2 = await seite(bestand(), { jarvis_wissen_breit: '1' });
-    const w2 = s2.doc.getElementById('wi-app');
-    check('neue Seite mit gemerktem Zustand startet breit',
-          s2.win.getComputedStyle(w2).maxWidth === 'none'
-          && s2.doc.getElementById('wi-max').getAttribute('aria-pressed') === 'true');
-    try { s2.win.close(); } catch (e) {}
+        check('vorher: aria-pressed=false, Beschriftung "Maximieren"',
+              b.getAttribute('aria-pressed') === 'false' && b.getAttribute('aria-label') === 'Maximieren');
+        check('Positivkontrolle: vorher nicht fixiert',
+              s.win.getComputedStyle(sec).position !== 'fixed', s.win.getComputedStyle(sec).position);
+        const zeichenVor = b.textContent;
+        b.click();
+        check('nach Klick: Abschnitt ueberdeckt den Bereich unter der Titelleiste (fixed)',
+              sec.classList.contains('is-max') && s.win.getComputedStyle(sec).position === 'fixed',
+              s.win.getComputedStyle(sec).position);
+        check('… unter der Titelleiste (z-index kleiner als ihrer)',
+              parseInt(s.win.getComputedStyle(sec).zIndex, 10)
+              < parseInt(s.win.getComputedStyle(doc.querySelector('.wi-topbar')).zIndex, 10),
+              s.win.getComputedStyle(sec).zIndex);
+        check('… Klick hat den Abschnitt NICHT zugeklappt (Knopf in der Klapp-Kopfzeile)',
+              !sec.classList.contains('collapsed'));
+        check('… aria-pressed=true, Beschriftung "Verkleinern", Zeichen 🗗',
+              b.getAttribute('aria-pressed') === 'true' && b.getAttribute('aria-label') === 'Verkleinern'
+              && b.textContent === '\u{1F5D7}' && b.textContent !== zeichenVor, JSON.stringify(b.textContent));
+        check('… die i18n-Attribute wandern mit',
+              b.getAttribute('data-i18n-title') === 'wissen.minimize');
+        check('… die Seite dahinter scrollt nicht mit', doc.body.classList.contains('wi-maxed'));
+        check('… die Tabelle bleibt bedienbar (Sortierkopf-Klick sortiert weiter)',
+              klick(doc, 'name') && kopf(doc, 'name').getAttribute('aria-sort') !== 'none');
+        const esc = new s.win.KeyboardEvent('keydown', { key: 'Escape', bubbles: true, cancelable: true });
+        doc.dispatchEvent(esc);
+        check('Escape verkleinert', !sec.classList.contains('is-max') && !doc.body.classList.contains('wi-maxed'));
+        check('… Beschriftung zurueck auf "Maximieren"', b.getAttribute('aria-label') === 'Maximieren');
+        b.click(); b.click();
+        check('zweiter Klick verkleinert ebenfalls', !sec.classList.contains('is-max'));
+        // Zugeklappt maximiert ergaebe eine leere Flaeche.
+        sec.querySelector('h2').click();
+        check('Positivkontrolle: Abschnitt jetzt zugeklappt', sec.classList.contains('collapsed'));
+        b.click();
+        check('maximieren klappt einen zugeklappten Abschnitt auf',
+              sec.classList.contains('is-max') && !sec.classList.contains('collapsed'));
+        b.click();
+        // Der Zustand wird wie in /feedback NICHT gemerkt.
+        const s2 = await seite(bestand());
+        check('neue Seite startet NICHT maximiert (Zustand nicht gemerkt)',
+              !s2.doc.getElementById('wi-sec-files').classList.contains('is-max'));
+        try { s2.win.close(); } catch (e) {}
     }
 
     abschnitt('8 – Texte in DE und EN');

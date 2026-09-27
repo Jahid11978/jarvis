@@ -12,9 +12,10 @@ Gemessen wird die EIGENSCHAFT:
     auch mit unteilbar langem Namen und bei 520 px Fensterbreite
   * die Groesse steht rechtsbuendig
   * Kontrast der Kopfzeile >= 4.5:1 in BEIDEN Themen
-  * der Knopf ⛶ ist per elementFromPoint erreichbar, ein ECHTER Mausklick
-    (Input.dispatchMouseEvent) macht die Seite breiter, ein zweiter wieder
-    schmal
+  * der Knopf ⛶ sitzt IM Abschnitt "Mein Wissen" (nicht in der Titelleiste),
+    ein ECHTER Mausklick legt den Abschnitt ueber den Bereich unter der
+    Titelleiste, die dabei bedienbar bleibt; die Kopfzeile bleibt beim
+    Scrollen stehen
   * ein ECHTER Klick auf einen Spaltenkopf sortiert
 
 Probeseite in einem WEGWERF-Ordner unter HOME (Register: nicht unter
@@ -225,12 +226,11 @@ def mitte(sock, sel):
         return {{x:r.left+r.width/2,y:r.top+r.height/2,w:r.width,h:r.height}};}})()""")
 
 
-def laden(sock, thema, breite=1280, breit_gemerkt=False):
+def laden(sock, thema, breite=1280):
     cdp(sock, "Emulation.setDeviceMetricsOverride", width=breite, height=1000,
         deviceScaleFactor=1, mobile=False)
     cdp(sock, "Page.addScriptToEvaluateOnNewDocument",
-        source=("try{localStorage.setItem('jarvis_theme',%r);localStorage.setItem('jarvis_wissen_breit',%r);}catch(e){}"
-                % (thema, "1" if breit_gemerkt else "0")))
+        source=("try{localStorage.setItem('jarvis_theme',%r);}catch(e){}" % thema))
     cdp(sock, "Page.navigate", url=f"{BASIS}/probe.html")
     for _ in range(80):
         time.sleep(0.15)
@@ -320,28 +320,55 @@ try:
             check("… unbekannte Groesse steht am Ende", letzte == "offline.pdf", letzte)
             bilder.append(schuss(sock, f"{thema}-normal"))
 
-            # ── Maximieren mit echtem Klick ────────────────────────────────
-            js(sock, "window.scrollTo(0,0)")
+            # ── Maximieren mit echtem Klick (Knopf IM Abschnitt) ───────────
+            check("KEIN Maximieren-Knopf in der Titelleiste",
+                  js(sock, "!document.querySelector('.wi-topbar .wi-sec-max, #wi-max')") is True)
+            js(sock, "document.getElementById('wi-sec-files').scrollIntoView(true)")
             time.sleep(0.2)
-            vor = js(sock, "Math.round(document.getElementById('wi-app').getBoundingClientRect().width)")
-            m = mitte(sock, "#wi-max")
-            check("Knopf hat eine Groesse", bool(m) and m["w"] > 15 and m["h"] > 15, str(m))
+            m = mitte(sock, "#wi-files-max")
+            check("Knopf in der Kopfzeile hat eine Groesse", bool(m) and m["w"] > 15 and m["h"] > 15, str(m))
+            if not m:
+                continue
             treffer = js(sock, f"(function(){{var e=document.elementFromPoint({m['x']},{m['y']});"
-                               "return !!(e&&e.closest('#wi-max'));})()")
+                               "return !!(e&&e.closest('#wi-files-max'));})()")
             check("Knopf ist per elementFromPoint erreichbar (nichts liegt darueber)", treffer)
             mausklick(sock, m["x"], m["y"])
-            nach = js(sock, "Math.round(document.getElementById('wi-app').getBoundingClientRect().width)")
-            check(f"echter Klick macht die Seite breiter ({vor} -> {nach} px)", vor <= 900 and nach > 1100,
-                  f"{vor} -> {nach}")
+            time.sleep(0.2)
+            g = js(sock, """(function(){var s=document.getElementById('wi-sec-files').getBoundingClientRect();
+                var t=document.querySelector('.wi-topbar').getBoundingClientRect();
+                return {st:Math.round(s.top),sl:Math.round(s.left),sw:Math.round(s.width),sb:Math.round(s.bottom),
+                        tb:Math.round(t.bottom),vw:document.documentElement.clientWidth,vh:innerHeight,
+                        zu:document.getElementById('wi-sec-files').classList.contains('collapsed')};})()""")
+            check("maximiert: Abschnitt beginnt direkt unter der Titelleiste",
+                  abs(g["st"] - g["tb"]) <= 2, str(g))
+            check("… volle Breite und bis zum unteren Rand",
+                  g["sl"] == 0 and g["sw"] >= g["vw"] - 1 and g["sb"] >= g["vh"] - 1, str(g))
+            check("… und ist NICHT zugeklappt (Knopf sitzt in der Klapp-Kopfzeile)", g["zu"] is False, str(g))
+            # Die Titelleiste bleibt bedienbar: der Theme-Knopf ist nicht verdeckt.
+            tm = mitte(sock, "#btn-theme-toggle")
+            frei = js(sock, f"(function(){{var e=document.elementFromPoint({tm['x']},{tm['y']});"
+                            "return !!(e&&e.closest('#btn-theme-toggle'));})()")
+            check("… die Titelleiste bleibt bedienbar (Theme-Knopf nicht verdeckt)", frei)
             ueber = js(sock, "document.documentElement.scrollWidth-document.documentElement.clientWidth")
             check("maximiert: kein waagerechter Ueberlauf", ueber <= 1, f"{ueber}px")
-            bilder.append(schuss(sock, f"{thema}-maximiert"))
-            js(sock, "window.scrollTo(0,0)")
+            # Beim Scrollen im Vollbild bleibt die Kopfzeile mit dem Knopf stehen.
+            js(sock, "document.getElementById('wi-sec-files').scrollTop=400")
             time.sleep(0.2)
-            m = mitte(sock, "#wi-max")
+            m2 = mitte(sock, "#wi-files-max")
+            steht = js(sock, f"(function(){{var e=document.elementFromPoint({m2['x']},{m2['y']});"
+                             "return !!(e&&e.closest('#wi-files-max'));})()")
+            check("… nach dem Scrollen ist der Verkleinern-Knopf weiter erreichbar",
+                  steht and m2["y"] > g["tb"], str(m2))
+            js(sock, "document.getElementById('wi-sec-files').scrollTop=0")
+            time.sleep(0.2)
+            r = cdp(sock, "Page.captureScreenshot", format="png")
+            p = BILDER / f"{thema}-maximiert.png"
+            p.write_bytes(base64.b64decode(r["data"]))
+            bilder.append(p)
+            m = mitte(sock, "#wi-files-max")
             mausklick(sock, m["x"], m["y"])
-            zurueck = js(sock, "Math.round(document.getElementById('wi-app').getBoundingClientRect().width)")
-            check("zweiter Klick: wieder schmal", zurueck == vor, f"{zurueck} statt {vor}")
+            zurueck = js(sock, "getComputedStyle(document.getElementById('wi-sec-files')).position")
+            check("zweiter Klick: wieder im Seitenfluss", zurueck != "fixed", zurueck)
 
             # ── schmales Fenster ───────────────────────────────────────────
             laden(sock, thema, breite=520)

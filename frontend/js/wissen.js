@@ -885,17 +885,32 @@
         return v.toLocaleString(sprache(), { maximumFractionDigits: i && v < 10 ? 1 : 0 }) + ' ' + stufen[i];
     }
 
-    // ── Seitenbreite (Knopf ⛶ in der Titelleiste) ─────────────────────
-    // Anders als das Vollbild in /feedback WIRD dieser Zustand gemerkt: dort
-    // ueberdeckt die Karte alles andere, hier wird nur die Seite breiter – wer
-    // mit breiten Tabellen arbeitet, will das nicht bei jedem Besuch neu
-    // einschalten.
-    var BREIT_SPEICHER = 'jarvis_wissen_breit';
+    // ── Maximieren von "Mein Wissen" (Knopf ⛶ in der Kopfzeile) ─────────
+    // Bauform 1:1 aus /feedback -> "Formular ausfuellen" (`maxSetzen`,
+    // `maxUmschalten`, `maxInit` in feedback.js) – dasselbe Bedienelement soll
+    // sich ueberall gleich verhalten. Vorgabe 2026-09-27: der Knopf gehoert
+    // in den Abschnitt, NICHT in die Titelleiste der Seite.
+    //
+    // ⚠ DER ZUSTAND WIRD BEWUSST NICHT GEMERKT (wie /feedback): ein Vollbild,
+    // das beim naechsten Oeffnen noch an ist, sieht wie ein Fehler aus – man
+    // sucht die uebrigen Abschnitte.
 
-    function breitSetzen(an) {
-        document.body.classList.toggle('wi-breit', !!an);
-        var b = $('wi-max');
+    /** Hoehe der Titelleiste MESSEN statt raten: sie bricht auf schmalen
+     *  Fenstern um und waechst dann. */
+    function topAbstandSetzen() {
+        var bar = document.querySelector('.wi-topbar');
+        var h = bar ? Math.round(bar.getBoundingClientRect().height) : 0;
+        if (h > 0) document.documentElement.style.setProperty('--wi-top', h + 'px');
+    }
+
+    function maxSetzen(sec, an) {
+        sec.classList.toggle('is-max', !!an);
+        document.body.classList.toggle('wi-maxed', !!an);
+        var b = sec.querySelector('.wi-sec-max');
         if (b) {
+            // DIESELBEN ZEICHEN wie /feedback, /tracks und der Einstellungs-
+            // Dialog: ⛶ maximieren, 🗗 verkleinern (ausdrueckliche Ausnahme
+            // von der Emoji-Regel, Vorgabe 2026-08-18).
             b.innerHTML = an ? '&#128471;' : '&#9974;';
             b.classList.toggle('active', !!an);
             b.setAttribute('aria-pressed', an ? 'true' : 'false');
@@ -907,18 +922,42 @@
             b.title = t(k);
             b.setAttribute('aria-label', t(k));
         }
-        try { localStorage.setItem(BREIT_SPEICHER, an ? '1' : '0'); }
-        catch (e) { /* privater Modus: gilt dann nur fuer diese Seite */ }
+        if (an) topAbstandSetzen();
     }
-    function breitInit() {
-        var b = $('wi-max');
+
+    function maxUmschalten(sec) {
+        var an = !sec.classList.contains('is-max');
+        // Ein zugeklappter Abschnitt maximiert ergaebe eine leere Flaeche –
+        // aufklappen ueber den vorhandenen Weg (Zustand und Pfeil gehen mit).
+        if (an && sec.classList.contains('collapsed')) {
+            var h = sec.querySelector('h2');
+            if (h) h.click();
+        }
+        maxSetzen(sec, an);
+    }
+
+    function maxInit() {
+        var b = $('wi-files-max');
         if (!b || b._gebunden) return;
         b._gebunden = true;
-        var an = false;
-        try { an = localStorage.getItem(BREIT_SPEICHER) === '1'; } catch (e) { /* s.o. */ }
-        breitSetzen(an);
-        b.addEventListener('click', function () {
-            breitSetzen(!document.body.classList.contains('wi-breit'));
+        var sec = b.closest('.wi-section');
+        b.addEventListener('click', function (ev) {
+            // `preventDefault` UND `stopPropagation`: der Knopf sitzt in der
+            // Klapp-Kopfzeile – ohne das klappte jeder Klick den Abschnitt zu.
+            ev.preventDefault();
+            ev.stopPropagation();
+            maxUmschalten(sec);
+        });
+        // Escape verkleinert – der uebliche Weg heraus aus einem Vollbild. Hat
+        // ein anderer Handler die Taste schon verbraucht (z. B. das Leeren des
+        // Suchfelds), bleibt das Vollbild stehen.
+        document.addEventListener('keydown', function (ev) {
+            if (ev.key !== 'Escape' || ev.defaultPrevented) return;
+            var offen = document.querySelector('.wi-section.is-max');
+            if (offen) { ev.preventDefault(); maxSetzen(offen, false); }
+        });
+        window.addEventListener('resize', function () {
+            if (document.querySelector('.wi-section.is-max')) topAbstandSetzen();
         });
     }
 
@@ -1939,7 +1978,7 @@
             $(id).addEventListener('keydown', function (e) { if (e.key === 'Enter') doLogin(); });
         });
         $('wi-logout').addEventListener('click', logout);
-        breitInit();
+        maxInit();
 
         var drop = $('wi-drop'), fin = $('wi-file-input');
         drop.addEventListener('click', function () {
