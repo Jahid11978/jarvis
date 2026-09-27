@@ -235,6 +235,13 @@
         /* Die Knoepfe duerfen nicht mitwachsen: `.wi-cfb-actions` ist ein
            Flex-Container. */
         .wi-cfb-add { flex: 0 0 auto; }
+        /* Eintrag in Bearbeitung: der Editor steht IN seiner Box, unter der
+           Kopfzeile (Name, Gruppen, Knoepfe). `flex-wrap` + `flex-basis: 100%`
+           setzen ihn auf eine eigene Zeile; der Akzentrand zeigt, WELCHER
+           Eintrag gerade bearbeitet wird. */
+        .wi-item.wi-cfb-editing { flex-wrap: wrap; border-color: var(--accent); }
+        .wi-item.wi-cfb-editing > .wi-cfb-editor { flex: 1 1 100%; min-width: 0;
+            border-top: 1px solid var(--border); padding-top: 8px; margin-top: 2px; }
         .wi-cfb-sum { font-size: 0.75rem; color: var(--text-secondary); }
         .wi-cfb-sync { font-size: 0.75rem; color: var(--text-secondary); }
         .wi-cfb-sync.warn { color: var(--text-primary); border-left: 3px solid var(--warning);
@@ -751,6 +758,12 @@
                  klebt: alles, was er braucht, soll davor stehen. Der Schlüssel
                  `wissen.groups_label` ist bewusst DERSELBE wie im
                  Informationsextraktor: gleiche Bedeutung, gleicher Text. -->
+            <!-- ⚠ EDITOR = alles von den Gruppen bis zur Statuszeile (Vorgabe
+                 2026-09-27): beim BEARBEITEN verschiebt wissen.js
+                 (cfbEditorPlatzieren) diesen Block IN die Box des bearbeiteten
+                 Eintrags, bei der Neuanlage steht er hier. Er muss deshalb
+                 unmittelbar vor #wi-cfb-list stehen. -->
+            <div class="wi-cfb-editor" id="wi-cfb-editor">
             <div class="wi-cfb-groups-wrap">
                 <label data-i18n="wissen.groups_label">Wissensgruppen (dein Bereich) *</label>
                 <div class="wi-groups" id="wi-cfb-groups"></div>
@@ -787,6 +800,7 @@
                         data-i18n="wissen.cfb_add" disabled>Übernehmen</button>
             </div>
             <div class="wi-status" id="wi-cfb-status"></div>
+            </div>
             <div class="wi-list" id="wi-cfb-list"><div class="wi-empty">—</div></div>
             <p class="desc" data-i18n="wissen.cfb_sync_hint">Gespeicherte Einträge prüft der Wissensabgleich alle 5 Minuten auf Änderungen und übernimmt sie direkt ins Wissen. Abgewählte oder in Confluence gelöschte Seiten verschwinden dabei wieder aus dem Wissen.</p>
         </div>
@@ -830,7 +844,7 @@
     <script src="/static/js/sessions.js?v=8"></script>
     <script src="/static/js/logo_home.js?v=1"></script>
     <script src="/static/js/wissen_destillat.js?v=4"></script>
-    <script src="/static/js/wissen.js?v=58"></script>
+    <script src="/static/js/wissen.js?v=59"></script>
 <script src="/static/js/settings_btn.js?v=4"></script>
     <script src="/static/js/branding.js?v=26"></script>
 <!-- Avatar-Assistent (nur aktiv, wenn der Avatar-Skill eingeschaltet ist) -->

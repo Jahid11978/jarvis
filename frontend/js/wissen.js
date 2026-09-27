@@ -1794,9 +1794,52 @@
         return '<div class="wi-cfb-sync' + (warn ? ' warn' : '') + '">' + esc(txt) + '</div>';
     }
 
+    // ── Ort des Editors ──
+    // Beim BEARBEITEN steht der Editor (Gruppen, Tags, Baum, Knoepfe) IN der
+    // Box des Eintrags, nicht ueber allen Eintraegen - sonst ist nicht zu
+    // sehen, welcher Eintrag gerade bearbeitet wird (Vorgabe 2026-09-27). Die
+    // Neuanlage bleibt oberhalb der Liste. Der Editor wird VERSCHOBEN, nie neu
+    // gebaut: Haken, geladene Seitenbaeume und Zuhoerer bleiben erhalten.
+    // ⚠ Vor jedem Neuzeichnen der Liste zurueckholen - innerHTML loeschte ihn
+    // sonst mit (und mit ihm den Baum).
+    function cfbEditorParken() {
+        var ed = $('wi-cfb-editor'), box = $('wi-cfb-list');
+        if (!ed || !box) return;
+        var alt = ed.parentNode && ed.parentNode.classList && ed.parentNode.classList.contains('wi-item')
+            ? ed.parentNode : null;
+        if (alt) alt.classList.remove('wi-cfb-editing');
+        if (ed.nextElementSibling !== box) box.parentNode.insertBefore(ed, box);
+    }
+
+    // Liefert false, wenn der bearbeitete Eintrag nicht (mehr) in der Liste steht.
+    function cfbEditorPlatzieren() {
+        var ed = $('wi-cfb-editor'), box = $('wi-cfb-list');
+        if (!ed || !box) return true;
+        if (!_cfbEdit) { cfbEditorParken(); return true; }
+        var item = null;
+        box.querySelectorAll('.wi-item').forEach(function (x) {
+            if (x.getAttribute('data-id') === _cfbEdit) item = x;
+        });
+        if (!item) { cfbEditorParken(); return false; }
+        if (ed.parentNode !== item) {
+            cfbEditorParken();
+            item.appendChild(ed);
+        }
+        item.classList.add('wi-cfb-editing');
+        return true;
+    }
+
     function cfbRenderList() {
         var box = $('wi-cfb-list');
         if (!box) return;
+        cfbEditorParken();
+        cfbRenderEintraege(box);
+        // Eintrag weg (anderswo geloescht): Bearbeiten endet, der Editor
+        // steht wieder fuer die Neuanlage da.
+        if (!cfbEditorPlatzieren()) { cfbEditModus(null); cfbBaumLeeren(); }
+    }
+
+    function cfbRenderEintraege(box) {
         var arr = _cfbBereiche || [];
         if (!arr.length) {
             box.innerHTML = '<div class="wi-empty">' + esc(t('wissen.cfb_none')) + '</div>';
@@ -1866,6 +1909,7 @@
         // sonst truege der naechste NEUE Eintrag still den Filter des alten.
         var tg = $('wi-cfb-tags');
         if (tg) tg.value = b ? (b.tags || []).join(', ') : '';
+        cfbEditorPlatzieren();
     }
 
     // Einen gespeicherten Eintrag in den Baum laden: Haken und Gruppen so, wie

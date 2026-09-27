@@ -637,6 +637,70 @@ section('11. Tags (Vorgabe 2026-09-27)');
     s.zu();
 }
 
+// ════════════════════════════════════════════════════════════════════════
+section('12. Ort des Editors – beim Bearbeiten IN der Box des Eintrags (Vorgabe 2026-09-27)');
+{
+    const E = (id, name) => ({ id: id, typ: 'auswahl', name: name, gruppen: ['g1'],
+        gruppen_info: [{ id: 'g1', name: 'Technik', color: '#888' }],
+        auswahl: [{ key: id === 'e1' ? 'NEXUS' : 'OPS', start: true, ganz: false, seiten: [], zweige: [] }] });
+    const s = await seite({ bindung: { ok: true, aktiv: true, bereiche: [E('e1', 'Eins'), E('e2', 'Zwei')] } });
+    const d = s.doc;
+    const ed = () => d.getElementById('wi-cfb-editor');
+    const zeile = (id) => d.querySelector('#wi-cfb-list .wi-item[data-id="' + id + '"]');
+    const geparkt = () => !!ed() && ed().nextElementSibling === d.getElementById('wi-cfb-list')
+        && !ed().closest('.wi-item') && !d.querySelector('.wi-item.wi-cfb-editing');
+    const inBox = (id) => !!ed() && ed().parentNode === zeile(id)
+        && zeile(id).classList.contains('wi-cfb-editing')
+        && d.querySelectorAll('.wi-item.wi-cfb-editing').length === 1;
+    // Positivkontrolle: ohne Editor-Huelle waeren alle Ortspruefungen trivial
+    check('(Positivkontrolle) Editor-Huelle vorhanden und enthaelt Gruppen, Tags, Baum, Knopf, Status',
+          !!ed() && ['wi-cfb-groups', 'wi-cfb-tags', 'wi-cfb-tree', 'wi-cfb-add', 'wi-cfb-cancel', 'wi-cfb-status']
+              .every(id => ed().contains(d.getElementById(id))));
+    check('(Positivkontrolle) zwei Eintraege in der Liste', !!zeile('e1') && !!zeile('e2'));
+    check('Neuanlage: Editor steht OBERHALB der Liste, in keiner Box', geparkt());
+
+    await s.klick(zeile('e1').querySelector('.wi-cfb-edit'));
+    await warten(60);
+    check('⚠ Bearbeiten e1: Editor steht IN der Box von e1', inBox('e1'));
+    check('der Baum wandert mit (keine Kopie)', d.querySelectorAll('#wi-cfb-tree').length === 1
+          && zeile('e1').contains(d.getElementById('wi-cfb-tree')));
+    check('der Editor steht NACH der Kopfzeile der Box',
+          zeile('e1').lastElementChild === ed());
+
+    await s.klick(zeile('e2').querySelector('.wi-cfb-edit'));
+    await warten(60);
+    check('⚠ Wechsel auf e2: Editor wandert in die Box von e2, e1 ist frei', inBox('e2') && !zeile('e1').contains(ed()));
+    check('e2: seine Haken stehen (OPS markiert)', s.cb(s.sp('OPS')).checked && !s.cb(s.sp('NEXUS')).checked);
+
+    // Anderen Eintrag loeschen -> Liste wird neu gezeichnet; Editor + Haken bleiben
+    await s.klick(s.cb(s.pg('11')));
+    await s.klick(zeile('e1').querySelector('.wi-cfb-del'));
+    await warten(40);
+    check('⚠ Loeschen eines ANDEREN Eintrags: Editor bleibt in der Box von e2', !zeile('e1') && inBox('e2'));
+    check('⚠ ... und die laufende Markierung ueberlebt das Neuzeichnen', s.cb(s.pg('11')) && s.cb(s.pg('11')).checked);
+    check('... Bearbeiten laeuft weiter', /Speichern/.test(d.getElementById('wi-cfb-add').textContent));
+
+    await s.klick(d.getElementById('wi-cfb-cancel'));
+    check('⚠ Abbrechen: Editor zurueck oberhalb der Liste', geparkt());
+
+    await s.klick(zeile('e2').querySelector('.wi-cfb-edit'));
+    await warten(60);
+    await s.klick(d.getElementById('wi-cfb-add'));
+    await warten(40);
+    check('(Positivkontrolle) Speichern lief als PUT', s.posts().some(x => x.m === 'PUT'));
+    check('⚠ nach dem Speichern: Editor zurueck oberhalb der Liste, Baum lebt',
+          geparkt() && !!d.querySelector('#wi-cfb-tree li.wi-cfb-sp'));
+
+    await s.klick(zeile('e2').querySelector('.wi-cfb-edit'));
+    await warten(60);
+    await s.klick(zeile('e2').querySelector('.wi-cfb-del'));
+    await warten(40);
+    check('⚠ bearbeiteten Eintrag geloescht: Editor oberhalb der Liste, Anlege-Modus',
+          geparkt() && /Übernehmen/.test(d.getElementById('wi-cfb-add').textContent)
+          && !!d.getElementById('wi-cfb-tree'));
+    s.zu();
+}
+
 clearTimeout(wach);
 bilanz = true;
 console.log(`\n\x1b[1mErgebnis: ${OK}/${OK + FAIL}\x1b[0m`);

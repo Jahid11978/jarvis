@@ -303,6 +303,17 @@ with connect(ws, open_timeout=20, max_size=60_000_000) as sock:
           note:document.getElementById('wi-cfb-editnote').textContent};})()""")
         check("Bearbeiten: Knopf 'Speichern', 'Abbrechen' sichtbar, Hinweis nennt den Eintrag",
               ed and ed["btn"] in ("Speichern", "Save") and ed["ab"] != "none" and "NEXUS" in ed["note"], json.dumps(ed))
+        # Vorgabe 2026-09-27: der Editor steht IN der Box des bearbeiteten
+        # Eintrags, UNTER dessen Kopfzeile, und ragt nicht aus ihr heraus.
+        lage = js(sock, """(function(){var z=document.querySelector('#wi-cfb-list .wi-item[data-id="e1"]'),
+          e=document.getElementById('wi-cfb-editor'); if(!z||!e) return null;
+          var zr=z.getBoundingClientRect(), er=e.getBoundingClientRect(),
+              kr=z.querySelector('.wi-cfb-edit').getBoundingClientRect();
+          return {drin: z.contains(e), l:Math.round(er.left-zr.left), r:Math.round(zr.right-er.right),
+                  b:Math.round(zr.bottom-er.bottom), unter:Math.round(er.top-kr.bottom)};})()""")
+        check("⚠ Bearbeiten: der Editor steht IN der Box des Eintrags, unter ihrer Kopfzeile",
+              bool(lage) and lage["drin"] and lage["l"] >= 0 and lage["r"] >= 0 and lage["b"] >= 0
+              and lage["unter"] >= 0, json.dumps(lage))
         js(sock, "(function(){var e=document.querySelector('.wi-cfb-actions');if(e)e.scrollIntoView({block:'center'});})()")
         time.sleep(0.3)
         bild(sock, f"cfb-baum-bearbeiten-{thema}.png")
