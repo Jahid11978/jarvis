@@ -334,6 +334,36 @@ PROBEN = [
      "    window.WissenPortal = { reloadPending: function () { loadPending(); } };",
      "", JS_W),
 
+    # ── Bilder an der FUNDSTELLE (2026-09-27) ──────────────────────────────
+    ("⚠ Bilder im Fliesstext werden ignoriert (landen wieder am Dateiende)", WD,
+     "                elif el.tag == _A_BLIP:", "                elif False:", PY_W),
+
+    ("extrahiere() benutzt den Fundstellen-Leser nicht", WD,
+     "            eigen = docx_text_mit_bildern(inhalt, start=len(bilder),",
+     "            eigen = None and docx_text_mit_bildern(inhalt, start=len(bilder),",
+     PY_W),
+
+    ("Tabellen gehen wieder verloren", WD,
+     '                elif kind.tag == _W + "tbl":', "                elif False:", PY_W),
+
+    ("Nummern zaehlen nicht ueber die Dateien weiter", WD,
+     "                nummer[pfad] = start + len(bilder)",
+     "                nummer[pfad] = len(bilder)", PY_W),
+
+    ("DOCTYPE wird geparst (Entitaeten aus fremdem Archiv)", WD,
+     '        raise ValueError("DOCTYPE im DOCX")', "        pass", PY_W),
+
+    ("feste Bild-Regel fehlt im Block-Auftrag", WD,
+     "        kopf += _BILD_REGEL", "        pass", PY_W),
+
+    ("feste Bild-Regel fehlt in der Zusammenfuehrung", WD,
+     '        + (_BILD_REGEL if _MARKER.search(inhalt) else "")', '        + ""', PY_W),
+
+    ("i18n EN wieder mit der alten Regel 5", I18N,
+     "Keep every marker unchanged and place it directly after the sentence or "
+     "list item the image illustrates",
+     "Keep these markers unchanged and in the same place", PY_W),
+
     # ── i18n ───────────────────────────────────────────────────────────────
     ("ein Schluessel fehlt im Englischen", I18N,
      "        'wissen.dest_take': 'Into the knowledge base',\n", "", JS_W),

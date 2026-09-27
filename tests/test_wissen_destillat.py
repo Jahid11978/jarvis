@@ -68,7 +68,8 @@ _NOETIG = ["bloecke", "teile_nach_dateien", "bilder_aus_docx",
            "markdown_fuer_wissen", "titel_aus_markdown", "auftrag_bauen",
            "zusammenfuehr_auftrag", "destilliere", "drossel_pruefen",
            "extrahiere", "_bild_mime", "_code_zaun_weg", "_entschaerfen",
-           "BLOCK_ZEICHEN", "MAX_BILDER", "VORGABE_PROMPT"]
+           "BLOCK_ZEICHEN", "MAX_BILDER", "VORGABE_PROMPT",
+           "docx_text_mit_bildern", "_BILD_REGEL"]
 _fehlt = [n for n in _NOETIG if not hasattr(wd, n)]
 if _fehlt:
     print(f"  \033[31m✗\033[0m Modul unvollstaendig: {', '.join(_fehlt)} – Abbruch")
@@ -333,6 +334,141 @@ check("Wissensdatenbank: unbekannter Marker unveraendert",
       isinstance(_wi, str) and "[BILD-99]" in _wi)
 check("ohne Bilder bleibt der Text unangetastet",
       sicher(wd.markdown_fuer_wissen, "Text ohne Marker", []) == "Text ohne Marker")
+
+
+# ════════════════════════════════════════════════════════════════════════════
+section("5b. Bilder stehen an der FUNDSTELLE, nicht am Dateiende")
+# ⚠ DER VORFALL (2026-09-27): die Marker hingen gesammelt am Ende jeder Datei,
+# und das Destillat setzte acht Bilder als Block unter "Mehrere Bilder im
+# Ordner:". Nur ein Marker an der Fundstelle gibt dem Modell den Satz mit, den
+# das Bild belegt. Gemessen am ERGEBNIS eines echten Archivs.
+
+_NS = ('xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main" '
+       'xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships" '
+       'xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main"')
+
+
+def _blip(rid):
+    return (f'<w:r><w:drawing><a:graphic><a:graphicData><a:blip r:embed="{rid}"/>'
+            '</a:graphicData></a:graphic></w:drawing></w:r>')
+
+
+def _absatz(t, extra=""):
+    return f'<w:p><w:r><w:t>{t}</w:t></w:r>{extra}</w:p>'
+
+
+# ⚠ Die Dateinamen stehen ABSICHTLICH gegen die Fundstellen-Reihenfolge
+# (image9 kommt im Text zuerst): sonst waere "Reihenfolge wie im Text" von
+# "numerisch nach Dateiname" nicht zu unterscheiden.
+_F_A, _F_B, _F_KOPF = (200, 10, 10), (10, 200, 10), (10, 10, 200)
+_KOERPER = (
+    _absatz("Absatz eins zur Konfiguration.")
+    + f'<w:p>{_blip("rIdA")}</w:p>'
+    + _absatz("Absatz zwei zur Registry.", _blip("rIdB"))
+    + '<w:tbl><w:tr><w:tc>' + _absatz("Bildtyp") + '</w:tc><w:tc>' + _absatz("Platzhalter")
+    + '</w:tc></w:tr><w:tr><w:tc>' + _absatz("Antragsschein") + '</w:tc><w:tc>'
+    + _absatz("@ANTRAGSSCHEIN|") + '</w:tc></w:tr></w:tbl>'
+    + _absatz("Schluss.", _blip("rIdA")))
+_DOC_POS = (f'<?xml version="1.0" encoding="UTF-8"?><w:document {_NS}><w:body>'
+            + _KOERPER + '</w:body></w:document>')
+_RELS_POS = ('<?xml version="1.0" encoding="UTF-8"?><Relationships xmlns="http://'
+             'schemas.openxmlformats.org/package/2006/relationships">'
+             '<Relationship Id="rIdA" Target="media/image9.png"/>'
+             '<Relationship Id="rIdB" Target="media/image2.png"/>'
+             '<Relationship Id="rIdX" TargetMode="External" Target="http://x/y.png"/>'
+             '</Relationships>')
+
+
+def _docx_pos(doc=_DOC_POS):
+    b = io.BytesIO()
+    with zipfile.ZipFile(b, "w") as z:
+        z.writestr("[Content_Types].xml", _CT)
+        z.writestr("_rels/.rels", _RELS)
+        z.writestr("word/document.xml", doc)
+        z.writestr("word/_rels/document.xml.rels", _RELS_POS)
+        z.writestr("word/media/image9.png", png(_F_A))
+        z.writestr("word/media/image2.png", png(_F_B))
+        z.writestr("word/media/image1.png", png(_F_KOPF))   # nur Kopfzeile
+        z.writestr("word/media/diagramm.emf", b"\x01\x00\x00\x00EMF")
+    return b.getvalue()
+
+
+_erg = sicher(wd.docx_text_mit_bildern, _docx_pos(), 4)
+_ok_erg = isinstance(_erg, tuple) and len(_erg) == 2
+# ⚠ POSITIVKONTROLLE ZUERST – ohne lesbares Ergebnis waeren alle Lagepruefungen
+# darunter trivial falsch und nennten den falschen Grund.
+check("Positivkontrolle: das Archiv wird gelesen (Text + Bildliste)",
+      _ok_erg, repr(_erg)[:120])
+_t, _b = (_erg if _ok_erg else ("", []))
+_p1, _p2, _ps = _t.find("Absatz eins"), _t.find("Absatz zwei"), _t.find("Schluss.")
+_m5, _m6, _m7 = _t.find("[BILD-5]"), _t.find("[BILD-6]"), _t.find("[BILD-7]")
+check("erstes Bild steht ZWISCHEN den beiden Absaetzen, die es umgeben",
+      -1 < _p1 < _m5 < _p2, _t[:160])
+check("Bild im Absatz steht HINTER seinem Satz, vor der Tabelle",
+      -1 < _p2 < _m6 < _t.find("| Bildtyp"), _t[:200])
+check("Nummern beginnen bei start+1 (laufen ueber alle Dateien durch)",
+      _m5 > -1 and "[BILD-4]" not in _t and "[BILD-1]" not in _t)
+check("dasselbe Bild zweimal eingebunden -> EINE Nummer, an beiden Stellen",
+      _t.count("[BILD-5]") == 2 and _t.find("[BILD-5]", _ps) > _ps)
+check("nicht im Fliesstext eingebundenes Bild (Kopfzeile) haengt AM ENDE",
+      _m7 > _ps and _t.rstrip().endswith("[BILD-7]"), _t[-80:])
+check("EMF und externe Verknuepfung fallen heraus (drei Bilder, nicht mehr)",
+      len(_b) == 3, str(len(_b)))
+if len(_b) == 3:
+    check("Bildliste in FUNDSTELLEN-Reihenfolge, nicht nach Dateiname",
+          _farbe(_b[0]) == _F_A and _farbe(_b[1]) == _F_B and _farbe(_b[2]) == _F_KOPF,
+          f"{[_farbe(x) for x in _b]}")
+else:
+    check("Bildliste in FUNDSTELLEN-Reihenfolge", False, "keine drei Bilder")
+check("Tabelle kommt als Markdown-Tabelle mit (bisher ging sie verloren)",
+      "| Bildtyp | Platzhalter |" in _t and "|---|---|" in _t)
+check("Pipe in einer Zelle wird maskiert (sprengt sonst die Spalten)",
+      "@ANTRAGSSCHEIN\\|" in _t)
+
+# ⚠ "billion laughs": ein DOCX traegt nie eine DOCTYPE-Deklaration.
+_boese = _DOC_POS.replace('<?xml version="1.0" encoding="UTF-8"?>',
+                          '<?xml version="1.0"?><!DOCTYPE w [<!ENTITY x "xx">]>')
+check("DOCX mit DOCTYPE wird NICHT geparst (Rueckfall statt Entitaeten)",
+      sicher(wd.docx_text_mit_bildern, _docx_pos(_boese)) is None)
+check("kein ZIP -> None (Rueckfall auf den allgemeinen Extraktor), kein Wurf",
+      sicher(wd.docx_text_mit_bildern, b"kein zip") is None)
+
+# Die Verdrahtung: extrahiere() muss den Leser WIRKLICH benutzen.
+_ex = sicher(wd.extrahiere, [("a.docx", _docx_pos()), ("b.docx", _docx_pos())])
+_ext_t = _ex.get("text", "") if isinstance(_ex, dict) else ""
+_kopf_b = _ext_t.find("--- b.docx ---")
+check("extrahiere(): beide DOCX gelesen, sechs Bilder",
+      isinstance(_ex, dict) and _ex.get("ok") == ["a.docx", "b.docx"]
+      and len(_ex.get("bilder") or []) == 6, repr(_ex)[:160])
+check("extrahiere(): Marker der ersten Datei stehen VOR ihrem Schluss, nicht dahinter",
+      -1 < _ext_t.find("[BILD-1]") < _ext_t.find("Absatz zwei") < _kopf_b)
+check("extrahiere(): die zweite Datei zaehlt weiter (BILD-4, nicht BILD-1)",
+      _kopf_b > -1 and _ext_t.find("[BILD-4]", _kopf_b) > _kopf_b
+      and _ext_t.find("[BILD-1]", _kopf_b) == -1)
+
+# Die Bild-Regel steht FEST im Auftrag – der Prompt ist bearbeitbar.
+_mit = sicher(wd.auftrag_bauen, "Text [BILD-1] mehr", "P", "", "k1")
+_ohne_m = sicher(wd.auftrag_bauen, "Text ohne Bild", "P", "", "k1")
+_zus = sicher(wd.zusammenfuehr_auftrag, ["Teil [BILD-2]"], "P", "k1")
+check("Auftrag MIT Markern traegt die feste Bild-Regel",
+      isinstance(_mit, str) and wd._BILD_REGEL in _mit)
+check("… und sie steht VOR dem Inhalt (sonst gewinnt der Fremdtext)",
+      isinstance(_mit, str) and -1 < _mit.find(wd._BILD_REGEL) < _mit.find("BEGINN INHALT-k1"))
+check("Auftrag OHNE Marker bleibt ohne Bild-Regel (kein Rauschen im Normalfall)",
+      isinstance(_ohne_m, str) and wd._BILD_REGEL not in _ohne_m)
+check("Zusammenfuehrung MIT Markern traegt die Bild-Regel ebenfalls",
+      isinstance(_zus, str) and wd._BILD_REGEL in _zus)
+
+# Vorgabe-Prompt und i18n sagen dasselbe (der Browser schickt den i18n-Text).
+_I18N = (ROOT / "frontend" / "js" / "i18n.js").read_text(encoding="utf-8")
+_r5 = wd.VORGABE_PROMPT.split("\n6.")[0].split("5. **Bilder behandeln**")[-1]
+check("Vorgabe-Prompt: Regel 5 verlangt die Stelle HINTER dem belegten Satz",
+      "direkt hinter" in _r5 and "Bildunterschrift" in _r5)
+check("i18n DE traegt dieselbe Regel 5 wie der Vorgabe-Prompt",
+      _r5.strip() != "" and _r5.strip() in _I18N)
+check("i18n EN traegt die Regel ebenfalls (kein Rueckfall auf die alte Fassung)",
+      "directly after the sentence or list item" in _I18N
+      and "Keep these markers unchanged and in the same place" not in _I18N)
 
 
 # ════════════════════════════════════════════════════════════════════════════
