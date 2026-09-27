@@ -358,8 +358,14 @@ check("POST: die Wissensgruppen werden aus dem Rumpf gelesen",
 # ⚠ LIVE GEMESSEN (2026-09-22): `["", "  "]` ueberlebt ein blosses `if g`, und
 # `_wissen_check_groups` meldet dann "Keine Berechtigung fuer Gruppe(n):   " –
 # richtig abgewiesen, aber der Grund schickt an die falsche Stelle.
-check("⚠ POST: die Kennungen werden GETRIMMT, nicht nur auf Falsyness gefiltert",
-      ".strip()" in pr and "req_groups" in pr,
+# ⚠ GEPRUEFT WIRD DIE VERDRAHTUNG, NICHT DIE SCHREIBWEISE. Bis 2026-09-22 stand
+# hier `".strip()" in pr` – seit die Normierung in `_gruppen_normieren` liegt
+# (EINE Regel statt sechs Fassungen), haette genau diese Pruefung die Behebung
+# als Fehler gemeldet. Was die Normierung WIRKLICH tut, misst der ausgefuehrte
+# Wachter `tests/test_gruppen_normierung.py`; hier gehoert die Frage hin, ob
+# der Endpunkt sie ueberhaupt benutzt.
+check("⚠ POST: die Kennungen gehen durch die gemeinsame Normierung",
+      "_gruppen_normieren" in pr and "req_groups" in pr,
       "sonst laeuft eine leere Eingabe in eine Rechte-Meldung")
 
 # Die Gegenprobe dazu laeuft ueber den geschnittenen Rumpf: sie misst, welcher
@@ -368,8 +374,8 @@ check("⚠ POST: die Kennungen werden GETRIMMT, nicht nur auf Falsyness gefilter
 _lz = [n for n in ast.walk(POST) if isinstance(n, ast.Assign)
        and any(isinstance(t, ast.Name) and t.id == "req_groups" for t in n.targets)]
 check("req_groups wird genau einmal belegt", len(_lz) == 1, f"{len(_lz)}x")
-check("und die Belegung trimmt jede Kennung",
-      len(_lz) == 1 and "strip()" in ast.unparse(_lz[0]),
+check("und die Belegung normiert jede Kennung",
+      len(_lz) == 1 and "_gruppen_normieren" in ast.unparse(_lz[0]),
       ast.unparse(_lz[0]) if _lz else "")
 i_grp = folge.index("_wissen_check_groups") if "_wissen_check_groups" in folge else -1
 check("⚠ POST: die Zuordnung wird gegen den Bereich des Nutzers geprueft", i_grp >= 0,

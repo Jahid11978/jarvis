@@ -17131,7 +17131,7 @@ async def create_knowledge_folder(request: Request, user: str = Depends(require_
         return JSONResponse({"error": err}, status_code=400)
 
     # Gewuenschte Wissensgruppen VOR dem Anlegen validieren
-    group_ids = [g.strip() for g in (data.get("groups") or []) if str(g).strip()]
+    group_ids = _gruppen_normieren(data.get("groups"))
     if group_ids:
         known_gids = {g["id"] for g in kg.list_groups().get("groups", [])}
         bad = [g for g in group_ids if g not in known_gids]
@@ -17298,7 +17298,7 @@ async def assign_knowledge_folder_groups(request: Request, user: str = Depends(r
     if sperre is not None:
         return sperre
 
-    group_ids = [g.strip() for g in (data.get("groups") or []) if str(g).strip()]
+    group_ids = _gruppen_normieren(data.get("groups"))
     known_gids = {g["id"] for g in kg.list_groups().get("groups", [])}
     bad = [g for g in group_ids if g not in known_gids]
     if bad:
@@ -17696,6 +17696,44 @@ def _editable_groups_for(user: str) -> list:
     if _may_edit_knowledge(user):
         return groups
     return [g for g in groups if _is_kb_group_editor(user, g)]
+
+
+def _gruppen_normieren(werte) -> list:
+    """Wissensgruppen-Kennungen aus einem Request-Rumpf auf eine saubere Liste.
+
+    ⚠ EINE REGEL FUER ALLE ENDPUNKTE, DIE WISSENSGRUPPEN ENTGEGENNEHMEN. Bis
+    2026-09-22 stand diese Normierung in SIEBEN eigenen Fassungen in dieser
+    Datei – und die waren bereits auseinandergelaufen:
+
+    - ``[g for g in ... if g]`` laesst einen String aus Leerzeichen durch.
+      Abgewiesen wird dann zwar richtig, der Grund lautet aber "Keine
+      Berechtigung fuer Gruppe(n):   " und schickt an die falsche Stelle: es
+      fehlt eine AUSWAHL, es fehlt kein Recht (am 2026-09-22 an der
+      Confluence-Einbindung live gemessen).
+    - ``[str(g).strip() for g in ... if str(g).strip()]`` wirft zwar nicht,
+      macht aus der Zahl ``1`` aber die Gruppe ``"1"`` – abgewiesen wird dann
+      mit 403 (unbekannte Gruppe) statt mit 400 (falscher Typ). ⚠ DIESE FASSUNG
+      IST AM 2026-09-27 NEU ENTSTANDEN, waehrend die Normierung schon gebaut
+      war: der Waechter hat sie gemeldet, eine gepflegte Liste haette sie nicht
+      gekannt. Genau dafuer ist die Regel eine REGEL ueber den AST.
+    - ``[g.strip() for g in ... if str(g).strip()]`` WIRFT bei einem
+      Nicht-String – der Filter prueft ``str(g)``, die Umwandlung aber ``g``
+      selbst: ``{"groups": [1]}`` endet in einem HTTP 500 (gemessen).
+
+    Genommen wird nur, was eine nicht leere Zeichenkette IST; die Reihenfolge
+    bleibt. **Nicht-Strings werden VERWORFEN, nicht umgewandelt** – eine
+    Kennung zu raten ist im Projekt durchgehend der falsche Weg (vgl.
+    ``normalize_hidden``), und aus ``1`` wuerde sonst die Gruppe ``"1"``.
+
+    ⚠ BEWUSST OHNE TYPAUSSAGE: ob ein Rumpf, der gar keine Liste schickt, ein
+    400 wert ist, entscheidet der Endpunkt – ``/api/knowledge/assignments``
+    MUSS dort abweisen, weil eine leere Liste die Zuordnung LOESCHT; ein
+    stillschweigendes ``[]`` waere dort Datenverlust. Und bewusst ohne Dedup:
+    ``set_assignment`` dedupliziert selbst, eine zweite Fassung liefe auseinander.
+    """
+    if not isinstance(werte, list):
+        return []
+    return [g.strip() for g in werte if isinstance(g, str) and g.strip()]
 
 
 def _wissen_check_groups(user: str, req_groups: list):
@@ -18353,7 +18391,7 @@ async def wissen_pending_approve(doc_id: str, request: Request, user: str = Depe
     if not doc or _norm_login(str(doc.get("created_by", ""))) != _norm_login(user):
         return JSONResponse({"error": "Nicht gefunden"}, status_code=404)
     body = await request.json()
-    req_groups = [g for g in ((body.get("groups") if isinstance(body, dict) else None) or []) if g]
+    req_groups = _gruppen_normieren(body.get("groups") if isinstance(body, dict) else None)
     ok, err = _wissen_check_groups(user, req_groups)
     if not ok:
         return JSONResponse({"error": err}, status_code=403)
@@ -18559,9 +18597,7 @@ async def wissen_cf_bindung_anlegen(request: Request, user: str = Depends(requir
     # fuer Gruppe(n):   " – richtig abgewiesen, aber der Grund schickt an die
     # falsche Stelle (es fehlt eine Auswahl, es fehlt kein Recht). Live
     # gemessen; dieselbe Normierung macht `_gruppen_pruefen` in der Ablage.
-    req_groups = [t for t in (str(g or "").strip()
-                              for g in ((body.get("groups") if isinstance(body, dict) else None) or []))
-                  if t]
+    req_groups = _gruppen_normieren(body.get("groups") if isinstance(body, dict) else None)
     if not key:
         return JSONResponse({"ok": False, "error": "Es wurde kein Bereich gewaehlt."},
                             status_code=400)
@@ -18869,7 +18905,7 @@ async def wissen_destillat_uebernehmen(request: Request,
     # Leerraum wird getrimmt: ein String aus Leerzeichen ist nicht falsy und
     # kam sonst als "Keine Berechtigung fuer Gruppe(n):   " zurueck – es fehlt
     # aber eine AUSWAHL, das ist kein Rechteproblem (Lehre vom 2026-09-22).
-    groups = [str(g).strip() for g in (body.get("groups") or []) if str(g).strip()]
+    groups = _gruppen_normieren(body.get("groups"))
     quelle = str(body.get("quelle") or "").strip()[:200]
     bilder = body.get("bilder") or []
 
@@ -19064,6 +19100,10 @@ async def knowledge_assignments_set(request: Request, user: str = Depends(requir
     groups = body.get("groups")
     if not isinstance(groups, list):
         return JSONResponse({"ok": False, "error": "groups muss eine Liste sein"}, status_code=400)
+    # ⚠ DIE TYPPRUEFUNG BLEIBT DAVOR: eine leere Liste ENTFERNT hier die
+    # Zuordnung – wer `{"groups": "abc"}` stillschweigend zu `[]` normiert,
+    # loescht damit die Gruppen einer Datei.
+    groups = _gruppen_normieren(groups)
 
     if not _may_edit_knowledge(user):
         # Nur geänderte Gruppen prüfen (hinzugefügt ODER entfernt).
@@ -19525,7 +19565,7 @@ async def knowledge_pending_approve(doc_id: str, request: Request, user: str = D
     try:
         body = await request.json()
         if isinstance(body, dict) and isinstance(body.get("groups"), list):
-            groups = body["groups"]
+            groups = _gruppen_normieren(body["groups"])
     except Exception:
         pass
     try:
