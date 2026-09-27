@@ -969,3 +969,48 @@ body.light .sapcert-state.is-err { color: color-mix(in srgb, var(--danger) 78%, 
     overflow-wrap: anywhere;
     word-break: break-word;
 }
+
+/* ── Titelleisten brechen um, statt ueberzulaufen ────────────────────────────
+   ⚠ GEMESSEN 2026-09-22 im echten Chrome, nicht geschaetzt: bei 520 px
+   Fensterbreite lief /portal um 344 px ueber, /chat um 328, /wissen um 129,
+   /sap um 98, /claude um 61, /vemas um 53 und /support um 47 – /portal und
+   /chat sogar bei 700 px noch (164 bzw. 148). Die Ursache ist ueberall
+   dieselbe: die Symbolreihe der Leiste bricht nicht um, und der Titel daneben
+   schrumpft nicht unter seine Inhaltsbreite – ein Flex-Kind tut das von sich
+   aus nicht (Register).
+
+   ⚠ DIE LEISTEN SIND JE SEITE INLINE DEFINIERT, eine gemeinsame Quelle gibt es
+   nicht: zwoelf Seiten teilen sich `.topbar`/`.topbar-title`/`.topbar-right`,
+   dazu vier Sonderformen (`wi-`, `pt-`, `sa-`, `ad-`). Die Aufzaehlung hier ist
+   aus dem Markup GEZAEHLT, nicht geraten – und dass sie vollstaendig ist, wird
+   NICHT gepflegt, sondern GEMESSEN: `tests/live_topbar_umbruch_dev.py` faehrt
+   jede Bereichsseite bei 520 px an und verlangt Ueberlauf 0. Eine kuenftige
+   Seite mit eigener Leisten-Klasse faellt damit von selbst auf, ohne dass
+   jemand diese Zeile pflegt.
+
+   ⚠ BEI NORMALER BREITE AENDERT SICH NICHTS – bei 900 px gemessen 0 vorher wie
+   nachher: `flex-wrap` wirkt erst, wenn es sonst ueberlaufen WUERDE. */
+.topbar, .wi-topbar, .pt-topbar, .sa-topbar, .ad-top { flex-wrap: wrap; }
+/* ⚠ `.topbar-left` GEHOERT DAZU – gemessen, nicht angenommen: nach der Regel
+   oben blieben auf /chat noch 4 px Ueberlauf, breitestes Element war diese
+   linke Gruppe (Verlaufsknopf, Avatar, Titel, Statuspunkt, CPU-Balken). Im
+   echten Chrome bei 520 px durchgespielt: `min-width: 0` und `flex-wrap: wrap`
+   fuehren EINZELN zum selben Ergebnis (337 -> 317 px, 0 px Ueberlauf). Beide
+   zu setzen waere die Zeile, deren Entfernen nichts aendert. Gewaehlt ist
+   `flex-wrap`, weil es dieselbe Regel wie fuer die Symbolgruppe rechts ist und
+   nichts abschneidet, sondern umbrechen laesst. `jira_addon.css` loest es fuer
+   dieselbe Klasse ueber `min-width: 0` – beides ist richtig, nur nicht beides
+   zusammen. */
+
+/* Der Titel ist das Kind, das nachgeben soll – ohne `min-width: 0` schrumpft es
+   nicht unter seine Inhaltsbreite und zwingt die Symbole aus der Zeile. */
+.topbar-title, .wi-title, .pt-title, .sa-title, .ad-title { min-width: 0; }
+
+/* Die Symbolgruppe bricht SELBST um. Noetig, wo sie allein schon breiter ist
+   als das Fenster (/support: 536 px bei 520 px Fensterbreite) – dort genuegt
+   der Umbruch der Leiste nicht, und ein halb abgeschnittener Knopf waere
+   schlechter als eine zweite Zeile. */
+.topbar-right, .wi-top-icons, .pt-top-icons, .sa-top-icons, .ad-top-icons,
+.topbar-left {
+    flex-wrap: wrap;
+}
