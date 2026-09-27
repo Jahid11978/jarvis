@@ -236,7 +236,8 @@ def _auftrag_anlegen(cron: str = "") -> dict:
     return cron_manager.add_job(
         label="Wissensabgleich",
         cron=cron or AUFTRAG_CRON,
-        task="Sieht nach, ob sich in den Wissensordnern etwas geaendert hat, "
+        task="Holt Aenderungen der eingebundenen Confluence-Eintraege ins Wissen, "
+             "sieht nach, ob sich in den Wissensordnern etwas geaendert hat, "
              "und indiziert nur dann nach (kein Agentenlauf).",
         enabled=True,
         job_id=AUFTRAG_ID,

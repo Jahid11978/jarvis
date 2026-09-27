@@ -164,7 +164,10 @@ _APP_DENY_REL = (
     # Confluence-Bereiche das Haus in seine Wissensdatenbank zieht. Lesen
     # verraet die interne Confluence-Struktur; SCHREIBEN waere die kuerzeste
     # Art, dem spaeteren Abgleich einen fremden Bereich unterzuschieben.
-    "data/confluence_bindung.json",
+    # Der Abgleichsstand daneben (backend/confluence_abgleich.py) fuehrt je
+    # Seite die Zieldatei: beschreibbar liesse er den Abgleich eine BELIEBIGE
+    # Datei als "nicht mehr gewollt" loeschen.
+    "data/confluence_bindung.json", "data/confluence_abgleich.json",
     # Verankerte SAP-Serverzertifikate (backend/sap_cert.py). Der INHALT ist
     # oeffentlich – die SCHREIBBARKEIT ist das Problem: wer hier eine eigene CA
     # ablegt, laesst eine SAP-Verbindung gegen einen fremden Server laufen, ohne
@@ -329,7 +332,7 @@ PRIVATE_FILES = ("data/scheduled_jobs.json", "data/file_watchers.json",
                  "data/feedback_formulare.json", "data/feedback_abgaben.jsonl",
                  # Confluence-Einbindung: Betriebswissen (interne Bereichsnamen)
                  # und ein Bestand, der den spaeteren Wissensabgleich steuert.
-                 "data/confluence_bindung.json",
+                 "data/confluence_bindung.json", "data/confluence_abgleich.json",
                  # AI-Maus-Signatur: Metadaten des Zertifikats (Betreff,
                  # Aussteller, Laufzeit) und das VERSCHLUESSELTE Kennwort. Das
                  # Zertifikat selbst und seine Schluesseldatei sind strenger,
@@ -612,7 +615,7 @@ SHELL_SECRET_PATHS = re.compile(
     # Confluence-Einbindung: steuert, welche fremden Bereiche spaeter in die
     # Wissensdatenbank fliessen – beschreibbar waere das eine Wissensquelle,
     # die niemand bestellt hat.
-    r'confluence_bindung\.json\b|'
+    r'confluence_bindung\.json\b|confluence_abgleich\.json\b|'
     # E-Mail-Skill: Postfach-Kennwoerter (email_accounts.json + .mailkey ergeben
     # zusammen den Klartext), fremde Regel-Prompts, fremde Absender/Betreffe.
     r'email_accounts\.json\b|\.mailkey\b|email_rules\.json\b|'

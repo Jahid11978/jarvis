@@ -1,0 +1,400 @@
+#!/usr/bin/env python3
+"""Waechter fuer den Confluence-Abgleich (Vorgabe 2026-09-27).
+
+GEMESSEN WIRD DIE WIRKUNG, NICHT DAS VORKOMMEN: ``backend/confluence_abgleich``
+laeuft WIRKLICH – gegen eine Confluence-Attrappe mit der ECHTEN Signatur und
+Antwortform von ``ConfluenceClient`` (``pages_in_space(key, limit,
+with_parent=, with_version=)``, ``get_page(id, None, None)`` mit
+``body.storage.value``/``version.number``, ``space_homepage(key)``), in einem
+Sandkasten mit echten Dateien. Ob eine geloeschte Seite verschwindet oder ein
+Netzfehler den Bestand stehen laesst, kann eine Quelltext-Pruefung nicht
+beantworten.
+
+⚠ SANDKASTEN MIT EXIT 2. Wissensordner, Stand-Datei und Einbindungs-Ablage
+liegen in einem Wegwerf-Verzeichnis; zeigt einer der Pfade heraus, bricht der
+Lauf ab („konnte nicht laufen" ist nicht „bestanden"). ``backend.config``,
+``knowledge_groups``, ``web_extractor`` und ``tools.knowledge`` sind Attrappen
+in ``sys.modules`` – der echte Import schreibt die Live-``settings.json``.
+"""
+from __future__ import annotations
+
+import ast
+import shutil
+import sys
+import tempfile
+import types
+from pathlib import Path
+
+ROOT = Path(__file__).resolve().parent.parent
+sys.path.insert(0, str(ROOT))
+
+OK = FAIL = 0
+def section(t): print(f"\n\033[1m{t}\033[0m")
+def check(desc, cond, info=""):
+    global OK, FAIL
+    if cond:
+        OK += 1; print(f"  \033[32m✓\033[0m {desc}")
+    else:
+        FAIL += 1; print(f"  \033[31m✗\033[0m {desc}" + (f" – {info}" if info else ""))
+
+def sicher(fn, *a, **kw):
+    try:
+        return fn(*a, **kw)
+    except Exception as e:  # noqa: BLE001
+        return e
+
+
+# ════════════════════════════════════════════════════════════════════════════
+section("0. Sandkasten und Attrappen")
+SAND = Path(tempfile.mkdtemp(prefix="cfa-test-"))
+ORDNER_A = SAND / "rag" / "technik"
+ORDNER_B = SAND / "rag" / "vertrieb"
+ORDNER_A.mkdir(parents=True); ORDNER_B.mkdir(parents=True)
+
+cfgmod = types.ModuleType("backend.config")
+class _Cfg:
+    def get_setting(self, k, d=None): return d
+    def save_setting(self, k, v): pass
+    def get_skill_states(self): return {}
+cfgmod.config = _Cfg()
+sys.modules["backend.config"] = cfgmod
+
+ZUORDNUNG: dict = {}
+kg = types.ModuleType("backend.knowledge_groups")
+def _set_assignment(rel, ids):
+    ids = [g for g in (ids or []) if g]
+    if ids:
+        ZUORDNUNG[str(rel)] = list(ids)
+    else:
+        ZUORDNUNG.pop(str(rel), None)
+    return ids
+kg.set_assignment = _set_assignment
+kg.list_groups = lambda *a, **k: {"groups": []}
+sys.modules["backend.knowledge_groups"] = kg
+
+we = types.ModuleType("backend.web_extractor")
+def _target(groups):
+    return ORDNER_B if (groups and groups[0] == "vertrieb") else ORDNER_A
+we._target_dir_for_groups = _target
+sys.modules["backend.web_extractor"] = we
+
+tools = types.ModuleType("backend.tools"); tools.__path__ = []
+tk = types.ModuleType("backend.tools.knowledge"); tk.PROJECT_ROOT = SAND
+sys.modules["backend.tools"] = tools
+sys.modules["backend.tools.knowledge"] = tk
+
+NOTAUS = {"an": False}
+ra = types.ModuleType("backend.rag_autoindex")
+ra.abgeschaltet = lambda: NOTAUS["an"]
+sys.modules["backend.rag_autoindex"] = ra
+
+import backend.confluence_bindung as cfb  # noqa: E402
+import backend.confluence_abgleich as cfa  # noqa: E402
+
+ECHT_B, ECHT_A = cfb._pfad(), cfa._pfad()
+ECHT_B_VOR = ECHT_B.read_bytes() if ECHT_B.is_file() else None
+ECHT_A_VOR = ECHT_A.read_bytes() if ECHT_A.is_file() else None
+cfb._pfad = lambda: SAND / "confluence_bindung.json"      # type: ignore[assignment]
+cfa._pfad = lambda: SAND / "confluence_abgleich.json"     # type: ignore[assignment]
+for nm, p in [("Einbindung", cfb._pfad()), ("Stand", cfa._pfad()),
+              ("Ziel", _target(["technik"]))]:
+    if SAND not in Path(p).parents:
+        print(f"  \033[31m✗\033[0m Sandkasten greift NICHT fuer {nm} ({p}) – Abbruch")
+        sys.exit(2)
+check("alle Pfade zeigen in den Sandkasten", True)
+
+
+class ConfluenceError(Exception):
+    def __init__(self, status, msg=""):
+        super().__init__(msg); self.status = status
+
+
+class Attrappe:
+    """Bildet ``ConfluenceClient`` nach: gleiche Signaturen, gleiche Antwortform."""
+
+    def __init__(self):
+        # key -> {id: {title, parent, version, body}}
+        self.raeume: dict = {}
+        self.start: dict = {}
+        self.weg: set = set()          # Bereiche, deren Liste scheitert
+        self.page_rufe: list = []
+        self.listen_rufe: list = []
+
+    def seite(self, key, pid, titel, parent="", version=1, body=None):
+        self.raeume.setdefault(key, {})[pid] = {
+            "title": titel, "parent": parent, "version": version,
+            "body": body if body is not None else f"<p>Inhalt {titel} v{version}</p>"}
+
+    def pages_in_space(self, space, limit=500, with_parent=False, with_version=False):
+        self.listen_rufe.append(space)
+        if space in self.weg:
+            raise ConfluenceError(503, "Wartung")
+        aus = []
+        for pid, s in self.raeume.get(space, {}).items():
+            it = {"id": pid, "title": s["title"], "link": f"https://cf/{pid}"}
+            if with_parent:
+                it["parent"] = s["parent"]
+            if with_version:
+                it["version"] = s["version"]
+            aus.append(it)
+        return aus[:limit]
+
+    def space_homepage(self, space):
+        return self.start.get(space, "")
+
+    def get_page(self, page_id=None, title=None, space=None):
+        self.page_rufe.append(page_id)
+        for key, r in self.raeume.items():
+            if page_id in r:
+                s = r[page_id]
+                return {"id": page_id, "title": s["title"],
+                        "version": {"number": s["version"]},
+                        "body": {"storage": {"value": s["body"]}}}
+        raise ConfluenceError(404, "weg")
+
+
+def lauf(c, aktiv=(True, "")):
+    c.page_rufe.clear(); c.listen_rufe.clear()
+    return cfa.lauf(client=c, aktiv=aktiv)
+
+def dateien():
+    return sorted(str(p.relative_to(SAND)) for p in (SAND / "rag").rglob("*.md"))
+
+def stand():
+    return cfa._stand_laden()
+
+
+# ════════════════════════════════════════════════════════════════════════════
+section("1. Aufloesung einer Auswahl (rein rechnerisch)")
+LISTE = [{"id": "1", "parent": ""}, {"id": "2", "parent": "1"}, {"id": "3", "parent": "2"},
+         {"id": "4", "parent": "1"}, {"id": "9", "parent": ""}]
+S = cfa.seiten_der_auswahl
+check("ganz = alle Seiten des Bereichs",
+      S({"ganz": True}, LISTE) == {"1", "2", "3", "4", "9"})
+check("einzelne Seiten zaehlen nur selbst",
+      S({"seiten": ["2"]}, LISTE) == {"2"})
+check("⚠ ein Zweig nimmt ALLES darunter mit (auch Enkel)",
+      S({"seiten": ["1"], "zweige": ["1"]}, LISTE) == {"1", "2", "3", "4"})
+check("⚠ eine Kennung, die es im Bereich nicht gibt, faellt heraus (kein Schmuggel)",
+      S({"seiten": ["2", "777"], "zweige": ["888"]}, LISTE) == {"2"})
+check("start = Startseite des Bereichs",
+      S({"start": True}, LISTE, "9") == {"9"})
+check("start ohne bekannte Startseite liefert nichts (kein Raten)",
+      S({"start": True}, LISTE, "") == set())
+zyklus = [{"id": "a", "parent": "b"}, {"id": "b", "parent": "a"}]
+check("ein Zyklus in den Elternangaben haengt nicht",
+      isinstance(sicher(S, {"seiten": ["a"], "zweige": ["a"]}, zyklus), set))
+
+
+# ════════════════════════════════════════════════════════════════════════════
+section("2. Erster Lauf: Seiten werden Dateien, mit Zuordnung")
+C = Attrappe()
+C.seite("NXDP", "100", "Handbuch")
+C.seite("NXDP", "101", "Kapitel A", parent="100")
+C.seite("NXDP", "102", "Kapitel B", parent="100")
+C.seite("NXDP", "200", "Sonstiges")
+C.seite("OPS", "300", "Betrieb Start")
+C.seite("OPS", "301", "Betrieb Detail", parent="300")
+C.start["OPS"] = "300"
+
+e1 = cfb.hinzufuegen([{"key": "NXDP", "seiten": ["100"], "zweige": ["100"]},
+                      {"key": "OPS", "start": True}], "tester", ["technik"])
+check("(Positivkontrolle) Eintrag angelegt", isinstance(e1, dict), str(e1))
+
+r = lauf(C)
+check("Lauf meldet aktiv und einen Grund", r.get("aktiv") is True and bool(r.get("grund")), str(r))
+check("vier Seiten neu (Zweig 100 = 100,101,102; OPS-Startseite 300)", r.get("neu") == 4, str(r))
+check("Seite AUSSERHALB der Auswahl wird nicht geholt", "200" not in C.page_rufe, str(C.page_rufe))
+check("Unterseite der Startseite ohne Zweig wird nicht geholt", "301" not in C.page_rufe)
+fs = dateien()
+check("vier Dateien liegen im Wissensordner", len(fs) == 4, str(fs))
+check("Ablage unter <ordner>/confluence/<BEREICH>/",
+      all("/confluence/" in f for f in fs) and any("/confluence/NXDP/" in f for f in fs), str(fs))
+inh = next(((SAND / f).read_text(encoding="utf-8") for f in fs if "101_" in f), "")
+check("⚠ der Seitentext steht 1:1 in der Datei (keine KI, kein Entwurf)",
+      "Inhalt Kapitel A v1" in inh, inh[:200])
+check("die Datei nennt ihre Quelle", "Quelle: Confluence" in inh and "NXDP" in inh)
+check("jede Datei traegt die Wissensgruppe des Eintrags",
+      len(ZUORDNUNG) == 4 and all(v == ["technik"] for v in ZUORDNUNG.values()), str(ZUORDNUNG))
+st = stand()
+check("der Stand fuehrt je Seite Version und Datei",
+      st["seiten"].get("101", {}).get("v") == 1 and st["seiten"]["101"].get("datei"), str(st["seiten"].get("101")))
+check("der Stand fuehrt je Eintrag das Ergebnis",
+      (st["eintraege"].get(e1["id"]) or {}).get("seiten") == 4, str(st["eintraege"]))
+check("Stand-Datei ist 0640", oct(cfa._pfad().stat().st_mode & 0o777) == "0o640")
+check("eintrag_staende() liefert das Ergebnis fuer die Liste",
+      (cfa.eintrag_staende().get(e1["id"]) or {}).get("seiten") == 4)
+
+
+# ════════════════════════════════════════════════════════════════════════════
+section("3. Nichts geaendert: kein Inhaltsabruf, nichts geschrieben")
+mt = {f: (SAND / f).stat().st_mtime_ns for f in dateien()}
+r = lauf(C)
+check("⚠ kein einziger Inhaltsabruf", C.page_rufe == [], str(C.page_rufe))
+check("aber die Seitenlisten wurden gelesen (sonst waere nichts erkennbar)",
+      sorted(set(C.listen_rufe)) == ["NXDP", "OPS"], str(C.listen_rufe))
+check("Grund: nichts geaendert", r.get("grund") == "nichts geaendert", str(r))
+check("keine Datei neu geschrieben (mtime gleich)",
+      all((SAND / f).stat().st_mtime_ns == m for f, m in mt.items()))
+
+
+# ════════════════════════════════════════════════════════════════════════════
+section("4. Aenderung, neue Unterseite, Loeschung")
+C.seite("NXDP", "101", "Kapitel A", parent="100", version=2)
+C.seite("NXDP", "103", "Kapitel C (neu)", parent="102")     # Enkel im Zweig
+C.seite("OPS", "302", "Betrieb neu", parent="300")          # KEIN Zweig bei OPS
+del C.raeume["NXDP"]["102"]                                 # in Confluence geloescht
+C.raeume["NXDP"]["103"]["parent"] = "100"                   # (Elternseite ist weg)
+r = lauf(C)
+check("geaenderte Seite wird neu geholt", "101" in C.page_rufe, str(C.page_rufe))
+inh = next(((SAND / f).read_text(encoding="utf-8") for f in dateien() if "101_" in f), "")
+check("und ihr neuer Stand steht in der Datei", "v2" in inh, inh[:120])
+check("⚠ neue Unterseite im KOMPLETTEN Zweig kommt automatisch mit",
+      any("103_" in f for f in dateien()), str(dateien()))
+check("⚠ neue Unterseite OHNE Zweig kommt NICHT mit",
+      not any("302_" in f for f in dateien()))
+check("⚠ in Confluence geloeschte Seite verschwindet aus dem Wissen",
+      not any("102_" in f for f in dateien()), str(dateien()))
+check("und ihre Zuordnung ebenfalls", not any("102_" in k for k in ZUORDNUNG))
+check("die Zaehlung stimmt (1 neu, 1 geaendert, 1 entfernt)",
+      (r.get("neu"), r.get("geaendert"), r.get("entfernt")) == (1, 1, 1), str(r))
+
+
+# ════════════════════════════════════════════════════════════════════════════
+section("5. ⚠ Ein fehlgeschlagener Abruf loescht NICHTS")
+vorher = dateien()
+C.weg.add("NXDP")
+r = lauf(C)
+check("(Positivkontrolle) der Abruf ist wirklich gescheitert", "NXDP" in C.listen_rufe and r.get("fehler", 0) >= 1, str(r))
+check("⚠ alle Dateien des nicht erreichbaren Bereichs bleiben liegen",
+      dateien() == vorher, f"{vorher} -> {dateien()}")
+check("der Eintrag nennt den Fehler",
+      "nicht erreichbar" in ((stand()["eintraege"].get(e1["id"]) or {}).get("fehler") or ""))
+st = stand()
+check("der Stand vergisst die Seiten nicht", "101" in st["seiten"] and "100" in st["seiten"])
+C.weg.clear()
+r = lauf(C)
+check("nach der Wartung laeuft es ohne Neuabruf weiter", C.page_rufe == [] and dateien() == vorher, str(C.page_rufe))
+
+
+# ════════════════════════════════════════════════════════════════════════════
+section("6. Skill aus / Notaus = Pause, nicht Loeschen")
+r = lauf(C, aktiv=(False, "Confluence-Skill ist nicht aktiv"))
+check("Skill aus: kein Abruf", C.listen_rufe == [] and C.page_rufe == [])
+check("Skill aus: nichts geloescht", dateien() == vorher)
+check("Skill aus: Grund genannt, aktiv=False",
+      r.get("aktiv") is False and "nicht aktiv" in r.get("grund", ""), str(r))
+NOTAUS["an"] = True
+r = lauf(C)
+check("Notaus: kein Abruf", C.listen_rufe == [], str(C.listen_rufe))
+NOTAUS["an"] = False
+
+
+# ════════════════════════════════════════════════════════════════════════════
+section("7. Bearbeiten und Loeschen des Eintrags wirken beim naechsten Lauf")
+# OPS abwaehlen, NXDP komplett (ganz) – neue Seite 200 muss kommen, 300 gehen.
+sicher(cfb.aendern, e1["id"], [{"key": "NXDP", "start": True, "ganz": True}], "tester", ["technik"])
+r = lauf(C)
+fs = dateien()
+check("⚠ ganzer Bereich: auch die bisher nicht gewaehlte Seite 200 kommt", any("200_" in f for f in fs), str(fs))
+check("⚠ abgewaehlter Bereich OPS verschwindet aus dem Wissen", not any("/OPS/" in f for f in fs), str(fs))
+check("der leer gewordene Bereichsordner ist abgeraeumt",
+      not (ORDNER_A / "confluence" / "OPS").exists())
+
+# Zweiter Eintrag mit anderer Gruppe fuer DIESELBE Seite: Gruppen vereinigen, EINE Datei.
+e2 = cfb.hinzufuegen([{"key": "NXDP", "seiten": ["200"]}], "tester", ["vertrieb"])
+r = lauf(C)
+treffer = [k for k in ZUORDNUNG if "200_" in k]
+check("dieselbe Seite in zwei Eintraegen ergibt EINE Datei", len(treffer) == 1, str(treffer))
+check("⚠ mit den Gruppen BEIDER Eintraege",
+      len(treffer) == 1 and sorted(ZUORDNUNG[treffer[0]]) == ["technik", "vertrieb"],
+      str({k: ZUORDNUNG[k] for k in treffer}))
+
+cfb.entfernen(e1["id"])
+r = lauf(C)
+fs = dateien()
+check("Eintrag geloescht: seine Seiten verschwinden", not any("101_" in f for f in fs), str(fs))
+check("⚠ aber was ein ANDERER Eintrag abdeckt, bleibt", any("200_" in f for f in fs), str(fs))
+check("und traegt nur noch dessen Gruppe",
+      [v for k, v in ZUORDNUNG.items() if "200_" in k] == [["vertrieb"]], str(ZUORDNUNG))
+cfb.entfernen(e2["id"])
+r = lauf(C)
+check("alle Eintraege geloescht: das Confluence-Wissen ist weg", dateien() == [], str(dateien()))
+check("Grund ohne Eintraege: keine Einbindung", r.get("grund") in ("keine Einbindung", "1 entfernt"), str(r))
+
+
+# ════════════════════════════════════════════════════════════════════════════
+section("8. Deckel je Takt und Altbestand")
+for i in range(cfa.MAX_ABRUFE_JE_LAUF + 7):
+    C.seite("BIG", str(5000 + i), f"Seite {i}")
+e3 = cfb.hinzufuegen([{"key": "BIG", "start": True, "ganz": True}], "tester", ["technik"])
+r = lauf(C)
+check(f"hoechstens {cfa.MAX_ABRUFE_JE_LAUF} Inhaltsabrufe je Takt",
+      len(C.page_rufe) == cfa.MAX_ABRUFE_JE_LAUF, str(len(C.page_rufe)))
+check("der Rest wird als offen gemeldet", r.get("offen") == 7, str(r))
+check("und steht beim Eintrag", (stand()["eintraege"].get(e3["id"]) or {}).get("offen") == 7)
+r = lauf(C)
+check("der naechste Takt holt den Rest", len(C.page_rufe) == 7 and r.get("offen") == 0, str(r))
+cfb.entfernen(e3["id"]); lauf(C)
+
+# Altbestand ohne Gruppen: wird NICHT abgeglichen und nicht geraten.
+import json  # noqa: E402
+cfb._pfad().write_text(json.dumps({"version": 1, "bereiche": [
+    {"id": "alt1", "typ": "space", "key": "NXDP", "name": "Alt", "inkl_unter": True}]}),
+    encoding="utf-8")
+r = lauf(C)
+check("Altbestand ohne Wissensgruppe: kein Abruf, keine Datei",
+      C.page_rufe == [] and dateien() == [], str(C.page_rufe))
+check("und der Grund steht beim Eintrag",
+      "Wissensgruppe" in ((stand()["eintraege"].get("alt1") or {}).get("fehler") or ""))
+
+
+# ════════════════════════════════════════════════════════════════════════════
+section("9. Kaputter Stand: Lauf bricht ab, statt neu anzufangen")
+cfa._pfad().write_text("{ kaputt", encoding="utf-8")
+r = sicher(cfa.lauf, client=C, aktiv=(True, ""))
+check("lauf() wirft nicht", isinstance(r, dict), str(r))
+check("⚠ und meldet den Fehler, statt mit leerem Stand weiterzuarbeiten",
+      isinstance(r, dict) and "fehlgeschlagen" in r.get("grund", ""), str(r))
+check("die kaputte Datei bleibt, wie sie war", cfa._pfad().read_text() == "{ kaputt")
+cfa._pfad().unlink()
+
+
+# ════════════════════════════════════════════════════════════════════════════
+section("10. Verdrahtung im Cron-Auftrag (AST)")
+SCH = (ROOT / "backend" / "scheduler.py").read_text(encoding="utf-8")
+baum = ast.parse(SCH)
+zweig = None
+for n in ast.walk(baum):
+    if isinstance(n, ast.If) and "wissensabgleich" in ast.unparse(n.test):
+        zweig = n
+check("(Positivkontrolle) der Zweig kind == 'wissensabgleich' ist gefunden", zweig is not None)
+# ⚠ NUR DER RUMPF: ein `elif` traegt die folgenden Zweige in `orelse` – der
+# Agenten-Zweig dahinter gehoert nicht zu diesem.
+koerper = ast.Module(body=list(zweig.body), type_ignores=[]) if zweig else None
+rufe = []
+for n in ast.walk(koerper) if koerper else []:
+    if isinstance(n, ast.Attribute) and n.attr == "lauf" and isinstance(n.value, ast.Name):
+        rufe.append((n.lineno, n.col_offset, n.value.id))
+rufe.sort()
+namen = [r[2] for r in rufe]
+check("der Zweig ruft confluence_abgleich.lauf", "confluence_abgleich" in namen, str(namen))
+check("⚠ ERST Confluence, DANN der Index (sonst liegt jede Aenderung einen Takt brach)",
+      "confluence_abgleich" in namen and "rag_autoindex" in namen
+      and namen.index("confluence_abgleich") < namen.index("rag_autoindex"), str(namen))
+check("⚠ der Zweig startet keinen Agenten",
+      koerper is not None and "run_task_headless" not in ast.unparse(koerper)
+      and "run_task_headless" in ast.unparse(zweig))   # Positivkontrolle: der Schnitt trennt wirklich
+check("die Stand-Datei steht in den Sperrlisten",
+      "confluence_abgleich.json" in (ROOT / "backend" / "sandbox.py").read_text(encoding="utf-8"))
+
+
+# ── Aufraeumen ──────────────────────────────────────────────────────────────
+shutil.rmtree(SAND, ignore_errors=True)
+check("⚠ die echte Einbindung ist unveraendert",
+      (ECHT_B.read_bytes() if ECHT_B.is_file() else None) == ECHT_B_VOR)
+check("⚠ der echte Abgleichsstand ist unveraendert",
+      (ECHT_A.read_bytes() if ECHT_A.is_file() else None) == ECHT_A_VOR)
+
+print(f"\n\033[1mErgebnis: {OK}/{OK + FAIL}\033[0m")
+sys.exit(1 if FAIL else 0)

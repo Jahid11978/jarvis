@@ -1,51 +1,61 @@
-"""Dynamische Confluence-Einbindung: welche Confluence-Bereiche das Wissen speisen.
+"""Dynamische Confluence-Einbindung: welche Confluence-Inhalte das Wissen speisen.
 
-WAS ES IST: ein Wissens-Editor waehlt unter ``/wissen`` einen Confluence-Bereich
-aus einem Pulldown; dieser Bereich erscheint danach als **konfigurierter
-Bereich** im Container. Ein weiterer Bereich erscheint als zweiter Eintrag – die
-Liste waechst also durch wiederholte Einzelauswahl.
+WAS ES IST (Vorgabe 2026-09-27): ein Wissens-Editor markiert unter ``/wissen``
+in einem BAUM Confluence-Bereiche und deren Unterbereiche (den Seitenbaum des
+Bereichs) und uebernimmt die Markierung mit EINEM Klick als **einen**
+gespeicherten Eintrag – auch dann, wenn mehrere Bereiche markiert sind. Der
+Eintrag ist danach editierbar (Bereiche/Unterbereiche hinzu oder weg).
+Abgeglichen wird er vom 5-Minuten-Auftrag *Wissensabgleich*
+(``backend/confluence_abgleich.py``) – dieses Modul HAELT nur die Auswahl.
 
-⚠ ES WIRD HIER NOCH NICHTS IMPORTIERT UND NICHTS ABGEGLICHEN (Vorgabe des
-Betreibers 2026-09-21: „Baue das ganze nur bis zu diesem Punkt"). Dieses Modul
-haelt die EINBINDUNG fest, mehr nicht. Der Abgleich – geplant als Teil des
-5-Minuten-Auftrags *Wissensabgleich* – kommt in einem spaeteren Schritt. Die
-Oberflaeche sagt das ausdruecklich: ein Container, der eine Einbindung annimmt
-und stillschweigend nichts tut, ist von einem kaputten nicht zu unterscheiden.
+DIE AUSWAHL JE BEREICH (``auswahl``: Liste, ein Element je Confluence-Bereich)::
 
-``inkl_unter`` IST DIE REICHWEITE, und zwar wie vom Betreiber festgelegt: der
-gewaehlte Eintrag ist die **Basis** des Imports; mit Haken wird zusaetzlich
-alles beruecksichtigt, was diesem Eintrag **untergeordnet** ist (Unterseiten,
-untergeordnete Bereiche – was immer Confluence unter dem Eintrag fuehrt), ohne
-Haken nur die Basis selbst. **Vorgabe ist AN.** Das Feld wird hier nur
-gespeichert; ausgewertet wird es erst vom spaeteren Abgleich.
+    {"key": "NXDP", "name": "...",   # Anzeigename kommt vom SERVER
+     "start": True,                  # der Bereich SELBST ist markiert
+     "ganz": False,                  # Bereich samt ALLEN Unterbereichen
+     "seiten": ["123", ...],         # einzeln markierte Seiten
+     "zweige": ["123", ...]}         # Seiten, deren Zweig KOMPLETT markiert war
 
-⚠ JEDE EINBINDUNG TRAEGT MINDESTENS EINE WISSENSGRUPPE (Vorgabe des
-Betreibers 2026-09-22). Ohne sie waere beim spaeteren Abgleich nicht
-entscheidbar, WOHIN das geholte Wissen gehoert – und die Zuordnung liesse sich
-danach nur noch raten. ``gruppen`` haelt die Kennungen; ob der Anlegende sie
-ueberhaupt beschreiben darf, prueft der Endpunkt (``_wissen_check_groups``) –
-dieses Modul kennt die Wissensgruppen nicht und soll sie nicht kennen.
+⚠ ``ganz`` UND ``zweige`` SIND DIE ANTWORT AUF „UND NEUE SEITEN?" (Entscheidung
+des Betreibers 2026-09-27: „Ja, wenn Zweig komplett"). War ein Knoten samt
+allem darunter markiert, gilt der Zweig als GANZES – eine spaeter in Confluence
+angelegte Unterseite kommt beim Abgleich von selbst dazu. Bei einem teilweise
+markierten Zweig zaehlen nur die gespeicherten Seiten. Ein Blatt ist kein
+Zweig: wer eine einzelne Seite ohne Unterseiten markiert, hat sich fuer DIESE
+Seite entschieden, nicht fuer alles, was irgendwann darunter entsteht.
 
-Die leere Liste wird hier trotzdem ABGEWIESEN, und das ist keine Doppelung des
-Endpunkts, sondern die Schranke an der ABLAGE: ein kuenftiger zweiter Aufrufer
-(Abgleich, Migrationsskript, Werkzeug) kann damit keinen Eintrag anlegen, der
-fachlich unbrauchbar ist. Gemessen wird sie am direkten Modulaufruf.
+``start`` ohne weitere Seiten heisst „nur der Bereich selbst" – das ist die
+Startseite des Bereichs (die Uebersicht, die Confluence beim Klick auf den
+Bereich zeigt). Aufgeloest wird sie erst im Abgleich.
 
-⚠ ALTBESTAND HAT KEIN ``gruppen`` – und bekommt hier auch keines. Ein geratener
-Wert waere eine Zuordnung, die niemand getroffen hat; die Oberflaeche BENENNT
-solche Eintraege stattdessen („keiner Wissensgruppe zugeordnet"). Wer sie
-zuordnen will, loest die Einbindung und bindet neu ein.
+⚠ JEDER EINTRAG TRAEGT MINDESTENS EINE WISSENSGRUPPE (Vorgabe des
+Betreibers 2026-09-22). Ohne sie waere beim Abgleich nicht entscheidbar, WOHIN
+das geholte Wissen gehoert. ``gruppen`` haelt die Kennungen; ob der Anlegende
+sie beschreiben darf, prueft der Endpunkt (``_wissen_check_groups``) – dieses
+Modul kennt die Wissensgruppen nicht und soll sie nicht kennen. Die leere Liste
+wird hier trotzdem ABGEWIESEN: die Schranke sitzt an der ABLAGE, vor jedem
+kuenftigen zweiten Aufrufer.
+
+⚠ ALTBESTAND (``typ: "space"``, bis 2026-09-26): EIN Bereich plus Haken
+``inkl_unter``. Er wird beim LESEN in die neue Form gebracht (``inkl_unter``
+wird zu ``ganz``, sonst ``start``) und erst beim naechsten Bearbeiten in der
+neuen Form geschrieben – eine stille Umschreibung der Ablage beim Lesen waere
+eine Aenderung, die niemand ausgeloest hat. Ein Eintrag ohne ``gruppen`` bekommt
+auch hier KEINE geratene Zuordnung; die Oberflaeche benennt ihn, und der
+Abgleich laesst ihn mit Grund liegen.
 
 ⚠ DIE LISTE IST GLOBAL, NICHT JE BENUTZER. Sie speist die gemeinsame
-Wissensdatenbank – zwei Benutzer koennen nicht verschiedene Einbindungen fuer
-denselben Bestand haben. ``von`` haelt nur fest, WER eingebunden hat (fuer die
-Nachvollziehbarkeit), es ist kein Eigentuemer-Filter.
+Wissensdatenbank. ``von`` haelt nur fest, WER angelegt bzw. zuletzt geaendert
+hat (Nachvollziehbarkeit), es ist kein Eigentuemer-Filter.
 
-⚠ DER ANZEIGENAME KOMMT NICHT AUS DEM REQUEST. ``hinzufuegen`` bekommt ihn vom
-Aufrufer, und der Endpunkt holt ihn aus der Liste der SICHTBAREN Bereiche.
-Koennte ein Client ihn mitschicken, stuende in der Liste ein Name, der zu
-keinem Bereich gehoert – und niemand koennte das erkennen, weil daneben ein
-gueltiger Schluessel steht.
+⚠ DIE ANZEIGENAMEN KOMMEN NICHT AUS DEM REQUEST. Der Endpunkt holt sie aus der
+Liste der SICHTBAREN Bereiche und reicht sie herein; ein ``name`` in der
+Auswahl wird hier ueberschrieben, wenn der Aufrufer ``namen`` mitgibt.
+
+⚠ SEITEN-KENNUNGEN WERDEN HIER NUR IN IHRER FORM GEPRUEFT (Ziffern). Ob eine
+Seite wirklich in ihrem Bereich liegt, entscheidet der Abgleich: er nimmt nur
+Seiten, die in der Seitenliste DIESES Bereichs stehen. Eine untergeschobene
+fremde Kennung laeuft dort ins Leere statt in die Wissensdatenbank.
 
 Bauart 1:1 wie ``ai_mouse_fragen``/``jira_vorlagen``: eine Datei, Kennungen aus
 ``secrets``, Deckel je Feld, atomar geschrieben, 0640.
@@ -64,11 +74,21 @@ from pathlib import Path
 _SPERRE = threading.Lock()
 
 # Deckel. Kein technisches Limit, sondern eine Bedienbarkeitsgrenze: eine Liste
-# mit hundert eingebundenen Bereichen liest niemand mehr – und jeder Eintrag
-# kostet den spaeteren Abgleich einen Durchlauf gegen ein fremdes System.
-MAX_BEREICHE = 50
+# mit hundert gespeicherten Eintraegen liest niemand mehr – und jeder Bereich
+# darin kostet den Abgleich einen Durchlauf gegen ein fremdes System.
+MAX_BEREICHE = 50            # gespeicherte Eintraege
+MAX_SPACES_JE_EINTRAG = 50   # Confluence-Bereiche in EINEM Eintrag
+# Seiten-Kennungen je Eintrag. Die Baumansicht holt je Bereich hoechstens 500
+# Seiten (`wissen_confluence_pages`); 5000 laesst zehn volle Bereiche zu und
+# haelt die Ablage trotzdem lesbar klein.
+MAX_SEITEN_JE_EINTRAG = 5000
 KEY_MAX = 100
 NAME_MAX = 200
+SEITE_MAX = 30
+# Confluence-Seitenkennungen sind Ziffernfolgen (Server/DC wie Cloud). Die FORM
+# wird geprueft, damit kein Pfad, kein CQL-Schnipsel und kein Leerraum in die
+# Ablage kommt – ob die Seite in ihrem Bereich liegt, entscheidet der Abgleich.
+_SEITE_RE = re.compile(r"^[0-9]+$")
 # Deckel fuer die Wissensgruppen einer Einbindung. Die harte Schranke ist
 # `_wissen_check_groups` im Endpunkt (nur Gruppen aus dem eigenen Bereich, und
 # die gibt es wirklich); das hier faengt Muell und Ueberlaenge ab, BEVOR etwas
@@ -189,70 +209,155 @@ def _gruppen_pruefen(gruppen) -> list[str]:
     return aus
 
 
-def liste() -> list[dict]:
-    """Alle eingebundenen Bereiche, in der Reihenfolge des Einbindens."""
-    with _SPERRE:
-        return [dict(b) for b in _laden().get("bereiche", []) if isinstance(b, dict)]
+def _seiten_pruefen(werte, was: str) -> list[str]:
+    """Seitenkennungen normieren (Reihenfolge behalten, Dubletten still weg)."""
+    if werte is None:
+        return []
+    if isinstance(werte, str) or not isinstance(werte, (list, tuple)):
+        raise BindungFehler("Die %s wurden in unerwarteter Form uebergeben." % was)
+    aus: list[str] = []
+    for w in werte:
+        k = str(w if w is not None else "").strip()
+        if not k:
+            continue
+        # ⚠ ABGEWIESEN, NICHT GEKUERZT – eine gekuerzte Kennung ist eine
+        # ANDERE Seite (dieselbe Regel wie beim Bereichs-Schluessel).
+        if len(k) > SEITE_MAX or not _SEITE_RE.match(k):
+            raise BindungFehler("Eine Seitenkennung hat eine unerwartete Form.")
+        if k not in aus:
+            aus.append(k)
+    return aus
 
 
-def ist_eingebunden(key: str) -> bool:
-    k = str(key or "").strip()
-    return bool(k) and any((b.get("key") or "") == k for b in liste())
+def _auswahl_pruefen(auswahl, namen=None) -> list[dict]:
+    """Die markierten Bereiche normieren und pruefen. Wirft ``BindungFehler``.
 
-
-def hinzufuegen(key: str, name: str, inkl_unter: bool, von: str = "",
-                gruppen=None) -> dict:
-    """Einen Bereich einbinden. Wirft ``BindungFehler`` mit Klartext.
-
-    ``name`` ist der ANZEIGENAME und gehoert vom Aufrufer aus der Liste der
-    sichtbaren Bereiche geholt (siehe Modulkopf). Fehlt er, steht der Schluessel
-    da – das ist haesslich, aber keine Falschaussage.
-
-    ``gruppen`` sind die Kennungen der Wissensgruppen, denen der Bereich
-    zugeordnet wird – **mindestens eine**. Der Vorgabewert ``None`` ist kein
-    Entgegenkommen: er laeuft in dieselbe Abweisung wie eine leere Liste, damit
-    ein Aufrufer, der sie schlicht vergisst, LAUT scheitert statt still einen
-    unbrauchbaren Eintrag anzulegen.
+    ``namen`` (optional, ``{key: anzeigename}``) kommt vom Endpunkt aus der
+    Liste der SICHTBAREN Bereiche und gewinnt gegen jeden Namen im Rumpf.
     """
-    # ⚠ DER SCHLUESSEL WIRD NIE GEKUERZT, SONDERN ABGEWIESEN. Eine gekuerzte
-    # Kennung ist eine ANDERE Kennung: sie sieht in der Liste plausibel aus,
-    # zeigt aber auf einen Bereich, den es nicht gibt – der spaetere Abgleich
-    # liefe dauerhaft ins Leere, und niemand koennte das der Eingabe ansehen.
-    # (Der ANZEIGENAME darf gekuerzt werden, er ist reine Darstellung.)
-    k = str(key or "").strip()
-    if not k:
-        raise BindungFehler("Es wurde kein Bereich gewaehlt.")
-    if len(k) > KEY_MAX or not _KEY_RE.match(k):
-        raise BindungFehler("Der Bereichs-Schluessel hat eine unerwartete Form.")
-    # VOR der Sperre: die Pruefung ist rein rechnerisch und soll den Bestand
-    # nicht blockieren, waehrend sie eine Fehleingabe zurueckweist.
+    if isinstance(auswahl, (str, bytes)) or not isinstance(auswahl, (list, tuple)):
+        raise BindungFehler("Die Auswahl wurde in unerwarteter Form uebergeben.")
+    aus: list[dict] = []
+    gesehen: set[str] = set()
+    seiten_gesamt = 0
+    for el in auswahl:
+        if not isinstance(el, dict):
+            raise BindungFehler("Die Auswahl wurde in unerwarteter Form uebergeben.")
+        k = str(el.get("key") or "").strip()
+        if not k:
+            raise BindungFehler("Es wurde kein Bereich gewaehlt.")
+        # ⚠ DER SCHLUESSEL WIRD NIE GEKUERZT, SONDERN ABGEWIESEN. Eine gekuerzte
+        # Kennung ist eine ANDERE Kennung: sie sieht in der Liste plausibel aus,
+        # zeigt aber auf einen Bereich, den es nicht gibt – der Abgleich liefe
+        # dauerhaft ins Leere, und niemand koennte das der Eingabe ansehen.
+        if len(k) > KEY_MAX or not _KEY_RE.match(k):
+            raise BindungFehler("Der Bereichs-Schluessel hat eine unerwartete Form.")
+        if k in gesehen:
+            # Zwei Elemente fuer denselben Bereich waeren zwei Aussagen ueber
+            # dieselbe Reichweite – welche gilt, liesse sich nicht sagen.
+            raise BindungFehler("Ein Bereich steht doppelt in der Auswahl.")
+        gesehen.add(k)
+        seiten = _seiten_pruefen(el.get("seiten"), "Seiten")
+        zweige = _seiten_pruefen(el.get("zweige"), "Zweige")
+        # Ein Zweig ist immer auch eine markierte Seite – sonst waere „der
+        # Knoten samt allem darunter" markiert, der Knoten selbst aber nicht.
+        for z in zweige:
+            if z not in seiten:
+                seiten.append(z)
+        # ``is True``: ein "ja" oder eine 1 aus einer von Hand geschriebenen
+        # Datei ist keine bewusste Entscheidung.
+        ganz = el.get("ganz") is True
+        start = el.get("start") is True or ganz
+        if not (start or seiten):
+            # Ein Bereich ohne jede Markierung ist keine Auswahl, sondern ein
+            # Rest – der Abgleich haette dafuer nichts zu holen.
+            continue
+        seiten_gesamt += len(seiten)
+        name = (namen or {}).get(k) if namen else None
+        if name is None:
+            name = el.get("name")
+        aus.append({"key": k, "name": _kuerzen(name, NAME_MAX) or k,
+                    "start": start, "ganz": ganz,
+                    # Bei ``ganz`` ist die Seitenliste Beiwerk (alles zaehlt) –
+                    # sie wird trotzdem gehalten, damit das Bearbeiten den
+                    # Baum so zeigt, wie er uebernommen wurde.
+                    "seiten": seiten, "zweige": zweige})
+    if not aus:
+        raise BindungFehler("Es wurde kein Bereich markiert.")
+    if len(aus) > MAX_SPACES_JE_EINTRAG:
+        raise BindungFehler("Mehr als %d Bereiche in einem Eintrag sind nicht vorgesehen."
+                            % MAX_SPACES_JE_EINTRAG)
+    if seiten_gesamt > MAX_SEITEN_JE_EINTRAG:
+        raise BindungFehler("Mehr als %d markierte Seiten in einem Eintrag sind nicht "
+                            "vorgesehen." % MAX_SEITEN_JE_EINTRAG)
+    return aus
+
+
+def _anzeigename(auswahl: list[dict]) -> str:
+    """Name des Eintrags: die Bereichsnamen, in der Reihenfolge der Auswahl."""
+    return _kuerzen(" · ".join((a.get("name") or a.get("key") or "") for a in auswahl),
+                    NAME_MAX)
+
+
+def _normiert(b: dict) -> dict:
+    """Einen gespeicherten Eintrag in die aktuelle Form bringen (nur LESEN).
+
+    Altbestand ``typ: "space"`` (EIN Bereich + ``inkl_unter``) wird zu einer
+    Auswahl mit genau diesem Bereich: mit Haken der ganze Bereich (``ganz``),
+    ohne nur der Bereich selbst (``start``). Geschrieben wird dabei NICHTS.
+    """
+    c = dict(b)
+    if not isinstance(c.get("auswahl"), list):
+        k = str(c.get("key") or "").strip()
+        ganz = c.get("inkl_unter") is True
+        c["auswahl"] = ([{"key": k, "name": c.get("name") or k, "start": True,
+                          "ganz": ganz, "seiten": [], "zweige": []}] if k else [])
+    else:
+        c["auswahl"] = [dict(a) for a in c["auswahl"] if isinstance(a, dict)]
+    c.setdefault("name", _anzeigename(c["auswahl"]))
+    return c
+
+
+def liste() -> list[dict]:
+    """Alle gespeicherten Eintraege (normiert), in der Reihenfolge des Anlegens."""
+    with _SPERRE:
+        return [_normiert(b) for b in _laden().get("bereiche", []) if isinstance(b, dict)]
+
+
+def holen(bid: str) -> dict | None:
+    i = str(bid or "").strip()
+    return next((b for b in liste() if b.get("id") == i), None) if i else None
+
+
+def hinzufuegen(auswahl, von: str = "", gruppen=None, namen=None) -> dict:
+    """Die markierten Bereiche als EINEN neuen Eintrag speichern.
+
+    ``gruppen`` sind die Kennungen der Wissensgruppen – **mindestens eine**.
+    Der Vorgabewert ``None`` ist kein Entgegenkommen: er laeuft in dieselbe
+    Abweisung wie eine leere Liste, damit ein Aufrufer, der sie schlicht
+    vergisst, LAUT scheitert statt still einen unbrauchbaren Eintrag anzulegen.
+    """
+    # VOR der Sperre: die Pruefungen sind rein rechnerisch und sollen den
+    # Bestand nicht blockieren, waehrend sie eine Fehleingabe zurueckweisen.
+    aw = _auswahl_pruefen(auswahl, namen)
     gr = _gruppen_pruefen(gruppen)
     with _SPERRE:
         d = _laden()
         bereiche = d["bereiche"]
-        for b in bereiche:
-            if isinstance(b, dict) and (b.get("key") or "") == k:
-                raise BindungFehler("Dieser Bereich ist bereits eingebunden.")
         if len(bereiche) >= MAX_BEREICHE:
             raise BindungFehler(
-                "Es sind bereits %d Bereiche eingebunden – mehr sind nicht vorgesehen."
+                "Es sind bereits %d Eintraege gespeichert – mehr sind nicht vorgesehen."
                 % MAX_BEREICHE)
+        jetzt = datetime.now().isoformat(timespec="seconds")
         eintrag = {
             "id": secrets.token_hex(8),
-            # ``typ`` steht heute immer auf "space". Es steht trotzdem in der
-            # Ablage, weil der Betreiber die Reichweite ausdruecklich offen
-            # formuliert hat („Unterseiten oder Bereiche oder was auch immer"):
-            # kommt spaeter eine Seite als Einhaengepunkt dazu, ist der
-            # Bestand ohne Migration lesbar.
-            "typ": "space",
-            "key": k,
-            "name": _kuerzen(name, NAME_MAX) or k,
-            # ``is True`` und nicht ``bool()``: ein "ja" oder eine 1 aus einer
-            # von Hand geschriebenen Datei ist keine bewusste Entscheidung.
-            "inkl_unter": inkl_unter is True,
-            # Die Zuordnung, ohne die der spaetere Abgleich kein Ziel haette.
+            "typ": "auswahl",
+            "name": _anzeigename(aw),
+            "auswahl": aw,
+            # Die Zuordnung, ohne die der Abgleich kein Ziel haette.
             "gruppen": gr,
-            "angelegt": datetime.now().isoformat(timespec="seconds"),
+            "angelegt": jetzt,
+            "geaendert": jetzt,
             "von": _kuerzen(von, 120),
         }
         bereiche.append(eintrag)
@@ -260,13 +365,40 @@ def hinzufuegen(key: str, name: str, inkl_unter: bool, von: str = "",
         return dict(eintrag)
 
 
-def entfernen(bid: str) -> bool:
-    """Eine Einbindung loesen. True, wenn wirklich etwas entfernt wurde.
+def aendern(bid: str, auswahl, von: str = "", gruppen=None, namen=None) -> dict:
+    """Einen gespeicherten Eintrag bearbeiten (Bereiche/Unterbereiche hinzu
+    oder weg, Wissensgruppen). Kennung und Anlagedatum bleiben; ``von`` haelt
+    fest, wer zuletzt geaendert hat. Wirft ``BindungFehler``; ein unbekannter
+    Eintrag ist ``KeyError`` (der Endpunkt macht daraus 404)."""
+    aw = _auswahl_pruefen(auswahl, namen)
+    gr = _gruppen_pruefen(gruppen)
+    i = str(bid or "").strip()
+    with _SPERRE:
+        d = _laden()
+        for idx, b in enumerate(d["bereiche"]):
+            if isinstance(b, dict) and b.get("id") == i and i:
+                neu = {
+                    "id": i,
+                    "typ": "auswahl",
+                    "name": _anzeigename(aw),
+                    "auswahl": aw,
+                    "gruppen": gr,
+                    "angelegt": b.get("angelegt") or "",
+                    "geaendert": datetime.now().isoformat(timespec="seconds"),
+                    "von": _kuerzen(von, 120) or b.get("von") or "",
+                }
+                d["bereiche"][idx] = neu
+                _speichern(d)
+                return dict(neu)
+    raise KeyError(i)
 
-    Es gibt diesen Weg, WEIL eine Einbindung ohne ihn eine Einbahnstrasse
-    waere: ein versehentlich gewaehlter Bereich bliebe fuer immer stehen. Er
-    ist zugleich der Weg, die Reichweite zu aendern (entfernen, mit anderem
-    Haken neu einbinden) – solange es keinen eigenen Umschalter gibt.
+
+def entfernen(bid: str) -> bool:
+    """Einen Eintrag loeschen. True, wenn wirklich etwas entfernt wurde.
+
+    Das Wissen, das der Abgleich aus ihm geholt hat, verschwindet beim
+    naechsten Abgleich wieder – es sei denn, ein anderer Eintrag deckt
+    dieselben Seiten ab (``confluence_abgleich``).
     """
     i = str(bid or "").strip()
     if not i:

@@ -1,10 +1,12 @@
 #!/usr/bin/env node
-/* Waechter fuer die dynamische Confluence-Einbindung – der ECHTE Renderer.
+/* Waechter fuer die dynamische Confluence-Einbindung – der ECHTE Renderer,
+ * Baum-Fassung (Vorgabe 2026-09-27).
  *
  * Gefahren wird `frontend/js/wissen.js` unveraendert gegen die ECHTE
  * `wissen.html` und das ECHTE `i18n.js`; gestellt sind nur die Endpunkte.
- * Ob der Container ERSCHEINT, ob eine Auswahl WIRKLICH einbindet und was dabei
- * im Rumpf landet, kann eine Quelltext-Pruefung nicht beantworten.
+ * Ob [+] wirklich markiert, [-] wirklich zuruecknimmt, der Name NICHTS am
+ * Haken aendert und was beim Uebernehmen im Rumpf landet, kann eine
+ * Quelltext-Pruefung nicht beantworten – hier wird GEKLICKT.
  *
  * ⚠ jsdom fehlt -> Exit 2. "Konnte nicht laufen" darf nie wie "bestanden"
  * aussehen (Register).
@@ -27,13 +29,12 @@ try {
 if (!JSDOM) { console.error('jsdom nicht gefunden – NICHT PRUEFBAR'); process.exit(2); }
 
 let OK = 0, FAIL = 0, bilanz = false;
-// Registriert FRUEH: ein Absturz mitten im Lauf darf nicht als Erfolg enden.
 process.on('exit', () => {
     if (!bilanz) { console.error('\n\x1b[31mABGEBROCHEN – keine Bilanz\x1b[0m'); process.exitCode = 1; }
 });
 const wach = setTimeout(() => {
     console.error('\n\x1b[31mZEITLIMIT – haengt\x1b[0m'); bilanz = true; process.exit(1);
-}, 40000);
+}, 60000);
 
 function section(t) { console.log(`\n\x1b[1m${t}\x1b[0m`); }
 function check(d, c, i) {
@@ -47,58 +48,84 @@ const I18N = fs.readFileSync(path.join(ROOT, 'frontend/js/i18n.js'), 'utf8');
 const WJS  = fs.readFileSync(path.join(ROOT, 'frontend/js/wissen.js'), 'utf8');
 const ICO  = fs.readFileSync(path.join(ROOT, 'frontend/js/icons.js'), 'utf8');
 
-/* Baut eine Seite mit dem ECHTEN Markup und dem ECHTEN wissen.js.
- * `spaces`  – was /api/wissen/confluence/spaces liefert
- * `bindung` – was /api/wissen/confluence/bindung liefert
- * Gemerkt werden alle Aufrufe, damit die Pruefungen den RUMPF messen koennen. */
+const SPACES = [
+    { key: 'NEXUS', name: 'NEXUS Dokumentation', type: 'global' },
+    { key: 'OPS', name: 'Betrieb', type: 'global' },
+    { key: 'LEER', name: 'Leerer Bereich', type: 'global' },
+];
+/* Seitenbaeume in der ECHTEN Antwortform von /api/wissen/confluence/pages
+   ({ok, count, pages:[{id,title,link,parent}]}). NEXUS:
+     1 Handbuch
+       2 Kapitel A
+         3 Kapitel A.1
+       4 Kapitel B            */
+const PAGES = {
+    NEXUS: [{ id: '1', title: 'Handbuch', parent: '' }, { id: '2', title: 'Kapitel A', parent: '1' },
+            { id: '3', title: 'Kapitel A.1', parent: '2' }, { id: '4', title: 'Kapitel B', parent: '1' }],
+    OPS: [{ id: '10', title: 'Start', parent: '' }, { id: '11', title: 'Detail', parent: '10' }],
+    LEER: [],
+};
+
 async function seite(opt) {
-    const o = Object.assign({ spaces: [], bindung: { ok: true, aktiv: true, bereiche: [] },
+    const o = Object.assign({ spaces: SPACES, bindung: { ok: true, aktiv: true, bereiche: [] },
                              groups: [{ id: 'g1', name: 'Technik', color: '#888', folders: ['data/rag/x'] }] },
                            opt || {});
     const dom = new JSDOM(HTML, { url: 'https://example.invalid/wissen', runScripts: 'outside-only' });
     const win = dom.window;
     win.localStorage.setItem('jarvis_token', 'T');
     const rufe = [];
+    const neuerEintrag = (body, id) => {
+        const namen = {}; o.spaces.forEach(s => { namen[s.key] = s.name; });
+        const aw = (body.auswahl || []).map(a => Object.assign({}, a, { name: namen[a.key] || a.key }));
+        return { id: id, typ: 'auswahl', name: aw.map(a => a.name).join(' · '), auswahl: aw,
+                 gruppen: body.groups || [],
+                 gruppen_info: (body.groups || []).map(gid => {
+                     const g = o.groups.filter(x => x.id === gid)[0];
+                     return { id: gid, name: g ? g.name : gid, color: g ? g.color : '' };
+                 }), abgleich: null };
+    };
     win.fetch = function (url, init) {
         const pfad = String(url).split('?')[0];
+        const q = String(url).split('?')[1] || '';
         const m = ((init && init.method) || 'GET').toUpperCase();
         let body = null;
         try { body = init && init.body ? JSON.parse(init.body) : null; } catch (e) { body = init.body; }
-        rufe.push({ pfad, m, body });
+        rufe.push({ pfad, q, m, body });
         const j = (d) => Promise.resolve({ status: 200, ok: true, json: () => Promise.resolve(d) });
         if (pfad === '/api/wissen/scope')
-            /* ⚠ VORGABE IST EINE Gruppe – `groupBoxes` hakt sie dann von selbst
-               an (Bestandsverhalten: bei genau einer gibt es nichts zu waehlen).
-               Waere der Vorgabe-Aufbau zweigruppig, waere der Uebernehmen-Knopf
-               in JEDEM Bestandsfall gesperrt und die Pruefungen darunter
-               maessen etwas anderes, als sie behaupten. Der Fall MIT Auswahl
-               wird in Abschnitt 5 ausdruecklich hergestellt. */
-            return j({ ok: true, user: 'a.bender', is_editor: false,
-                       groups: o.groups,
+            /* ⚠ VORGABE IST EINE Gruppe – `groupBoxes` hakt sie dann von selbst an.
+               Der zweigruppige Fall wird eigens hergestellt. */
+            return j({ ok: true, user: 'a.bender', is_editor: false, groups: o.groups,
                        folders: [{ path: 'data/rag/x', name: 'x', display: 'x', root: 'data/rag/x', depth: 0 }] });
         if (pfad === '/api/wissen/confluence/spaces')
             return o.spacesFehler ? Promise.reject(new Error('weg'))
                                   : j({ ok: true, configured: true, spaces: o.spaces });
+        if (pfad === '/api/wissen/confluence/pages') {
+            const key = decodeURIComponent((q.match(/space=([^&]*)/) || [])[1] || '');
+            if (o.pagesFehler && o.pagesFehler.indexOf(key) !== -1) return j({ ok: false, error: 'kaputt' });
+            const p = (o.pages || PAGES)[key] || [];
+            return j({ ok: true, count: p.length, pages: p });
+        }
         if (pfad === '/api/wissen/confluence/bindung') {
             if (m === 'GET') return j(o.bindung);
             if (m === 'POST') {
                 if (o.postFehler) return j({ ok: false, error: 'Bereich nicht sichtbar/erlaubt.' });
-                const sp = o.spaces.filter(s => s.key === body.key)[0] || { name: body.key };
-                const neu = { id: 'id-' + body.key, typ: 'space', key: body.key,
-                              name: sp.name, inkl_unter: body.inkl_unter === true,
-                              gruppen: body.groups || [],
-                              gruppen_info: (body.groups || []).map(function (id) {
-                                  const g = o.groups.filter(x => x.id === id)[0];
-                                  return { id: id, name: g ? g.name : id, color: g ? g.color : '' };
-                              }) };
+                const neu = neuerEintrag(body, 'id-' + (o.bindung.bereiche.length + 1));
                 o.bindung.bereiche = (o.bindung.bereiche || []).concat([neu]);
                 return j({ ok: true, bereich: neu, bereiche: o.bindung.bereiche });
             }
         }
-        if (pfad.indexOf('/api/wissen/confluence/bindung/') === 0 && m === 'DELETE') {
+        if (pfad.indexOf('/api/wissen/confluence/bindung/') === 0) {
             const id = decodeURIComponent(pfad.split('/').pop());
-            o.bindung.bereiche = (o.bindung.bereiche || []).filter(b => b.id !== id);
-            return j({ ok: true, bereiche: o.bindung.bereiche });
+            if (m === 'DELETE') {
+                o.bindung.bereiche = (o.bindung.bereiche || []).filter(b => b.id !== id);
+                return j({ ok: true, bereiche: o.bindung.bereiche });
+            }
+            if (m === 'PUT') {
+                const neu = neuerEintrag(body, id);
+                o.bindung.bereiche = o.bindung.bereiche.map(b => b.id === id ? neu : b);
+                return j({ ok: true, bereich: neu, bereiche: o.bindung.bereiche });
+            }
         }
         if (pfad === '/api/wissen/files')   return j({ ok: true, files: [] });
         if (pfad === '/api/wissen/pending') return j({ ok: true, items: [] });
@@ -109,44 +136,39 @@ async function seite(opt) {
     win.eval(ICO);
     win.eval(I18N);
     win.eval(WJS);
-    /* ⚠ NICHT SELBST DISPATCHEN. Direkt nach `new JSDOM` steht `readyState` auf
-       'loading' – jsdom feuert DOMContentLoaded gleich darauf SELBST. Ein
-       zusaetzlicher Dispatch ist dann der ZWEITE: `init()` laeuft doppelt, jeder
-       Listener haengt zweifach, und ein einziger Klick erzeugt zwei Aufrufe.
-       Genau das hat hier einen Doppel-POST vorgetaeuscht, den es nicht gibt. */
+    /* ⚠ NICHT SELBST DISPATCHEN – jsdom feuert DOMContentLoaded selbst; ein
+       zweiter Dispatch haengt jeden Listener doppelt (Register). */
     if (win.document.readyState === 'loading') {
         await new Promise(r => win.document.addEventListener('DOMContentLoaded', r, { once: true }));
     } else {
         win.document.dispatchEvent(new win.Event('DOMContentLoaded', { bubbles: true }));
     }
     await warten(60);
-    return { win, doc: win.document, rufe, o, zu: () => win.close() };
+    const doc = win.document;
+    const sp = (key) => doc.querySelector('#wi-cfb-tree li.wi-cfb-sp[data-key="' + key + '"]');
+    const pg = (id) => doc.querySelector('#wi-cfb-tree li.wi-cfb-pg[data-id="' + id + '"]');
+    const kind = (li, k) => li ? Array.prototype.filter.call(li.children, c => c.classList.contains(k))[0] || null : null;
+    const node = (li) => kind(li, 'wi-cf-node');
+    const cb = (li) => { const n = node(li); return n ? n.querySelector('.wi-cfb-cb') : null; };
+    const tog = (li) => { const n = node(li); return n ? n.querySelector('.wi-cfb-tog') : null; };
+    const nm = (li) => { const n = node(li); return n ? n.querySelector('.wi-cfb-nm') : null; };
+    const offen = (li) => { const u = kind(li, 'wi-cf-kids'); return !!(u && u.classList.contains('open')); };
+    const posts = () => rufe.filter(r => r.pfad.indexOf('/api/wissen/confluence/bindung') === 0 && (r.m === 'POST' || r.m === 'PUT'));
+    const klick = async (el) => { if (!el) throw new Error('Element fehlt'); el.click(); await warten(40); };
+    return { win, doc, rufe, o, sp, pg, cb, tog, nm, offen, posts, klick, zu: () => win.close() };
 }
-
-const SPACES = [
-    { key: 'NEXUS', name: 'NEXUS Dokumentation', type: 'global' },
-    { key: 'OPS', name: 'Betrieb', type: 'global' },
-];
 
 (async () => {
 
 // ════════════════════════════════════════════════════════════════════════
 section('1. Sichtbarkeit – nur bei aktivem UND konfiguriertem Skill');
 {
-    const s = await seite({ spaces: SPACES });
+    const s = await seite();
     const sec = s.doc.getElementById('wi-sec-cfbind');
-    check('Container vorhanden', !!sec);
-    check('bei aktivem Skill SICHTBAR', sec && sec.style.display !== 'none',
-          sec ? `display=${sec.style.display}` : '');
-    // Positivkontrolle: die Seite ist ueberhaupt initialisiert
-    check('(Positivkontrolle) die App ist geladen',
-          !s.doc.getElementById('wi-app').classList.contains('hidden'));
-    // ⚠ Messaufbau-Kontrolle: laeuft init() doppelt, haengt JEDER Listener
-    // zweifach und ein Klick erzeugt zwei Aufrufe – das saehe wie ein
-    // Codefehler aus und ist keiner.
+    check('bei aktivem Skill SICHTBAR', sec && sec.style.display !== 'none');
+    check('(Positivkontrolle) die App ist geladen', !s.doc.getElementById('wi-app').classList.contains('hidden'));
     check('(Positivkontrolle) init() lief GENAU EINMAL',
-          s.rufe.filter(r => r.pfad === '/api/wissen/scope').length === 1,
-          `${s.rufe.filter(r => r.pfad === '/api/wissen/scope').length}x scope`);
+          s.rufe.filter(r => r.pfad === '/api/wissen/scope').length === 1);
     s.zu();
 }
 for (const [was, b] of [
@@ -154,368 +176,373 @@ for (const [was, b] of [
     ['nicht konfiguriert', { ok: true, aktiv: false, skill_aktiv: true, configured: false, bereiche: [] }],
     ['kein Wissensbereich (403)', { ok: false, error: 'x' }],
 ]) {
-    const s = await seite({ spaces: SPACES, bindung: b });
+    const s = await seite({ bindung: b });
     const sec = s.doc.getElementById('wi-sec-cfbind');
-    check(`${was} -> Container VERBORGEN`, sec && sec.style.display === 'none',
-          sec ? `display=${sec.style.display}` : '');
+    check(`${was} -> Container VERBORGEN`, sec && sec.style.display === 'none');
     s.zu();
 }
 
 // ════════════════════════════════════════════════════════════════════════
-section('2. Pulldown – Angebot und Grundzustand');
+section('2. Baum – Grundzustand');
 {
-    const s = await seite({ spaces: SPACES });
-    const sel = s.doc.getElementById('wi-cfb-space');
-    check('Pulldown gefuellt', sel && sel.options.length === 3,
-          sel ? `${sel.options.length} Eintraege` : 'fehlt');
-    check('erste Zeile ist der Platzhalter (leerer Wert)', sel && sel.options[0].value === '');
-    check('Bereich steht mit Name UND Schluessel da',
-          sel && /NEXUS Dokumentation \(NEXUS\)/.test(sel.options[1].textContent),
-          sel ? sel.options[1].textContent : '');
-    check('⚠ Kaestchen "inkl. Unterseiten" ist ANGEHAKT',
-          s.doc.getElementById('wi-cfb-sub').checked === true);
-    check('Liste meldet: noch nichts eingebunden',
-          /Noch kein Bereich/.test(s.doc.getElementById('wi-cfb-list').textContent));
-    s.zu();
-}
-{
-    // ⚠ Bereits eingebundene fallen aus dem Angebot – sonst laeuft die Auswahl
-    // in ein "ist bereits eingebunden", und niemand kann sich das erklaeren.
-    const s = await seite({ spaces: SPACES, bindung: { ok: true, aktiv: true,
-        bereiche: [{ id: 'a', key: 'NEXUS', name: 'NEXUS Dokumentation', inkl_unter: true }] } });
-    const sel = s.doc.getElementById('wi-cfb-space');
-    const werte = Array.from(sel.options).map(o => o.value);
-    check('⚠ eingebundener Bereich wird NICHT erneut angeboten',
-          werte.indexOf('NEXUS') === -1, werte.join(','));
-    check('der freie Bereich bleibt im Angebot', werte.indexOf('OPS') !== -1);
-    s.zu();
-}
-{
-    const s = await seite({ spaces: SPACES, bindung: { ok: true, aktiv: true, bereiche: [
-        { id: 'a', key: 'NEXUS', name: 'N', inkl_unter: true },
-        { id: 'b', key: 'OPS', name: 'O', inkl_unter: false }] } });
-    const sel = s.doc.getElementById('wi-cfb-space');
-    check('alles eingebunden -> Pulldown gesperrt MIT Grund',
-          sel.disabled === true && /bereits eingebunden/.test(sel.options[0].textContent),
-          sel.options[0].textContent);
+    const s = await seite();
+    check('⚠ kein Pulldown mehr, kein Kaestchen "inkl. Unterseiten"',
+          !s.doc.querySelector('#wi-sec-cfbind select') && !s.doc.getElementById('wi-cfb-sub'));
+    check('alle Bereiche stehen im Baum', s.doc.querySelectorAll('#wi-cfb-tree li.wi-cfb-sp').length === 3);
+    const t0 = s.tog(s.sp('NEXUS'));
+    check('⚠ hinter dem Namen steht [+]', t0 && t0.textContent === '[+]', t0 ? t0.textContent : 'fehlt');
+    const n0 = s.nm(s.sp('NEXUS'));
+    check('[+] steht HINTER dem Namen (im DOM nach ihm)',
+          n0 && t0 && (n0.compareDocumentPosition(t0) & s.win.Node.DOCUMENT_POSITION_FOLLOWING));
+    check('Name und Schluessel stehen da', /NEXUS Dokumentation/.test(n0.textContent) && /\(NEXUS\)/.test(n0.textContent));
+    check('nichts markiert, nichts geladen',
+          s.doc.querySelectorAll('#wi-cfb-tree .wi-cfb-cb:checked').length === 0
+          && s.rufe.filter(r => r.pfad === '/api/wissen/confluence/pages').length === 0);
+    const btn = s.doc.getElementById('wi-cfb-add');
+    check('⚠ ohne Markierung ist der Knopf GESPERRT mit Grund',
+          btn.disabled === true && /markieren|tick/i.test(btn.title), btn.title);
+    check('Liste meldet: noch nichts gespeichert', /Noch kein Eintrag/.test(s.doc.getElementById('wi-cfb-list').textContent));
+    check('der Hinweis zum Abgleich steht da, die alte Warnung nicht',
+          /Wissensabgleich/.test(s.doc.getElementById('wi-sec-cfbind').textContent)
+          && !/produktiv/.test(s.doc.getElementById('wi-sec-cfbind').textContent));
     s.zu();
 }
 {
     const s = await seite({ spaces: [] });
-    const sel = s.doc.getElementById('wi-cfb-space');
     check('keine Bereiche sichtbar -> Container bleibt da und SAGT es',
-          s.doc.getElementById('wi-sec-cfbind').style.display !== 'none'
-          && sel.disabled === true && /Keine Confluence-Bereiche/.test(sel.options[0].textContent),
-          sel.options[0].textContent);
+          /Keine Confluence-Bereiche/.test(s.doc.getElementById('wi-cfb-tree').textContent));
     s.zu();
 }
 {
-    const s = await seite({ spaces: SPACES, spacesFehler: true });
-    const sel = s.doc.getElementById('wi-cfb-space');
+    const s = await seite({ spacesFehler: true });
     check('⚠ Abruf der Bereiche gescheitert -> kein ewiges "Lade…"',
-          sel.disabled === true && !/Lade/.test(sel.options[0].textContent),
-          sel.options[0].textContent);
+          !/Lade/.test(s.doc.getElementById('wi-cfb-tree').textContent),
+          s.doc.getElementById('wi-cfb-tree').textContent);
     s.zu();
 }
 
 // ════════════════════════════════════════════════════════════════════════
-section('3. Der KNOPF bindet ein – die Auswahl gibt ihn nur frei (Vorgabe 2026-09-21)');
+section('3. [+] klappt auf UND markiert samt allem darunter');
 {
-    // ⚠ DER GEMELDETE FALL: ein Wechsel im Pulldown darf NICHTS einbinden.
-    // Ein <select> feuert `change` bei Tastatur-Navigation fuer JEDEN
-    // Pfeilschritt - wer durch die Liste geht, haette sonst jeden ueberflogenen
-    // Bereich eingebunden, jeden als eigenen Serveraufruf.
-    const s = await seite({ spaces: SPACES });
-    const sel = s.doc.getElementById('wi-cfb-space');
-    const btn = s.doc.getElementById('wi-cfb-add');
-    check('Knopf vorhanden', !!btn);
-    check('⚠ ohne Auswahl ist er GESPERRT', btn && btn.disabled === true);
-    check('⚠ und sagt im title, was zu tun ist',
-          btn && /auswählen|choose/i.test(btn.title || ''), btn ? `title="${btn.title}"` : '');
+    const s = await seite();
+    const li = s.sp('NEXUS');
+    await s.klick(s.tog(li));
+    check('Seitenbaum genau EINMAL geholt',
+          s.rufe.filter(r => r.pfad === '/api/wissen/confluence/pages').length === 1);
+    check('⚠ der Bereich ist aufgeklappt', s.offen(li));
+    check('⚠ aus [+] wird [-]', s.tog(li).textContent === '[-]', s.tog(li).textContent);
+    check('⚠ der Bereich SELBST ist markiert', s.cb(li).checked === true);
+    const alle = li.querySelectorAll('li.wi-cfb-pg .wi-cfb-cb');
+    check('⚠ und ALLE Unterbereiche (auch der Enkel)',
+          alle.length === 4 && Array.prototype.every.call(alle, x => x.checked), `${alle.length}`);
+    check('Unterbereiche mit eigenen Kindern tragen selbst [+]',
+          s.tog(s.pg('1')) && s.tog(s.pg('2')) && !s.tog(s.pg('3')) && !s.tog(s.pg('4')));
+    check('⚠ Markieren allein speichert NICHTS', s.posts().length === 0);
+    check('der Knopf ist frei (eine Gruppe ist vorbelegt)', s.doc.getElementById('wi-cfb-add').disabled === false);
+    check('der Zaehler nennt einen markierten Bereich',
+          /1 Bereich/.test(s.doc.getElementById('wi-cfb-marked').textContent));
 
-    sel.value = 'NEXUS';
-    sel.dispatchEvent(new s.win.Event('change', { bubbles: true }));
-    await warten(60);
-    check('⚠ der Wechsel im Pulldown bindet NICHTS ein',
-          s.rufe.filter(r => r.pfad === '/api/wissen/confluence/bindung' && r.m === 'POST').length === 0,
-          JSON.stringify(s.rufe.filter(r => r.m === 'POST')));
-    check('⚠ er GIBT den Knopf frei', btn.disabled === false);
-    check('und der title ist dann leer (kein unerklaerter Tooltip)', !btn.title);
-    check('nichts in der Liste, solange nicht uebernommen wurde',
-          s.doc.querySelectorAll('#wi-cfb-list .wi-item').length === 0);
+    section('4. [-] klappt zu UND nimmt die Markierung darunter zurueck');
+    await s.klick(s.tog(li));
+    check('⚠ zugeklappt', !s.offen(li));
+    check('⚠ aus [-] wird wieder [+]', s.tog(li).textContent === '[+]');
+    check('⚠ alle Unterbereiche sind NICHT mehr markiert',
+          li.querySelectorAll('li.wi-cfb-pg .wi-cfb-cb:checked').length === 0);
+    check('⚠ der Bereich selbst BLEIBT markiert', s.cb(li).checked === true);
+    check('kein zweiter Abruf des Seitenbaums',
+          s.rufe.filter(r => r.pfad === '/api/wissen/confluence/pages').length === 1);
 
-    // Jetzt der Klick – DAS bindet ein.
-    btn.click();
-    await warten(60);
-    const post = s.rufe.filter(r => r.pfad === '/api/wissen/confluence/bindung' && r.m === 'POST');
-    check('genau EIN POST nach dem Klick', post.length === 1, `${post.length}`);
-    check('der gewaehlte Schluessel geht mit', post[0] && post[0].body.key === 'NEXUS');
-    check('⚠ inkl_unter faehrt den Haken mit (angehakt -> true)',
-          post[0] && post[0].body.inkl_unter === true, JSON.stringify(post[0] && post[0].body));
-    check('⚠ kein Benutzername im Rumpf (kommt aus der Anmeldung)',
-          post[0] && !('user' in post[0].body) && !('von' in post[0].body));
-    check('⚠ kein Anzeigename im Rumpf (kommt vom Server)',
-          post[0] && !('name' in post[0].body));
-    const liste = s.doc.getElementById('wi-cfb-list');
-    check('der Bereich erscheint als konfigurierter Bereich',
-          /NEXUS Dokumentation/.test(liste.textContent), liste.textContent.trim());
-    check('die Reichweite steht als WORT dabei',
-          /mit Untergeordnetem/.test(liste.textContent), liste.textContent.trim());
-    check('das Pulldown steht wieder auf dem Platzhalter', sel.value === '');
-    check('⚠ und der Knopf ist danach wieder gesperrt (nichts gewaehlt)',
-          btn.disabled === true);
+    section('5. Der NAME klappt nur auf/zu – die Haken bleiben');
+    await s.klick(s.nm(li));
+    check('⚠ Name: aufgeklappt', s.offen(li));
+    check('⚠ Name: die Unterbereiche wurden NICHT markiert',
+          li.querySelectorAll('li.wi-cfb-pg .wi-cfb-cb:checked').length === 0);
+    check('Name: der Bereich bleibt, wie er war (markiert)', s.cb(li).checked === true);
+    check('[-] zeigt den offenen Zustand', s.tog(li).textContent === '[-]');
+    // Einen Unterbereich einzeln markieren, dann per Name zuklappen
+    await s.klick(s.cb(s.pg('4')));
+    check('⚠ ein Haken wirkt NUR auf seinen Eintrag',
+          s.cb(s.pg('4')).checked && !s.cb(s.pg('1')).checked && !s.cb(s.pg('2')).checked);
+    check('ueber dem gewaehlten Unterbereich steht ein HALBER Haken', s.cb(s.pg('1')).indeterminate === true);
+    await s.klick(s.nm(li));
+    check('⚠ Name: zugeklappt', !s.offen(li));
+    check('⚠ Name: die Haken der Unterbereiche wurden dabei NICHT veraendert',
+          s.cb(s.pg('4')).checked === true && s.cb(li).checked === true);
+    // Unmarkierter Bereich per Name: nichts wird markiert
+    await s.klick(s.nm(s.sp('OPS')));
+    check('Name an einem unmarkierten Bereich: auf, aber nichts markiert',
+          s.offen(s.sp('OPS')) && s.sp('OPS').querySelectorAll('.wi-cfb-cb:checked').length === 0);
+    check('⚠ nichts von alledem hat gespeichert', s.posts().length === 0);
+    s.zu();
+}
 
-    // Zweite Uebernahme -> zweiter konfigurierter Bereich (so lautet die Vorgabe)
-    s.doc.getElementById('wi-cfb-sub').checked = false;
-    sel.value = 'OPS';
-    sel.dispatchEvent(new s.win.Event('change', { bubbles: true }));
-    await warten(20);
-    btn.click();
-    await warten(60);
-    const post2 = s.rufe.filter(r => r.pfad === '/api/wissen/confluence/bindung' && r.m === 'POST');
-    check('⚠ ein weiterer Bereich wird ZWEITER Eintrag (nicht Ersatz)',
-          s.doc.querySelectorAll('#wi-cfb-list .wi-item').length === 2,
-          `${s.doc.querySelectorAll('#wi-cfb-list .wi-item').length}`);
-    check('⚠ Haken AUS -> inkl_unter false', post2[1] && post2[1].body.inkl_unter === false,
-          JSON.stringify(post2[1] && post2[1].body));
-    check('die engere Reichweite steht ebenfalls als Wort da',
-          /nur dieser Eintrag/.test(s.doc.getElementById('wi-cfb-list').textContent));
+// ════════════════════════════════════════════════════════════════════════
+section('5b. Ein Haken an einem Eintrag MIT Unterbereichen zieht nichts mit');
+{
+    // ⚠ Mit einem BLATT ist die Zusage nicht messbar – es hat nichts unter
+    // sich (Gegenprobe "ein Haken zieht die Unterbereiche mit" blieb stumm).
+    const s = await seite();
+    await s.klick(s.nm(s.sp('NEXUS')));
+    check('(Positivkontrolle) Kapitel A hat einen Unterbereich', !!s.pg('3') && !!s.tog(s.pg('2')));
+    await s.klick(s.cb(s.pg('2')));
+    check('⚠ Haken an Kapitel A: nur Kapitel A', s.cb(s.pg('2')).checked && !s.cb(s.pg('3')).checked);
+    await s.klick(s.cb(s.sp('NEXUS')));
+    check('⚠ Haken am Bereich: nur der Bereich, keine Unterbereiche dazu',
+          s.cb(s.sp('NEXUS')).checked && !s.cb(s.pg('1')).checked && !s.cb(s.pg('4')).checked);
+    await s.klick(s.cb(s.pg('2')));
+    check('Haken wieder weg: auch nur Kapitel A', !s.cb(s.pg('2')).checked && !s.cb(s.pg('3')).checked);
+    s.zu();
+}
+
+// ════════════════════════════════════════════════════════════════════════
+section('6. [+] an einer Seite markiert nur deren Zweig');
+{
+    const s = await seite();
+    await s.klick(s.nm(s.sp('NEXUS')));              // nur aufklappen
+    await s.klick(s.tog(s.pg('2')));                  // [+] an "Kapitel A"
+    check('Kapitel A und A.1 markiert', s.cb(s.pg('2')).checked && s.cb(s.pg('3')).checked);
+    check('⚠ Geschwister und Eltern NICHT', !s.cb(s.pg('4')).checked && !s.cb(s.pg('1')).checked
+          && !s.cb(s.sp('NEXUS')).checked);
+    await s.klick(s.tog(s.pg('2')));                  // [-]
+    check('[-] an der Seite nimmt nur ihren Zweig zurueck',
+          s.cb(s.pg('2')).checked && !s.cb(s.pg('3')).checked);
+    s.zu();
+}
+
+// ════════════════════════════════════════════════════════════════════════
+section('7. Uebernehmen: EIN Eintrag, die Auswahl im Rumpf');
+{
+    const s = await seite();
+    await s.klick(s.tog(s.sp('NEXUS')));              // ganzer Bereich
+    await s.klick(s.nm(s.sp('OPS')));                 // OPS aufklappen, nichts markieren
+    await s.klick(s.cb(s.pg('11')));                  // nur Detail
+    await s.klick(s.cb(s.sp('LEER')));                // leerer Bereich, nur der Bereich selbst
+    check('drei Bereiche markiert', /3 Bereich/.test(s.doc.getElementById('wi-cfb-marked').textContent),
+          s.doc.getElementById('wi-cfb-marked').textContent);
+    await s.klick(s.doc.getElementById('wi-cfb-add'));
+    const p = s.posts();
+    check('⚠ genau EIN Aufruf fuer drei Bereiche (ein gemeinsamer Eintrag)', p.length === 1 && p[0].m === 'POST', `${p.length}`);
+    const aw = (p[0] && p[0].body.auswahl) || [];
+    const a = (k) => aw.filter(x => x.key === k)[0] || {};
+    check('alle drei Bereiche in DERSELBEN Auswahl', aw.length === 3, JSON.stringify(aw));
+    check('⚠ komplett markierter Bereich geht als ganz', a('NEXUS').ganz === true && a('NEXUS').start === true,
+          JSON.stringify(a('NEXUS')));
+    check('⚠ komplett markierte Zweige (mit Kindern) stehen in zweige, Blaetter nicht',
+          JSON.stringify((a('NEXUS').zweige || []).slice().sort()) === '["1","2"]', JSON.stringify(a('NEXUS').zweige));
+    check('⚠ einzeln markierte Seite: nur sie, kein Zweig, nicht ganz',
+          JSON.stringify(a('OPS').seiten) === '["11"]' && !a('OPS').ganz && !a('OPS').start
+          && (a('OPS').zweige || []).length === 0, JSON.stringify(a('OPS')));
+    check('nur der Bereich selbst: start ohne Seiten', a('LEER').start === true && (a('LEER').seiten || []).length === 0,
+          JSON.stringify(a('LEER')));
+    check('⚠ die Wissensgruppe geht mit', p[0] && JSON.stringify(p[0].body.groups) === '["g1"]');
+    check('⚠ kein Benutzer- und kein Anzeigename im Rumpf',
+          p[0] && !('user' in p[0].body) && !('von' in p[0].body) && !aw.some(x => 'name' in x));
+    check('der Eintrag erscheint in der Liste', s.doc.querySelectorAll('#wi-cfb-list .wi-item').length === 1);
+    check('⚠ danach ist der Baum leer (nicht doppelt uebernehmbar)',
+          s.doc.querySelectorAll('#wi-cfb-tree .wi-cfb-cb:checked').length === 0
+          && s.doc.getElementById('wi-cfb-add').disabled === true);
     s.zu();
 }
 {
-    // Der gesperrte Knopf darf NICHTS ausloesen – auch nicht, wenn jemand
-    // (oder ein Skript) ihn trotzdem klickt.
-    const s = await seite({ spaces: SPACES });
-    const btn = s.doc.getElementById('wi-cfb-add');
-    btn.click();
-    await warten(40);
-    check('gesperrter Knopf loest keinen Serveraufruf aus',
-          s.rufe.filter(r => r.m === 'POST').length === 0);
+    const s = await seite();
+    await s.klick(s.tog(s.sp('LEER')));
+    check('⚠ ein Bereich ohne Unterbereiche verliert sein [+]', !s.tog(s.sp('LEER')));
+    check('und sagt es', /keine Unterbereiche/.test(s.sp('LEER').textContent));
+    check('bleibt aber als Bereich markiert', s.cb(s.sp('LEER')).checked === true);
     s.zu();
 }
 {
-    // Alles eingebunden -> kein freier Bereich -> der Knopf bleibt gesperrt.
-    const s = await seite({ spaces: SPACES, bindung: { ok: true, aktiv: true, bereiche: [
-        { id: 'a', key: 'NEXUS', name: 'N', inkl_unter: true },
-        { id: 'b', key: 'OPS', name: 'O', inkl_unter: false }] } });
-    check('⚠ nichts uebernehmbar -> Knopf gesperrt MIT Grund',
-          s.doc.getElementById('wi-cfb-add').disabled === true
-          && !!s.doc.getElementById('wi-cfb-add').title);
+    // Teilweise markierter Zweig: KEIN Zweig, keine neuen Seiten
+    const s = await seite();
+    await s.klick(s.tog(s.sp('NEXUS')));
+    await s.klick(s.cb(s.pg('3')));                   // Enkel ab
+    await s.klick(s.doc.getElementById('wi-cfb-add'));
+    const aw = ((s.posts()[0] || {}).body || {}).auswahl || [];
+    check('⚠ ein Loch im Zweig: nicht mehr ganz', aw[0] && aw[0].ganz === false, JSON.stringify(aw[0]));
+    check('⚠ und die angeschnittenen Zweige sind keine Zweige mehr',
+          aw[0] && JSON.stringify(aw[0].zweige) === '[]', JSON.stringify(aw[0] && aw[0].zweige));
+    check('die markierten Seiten stehen einzeln da',
+          aw[0] && JSON.stringify(aw[0].seiten.slice().sort()) === '["1","2","4"]', JSON.stringify(aw[0] && aw[0].seiten));
     s.zu();
 }
 {
-    const s = await seite({ spaces: SPACES, postFehler: true });
-    const sel = s.doc.getElementById('wi-cfb-space');
+    const s = await seite({ postFehler: true });
+    await s.klick(s.tog(s.sp('OPS')));
+    await s.klick(s.doc.getElementById('wi-cfb-add'));
+    check('Fehlschlag: der Grund steht da', /nicht sichtbar/.test(s.doc.getElementById('wi-cfb-status').textContent));
+    check('⚠ Fehlschlag: die Markierung BLEIBT stehen', s.cb(s.sp('OPS')).checked === true);
+    s.zu();
+}
+
+// ════════════════════════════════════════════════════════════════════════
+section('8. Wissensgruppen-Pflicht (zweigruppig)');
+{
+    const s = await seite({ groups: [{ id: 'g1', name: 'Technik', color: '#888', folders: ['data/rag/x'] },
+                                     { id: 'g2', name: 'Vertrieb', color: '#88f', folders: ['data/rag/x'] }] });
+    await s.klick(s.tog(s.sp('OPS')));
     const btn = s.doc.getElementById('wi-cfb-add');
-    sel.value = 'NEXUS';
-    sel.dispatchEvent(new s.win.Event('change', { bubbles: true }));
-    await warten(20);
-    btn.click();
+    check('(Positivkontrolle) keine Gruppe vorbelegt', s.doc.querySelectorAll('#wi-cfb-groups input:checked').length === 0);
+    check('⚠ markiert, aber ohne Gruppe: gesperrt, und der Grund nennt die GRUPPE',
+          btn.disabled === true && /Wissensgruppe/.test(btn.title), btn.title);
+    const g = s.doc.querySelector('#wi-cfb-groups input[value="g2"]');
+    await s.klick(g);
+    check('mit Gruppe frei', btn.disabled === false);
+    await s.klick(btn);
+    check('die gewaehlte Gruppe geht mit', JSON.stringify(s.posts()[0].body.groups) === '["g2"]');
+    check('⚠ die Gruppenauswahl ueberlebt das Uebernehmen', s.doc.querySelector('#wi-cfb-groups input[value="g2"]').checked);
+    s.zu();
+}
+
+// ════════════════════════════════════════════════════════════════════════
+section('9. Bearbeiten eines gespeicherten Eintrags');
+{
+    const s = await seite({ bindung: { ok: true, aktiv: true, bereiche: [
+        { id: 'e1', typ: 'auswahl', name: 'NEXUS Dokumentation', gruppen: ['g1'],
+          gruppen_info: [{ id: 'g1', name: 'Technik', color: '#888' }],
+          auswahl: [{ key: 'NEXUS', name: 'NEXUS Dokumentation', start: false, ganz: false,
+                      seiten: ['2', '3'], zweige: ['2'] }],
+          abgleich: { zeit: '2026-09-27T10:05:00', seiten: 2, offen: 0, fehler: '' } }] } });
+    const zeile = s.doc.querySelector('#wi-cfb-list .wi-item');
+    check('die Zeile fasst die Auswahl zusammen', /NEXUS: 2 Seite/.test(zeile.textContent), zeile.textContent);
+    check('⚠ die Zeile nennt das Abgleichsergebnis', /Abgeglichen/.test(zeile.textContent) && /2 Seite/.test(zeile.textContent));
+    check('Bearbeiten als Text, Loeschen als Muelleimer',
+          zeile.querySelector('.wi-cfb-edit') && /Bearbeiten/.test(zeile.querySelector('.wi-cfb-edit').textContent)
+          && zeile.querySelector('.wi-cfb-del .jv-ico-trash'));
+    await s.klick(zeile.querySelector('.wi-cfb-edit'));
     await warten(60);
-    check('⚠ ein Fehlschlag wird GESAGT',
-          /nicht sichtbar|erlaubt/.test(s.doc.getElementById('wi-cfb-status').textContent),
+    const li = s.sp('NEXUS');
+    check('⚠ der Bereich steht aufgeklappt da', s.offen(li));
+    check('⚠ die gespeicherten Haken stehen im Baum (2, 3), die uebrigen nicht',
+          s.cb(s.pg('2')).checked && s.cb(s.pg('3')).checked && !s.cb(s.pg('1')).checked
+          && !s.cb(s.pg('4')).checked && !s.cb(li).checked);
+    const btn = s.doc.getElementById('wi-cfb-add');
+    check('der Knopf heisst jetzt "Speichern"', /Speichern/.test(btn.textContent), btn.textContent);
+    check('"Abbrechen" ist sichtbar', s.doc.getElementById('wi-cfb-cancel').style.display !== 'none');
+    check('der Hinweis nennt den Eintrag', /NEXUS Dokumentation/.test(s.doc.getElementById('wi-cfb-editnote').textContent));
+    // Unterbereich hinzufuegen (Kapitel B), einen weiteren Bereich dazunehmen
+    await s.klick(s.cb(s.pg('4')));
+    await s.klick(s.tog(s.sp('OPS')));
+    await s.klick(btn);
+    const p = s.posts();
+    check('⚠ Speichern ist EIN PUT auf den Eintrag (kein neuer Eintrag)',
+          p.length === 1 && p[0].m === 'PUT' && p[0].pfad === '/api/wissen/confluence/bindung/e1',
+          JSON.stringify(p.map(x => x.m + ' ' + x.pfad)));
+    const aw = (p[0] && p[0].body.auswahl) || [];
+    const a = (k) => aw.filter(x => x.key === k)[0] || {};
+    check('⚠ hinzugefuegter Unterbereich ist dabei',
+          JSON.stringify((a('NEXUS').seiten || []).slice().sort()) === '["2","3","4"]', JSON.stringify(a('NEXUS')));
+    check('hinzugefuegter Bereich ist dabei (ganz)', a('OPS').ganz === true);
+    check('nach dem Speichern: zurueck im Anlege-Modus',
+          /Übernehmen/.test(btn.textContent) && s.doc.getElementById('wi-cfb-cancel').style.display === 'none');
+    check('die Liste hat weiter EINEN Eintrag', s.doc.querySelectorAll('#wi-cfb-list .wi-item').length === 1);
+    s.zu();
+}
+{
+    // Abbrechen verwirft die Aenderung; Entfernen eines Bereichs im Bearbeiten
+    const s = await seite({ bindung: { ok: true, aktiv: true, bereiche: [
+        { id: 'e1', typ: 'auswahl', name: 'X', gruppen: ['g1'], gruppen_info: [{ id: 'g1', name: 'Technik' }],
+          auswahl: [{ key: 'NEXUS', start: true, ganz: true, seiten: ['1', '2', '3', '4'], zweige: ['1', '2'] },
+                    { key: 'OPS', start: true, ganz: false, seiten: [], zweige: [] }] }] } });
+    await s.klick(s.doc.querySelector('#wi-cfb-list .wi-cfb-edit'));
+    await warten(60);
+    check('ganz gespeichert -> alles markiert',
+          s.sp('NEXUS').querySelectorAll('.wi-cfb-cb:checked').length === 5);
+    check('start gespeichert -> der Bereich selbst markiert, Unterbereiche nicht',
+          s.cb(s.sp('OPS')).checked && !s.cb(s.pg('10')).checked);
+    await s.klick(s.cb(s.sp('OPS')));                 // OPS ab
+    await s.klick(s.doc.getElementById('wi-cfb-cancel'));
+    check('⚠ Abbrechen: nichts gespeichert', s.posts().length === 0);
+    check('Abbrechen: Baum leer, Anlege-Modus',
+          s.doc.querySelectorAll('#wi-cfb-tree .wi-cfb-cb:checked').length === 0
+          && /Übernehmen/.test(s.doc.getElementById('wi-cfb-add').textContent));
+    await s.klick(s.doc.querySelector('#wi-cfb-list .wi-cfb-edit'));
+    await warten(60);
+    await s.klick(s.tog(s.sp('NEXUS')));              // [-] an NEXUS: Unterbereiche weg
+    await s.klick(s.cb(s.sp('NEXUS')));               // und den Bereich selbst ab
+    await s.klick(s.doc.getElementById('wi-cfb-add'));
+    const aw = ((s.posts()[0] || {}).body || {}).auswahl || [];
+    check('⚠ ein abgewaehlter Bereich faellt aus der Auswahl', aw.length === 1 && aw[0].key === 'OPS', JSON.stringify(aw));
+    s.zu();
+}
+{
+    // Seitenbaum nicht ladbar: die gespeicherte Auswahl dieses Bereichs bleibt erhalten
+    const s = await seite({ pagesFehler: ['NEXUS'], bindung: { ok: true, aktiv: true, bereiche: [
+        { id: 'e1', typ: 'auswahl', name: 'X', gruppen: ['g1'], gruppen_info: [{ id: 'g1', name: 'Technik' }],
+          auswahl: [{ key: 'NEXUS', start: false, ganz: false, seiten: ['2'], zweige: [] }] }] } });
+    await s.klick(s.doc.querySelector('#wi-cfb-list .wi-cfb-edit'));
+    await warten(60);
+    check('der Ladefehler wird genannt (mit Bereich)',
+          /nicht geladen/.test(s.doc.getElementById('wi-cfb-status').textContent)
+          && /NEXUS/.test(s.doc.getElementById('wi-cfb-status').textContent),
           s.doc.getElementById('wi-cfb-status').textContent);
-    check('⚠ und das Pulldown ist danach wieder bedienbar', sel.disabled === false);
-    check('nichts landet in der Liste',
-          s.doc.querySelectorAll('#wi-cfb-list .wi-item').length === 0);
+    await s.klick(s.tog(s.sp('OPS')));
+    await s.klick(s.doc.getElementById('wi-cfb-add'));
+    const aw = ((s.posts()[0] || {}).body || {}).auswahl || [];
+    check('⚠ nicht ladbarer Bereich: seine gespeicherte Auswahl geht UNVERAENDERT mit',
+          aw.some(x => x.key === 'NEXUS' && JSON.stringify(x.seiten) === '["2"]'), JSON.stringify(aw));
+    check('genau EIN Speichern', s.posts().length === 1);
     s.zu();
 }
 
 // ════════════════════════════════════════════════════════════════════════
-section('4. Entfernen – der Rueckweg');
+section('10. Suche, Liste, Loeschen, Altbestand');
 {
-    const s = await seite({ spaces: SPACES, bindung: { ok: true, aktiv: true, bereiche: [
-        { id: 'a', key: 'NEXUS', name: 'NEXUS Dokumentation', inkl_unter: true }] } });
-    const btn = s.doc.querySelector('#wi-cfb-list .wi-cfb-del');
-    check('Muelleimer an der Zeile', !!btn);
-    check('⚠ Muelleimer als SVG, kein × (Symbol-Semantik)',
-          btn && btn.querySelector('svg') && !/[×✕✖]/.test(btn.textContent));
-    btn.click();
-    await warten(60);
+    const s = await seite();
+    await s.klick(s.cb(s.sp('OPS')));
+    const such = s.doc.getElementById('wi-cfb-such');
+    such.value = 'nexus';
+    such.dispatchEvent(new s.win.Event('input', { bubbles: true }));
+    check('die Suche blendet nicht passende Bereiche aus', s.sp('LEER').style.display === 'none');
+    check('passende bleiben', s.sp('NEXUS').style.display !== 'none');
+    check('⚠ ein markierter Bereich bleibt sichtbar, auch wenn er nicht passt',
+          s.sp('OPS').style.display !== 'none');
+    such.value = '';
+    such.dispatchEvent(new s.win.Event('input', { bubbles: true }));
+    check('leere Suche zeigt wieder alle', s.sp('LEER').style.display !== 'none');
+    s.zu();
+}
+{
+    const s = await seite({ bindung: { ok: true, aktiv: true, bereiche: [
+        { id: 'alt1', typ: 'space', key: 'NEXUS', name: 'Alt', inkl_unter: true,
+          auswahl: [{ key: 'NEXUS', start: true, ganz: true, seiten: [], zweige: [] }],
+          abgleich: { zeit: '2026-09-27T10:05:00', seiten: 0, offen: 0, fehler: 'keiner Wissensgruppe zugeordnet' } },
+        { id: 'e2', typ: 'auswahl', name: 'Kaputt', gruppen: ['g1'], gruppen_info: [{ id: 'g1', name: 'Technik' }],
+          auswahl: [{ key: 'OPS', start: true }],
+          abgleich: { zeit: '2026-09-27T10:05:00', seiten: 3, offen: 2, fehler: 'Bereich OPS nicht erreichbar' } },
+        { id: 'e3', typ: 'auswahl', name: 'Neu', gruppen: ['g1'], gruppen_info: [{ id: 'g1', name: 'Technik' }],
+          auswahl: [{ key: 'OPS', start: true }] }] } });
+    const z = s.doc.querySelectorAll('#wi-cfb-list .wi-item');
+    check('⚠ Altbestand ohne Gruppe wird BENANNT', z[0] && z[0].querySelector('.wi-cfb-nogrp'));
+    check('Altbestand: ganzer Bereich steht als Wort da', z[0] && /ganzer Bereich/.test(z[0].textContent));
+    check('⚠ ein Abgleichsfehler steht in der Zeile (hervorgehoben)',
+          z[1] && z[1].querySelector('.wi-cfb-sync.warn') && /nicht erreichbar/.test(z[1].textContent));
+    check('offene Seiten werden genannt', z[1] && /2 folgen/.test(z[1].textContent));
+    check('noch nie abgeglichen: das steht da', z[2] && /Noch nicht abgeglichen/.test(z[2].textContent));
+    check('⚠ Altbestand mit Fehler und 0 Seiten: KEIN "Abgeglichen", nur der Grund',
+          z[0] && !/Abgeglichen/.test(z[0].textContent) && /keiner Wissensgruppe/.test(z[0].querySelector('.wi-cfb-sync').textContent),
+          z[0] ? z[0].textContent : '');
+    await s.klick(z[2].querySelector('.wi-cfb-del'));
     const del = s.rufe.filter(r => r.m === 'DELETE');
-    check('DELETE mit der Kennung', del.length === 1 && /\/bindung\/a$/.test(del[0].pfad),
-          JSON.stringify(del));
-    check('die Zeile ist weg', s.doc.querySelectorAll('#wi-cfb-list .wi-item').length === 0);
-    check('der Bereich steht wieder im Angebot',
-          Array.from(s.doc.getElementById('wi-cfb-space').options).map(o => o.value).indexOf('NEXUS') !== -1);
+    check('Muelleimer loescht genau diesen Eintrag',
+          del.length === 1 && del[0].pfad === '/api/wissen/confluence/bindung/e3');
+    check('und er ist aus der Liste', s.doc.querySelectorAll('#wi-cfb-list .wi-item').length === 2);
     s.zu();
 }
 {
-    const s = await seite({ confirm: false, spaces: SPACES, bindung: { ok: true, aktiv: true,
-        bereiche: [{ id: 'a', key: 'NEXUS', name: 'N', inkl_unter: true }] } });
-    s.doc.querySelector('#wi-cfb-list .wi-cfb-del').click();
-    await warten(50);
-    check('⚠ abgelehnte Rueckfrage entfernt NICHTS',
-          s.rufe.filter(r => r.m === 'DELETE').length === 0
-          && s.doc.querySelectorAll('#wi-cfb-list .wi-item').length === 1);
-    s.zu();
-}
-
-// ════════════════════════════════════════════════════════════════════════
-section('5. Wissensgruppen-Pflicht (Vorgabe 2026-09-22)');
-const ZWEI = [{ id: 'g1', name: 'Technik', color: '#888', folders: ['data/rag/x'] },
-              { id: 'g2', name: 'Vertrieb', color: '#4a8', folders: ['data/rag/x'] }];
-{
-    // Eine einzige Gruppe: `groupBoxes` hakt sie an – es gibt nichts zu waehlen.
-    const s = await seite({ spaces: SPACES });
-    const box = s.doc.getElementById('wi-cfb-groups');
-    check('Wissensgruppen-Reihe wird gezeichnet', box && box.querySelectorAll('.wi-grp-cfb').length === 1,
-          box ? `${box.querySelectorAll('.wi-grp-cfb').length}` : 'fehlt');
-    check('der Gruppenname steht dabei', /Technik/.test(box.textContent), box.textContent.trim());
-    check('bei genau EINER Gruppe ist sie vorbelegt',
-          box.querySelector('.wi-grp-cfb').checked === true);
-    s.zu();
-}
-{
-    // ⚠ DER GEMELDETE FALL: ohne Zuordnung darf nichts gespeichert werden.
-    const s = await seite({ spaces: SPACES, groups: ZWEI });
-    const sel = s.doc.getElementById('wi-cfb-space');
-    const btn = s.doc.getElementById('wi-cfb-add');
-    const box = s.doc.getElementById('wi-cfb-groups');
-    const kaesten = box.querySelectorAll('.wi-grp-cfb');
-    check('bei MEHREREN Gruppen ist keine vorbelegt', kaesten.length === 2
-          && !kaesten[0].checked && !kaesten[1].checked);
-
-    sel.value = 'NEXUS';
-    sel.dispatchEvent(new s.win.Event('change', { bubbles: true }));
-    await warten(20);
-    check('⚠ Bereich gewaehlt, aber KEINE Gruppe -> Knopf bleibt gesperrt',
-          btn.disabled === true);
-    // ⚠ DER GRUND MUSS DER RICHTIGE SEIN: "Bereich auswaehlen" schickt hier an
-    // die falsche Stelle – der Bereich steht ja.
-    check('⚠ und der title nennt die WISSENSGRUPPE, nicht den Bereich',
-          /Wissensgruppe/i.test(btn.title || ''), `title="${btn.title}"`);
-
-    // Trotzdem klicken: es darf nichts rausgehen.
-    btn.click();
-    await warten(40);
-    check('⚠ ein Klick darauf loest keinen Serveraufruf aus',
-          s.rufe.filter(r => r.m === 'POST').length === 0,
-          JSON.stringify(s.rufe.filter(r => r.m === 'POST')));
-
-    // Haken setzen -> der Knopf geht auf.
-    kaesten[1].checked = true;
-    kaesten[1].dispatchEvent(new s.win.Event('change', { bubbles: true }));
-    await warten(20);
-    check('⚠ mit gewaehlter Gruppe ist der Knopf frei', btn.disabled === false);
-    check('und der title ist dann leer', !btn.title);
-
-    btn.click();
-    await warten(60);
-    const post = s.rufe.filter(r => r.pfad === '/api/wissen/confluence/bindung' && r.m === 'POST');
-    check('genau EIN POST', post.length === 1, `${post.length}`);
-    check('⚠ die gewaehlte Wissensgruppe geht mit dem Rumpf raus',
-          post[0] && JSON.stringify(post[0].body.groups) === JSON.stringify(['g2']),
-          JSON.stringify(post[0] && post[0].body));
-    check('die Zuordnung steht in der Liste',
-          /Vertrieb/.test(s.doc.getElementById('wi-cfb-list').textContent),
-          s.doc.getElementById('wi-cfb-list').textContent.trim());
-
-    // ⚠ Die Auswahl muss den Neuaufbau ueberleben: cfbRender() laeuft nach
-    // JEDEM Einbinden. Wer mehrere Bereiche derselben Gruppe zuordnet, soll
-    // sie nicht jedes Mal neu setzen muessen.
-    const k2 = s.doc.querySelectorAll('#wi-cfb-groups .wi-grp-cfb');
-    check('⚠ die Gruppen-Auswahl ueberlebt das Einbinden',
-          k2.length === 2 && k2[1].checked === true,
-          Array.from(k2).map(c => c.value + '=' + c.checked).join(','));
-    sel.value = 'OPS';
-    sel.dispatchEvent(new s.win.Event('change', { bubbles: true }));
-    await warten(20);
-    check('⚠ und der Knopf ist ohne erneutes Anhaken sofort frei', btn.disabled === false);
-    btn.click();
-    await warten(60);
-    const post2 = s.rufe.filter(r => r.pfad === '/api/wissen/confluence/bindung' && r.m === 'POST');
-    check('der zweite Bereich traegt dieselbe Zuordnung',
-          post2[1] && JSON.stringify(post2[1].body.groups) === JSON.stringify(['g2']),
-          JSON.stringify(post2[1] && post2[1].body));
-    s.zu();
-}
-{
-    // Mehrfachauswahl
-    const s = await seite({ spaces: SPACES, groups: ZWEI });
-    const sel = s.doc.getElementById('wi-cfb-space');
-    const btn = s.doc.getElementById('wi-cfb-add');
-    s.doc.querySelectorAll('#wi-cfb-groups .wi-grp-cfb').forEach(c => {
-        c.checked = true; c.dispatchEvent(new s.win.Event('change', { bubbles: true }));
-    });
-    sel.value = 'NEXUS';
-    sel.dispatchEvent(new s.win.Event('change', { bubbles: true }));
-    await warten(20);
-    btn.click();
-    await warten(60);
-    const post = s.rufe.filter(r => r.m === 'POST');
-    check('mehrere Gruppen gehen gemeinsam raus',
-          post[0] && JSON.stringify(post[0].body.groups) === JSON.stringify(['g1', 'g2']),
-          JSON.stringify(post[0] && post[0].body));
-    check('beide stehen in der Liste',
-          /Technik/.test(s.doc.getElementById('wi-cfb-list').textContent)
-          && /Vertrieb/.test(s.doc.getElementById('wi-cfb-list').textContent));
-    s.zu();
-}
-{
-    // ⚠ ALTBESTAND (vor der Pflicht) wird BENANNT, nicht verschwiegen – eine
-    // Einbindung ohne Ziel kann der spaetere Abgleich nicht ausfuehren.
-    const s = await seite({ spaces: SPACES, bindung: { ok: true, aktiv: true, bereiche: [
-        { id: 'a', key: 'NEXUS', name: 'NEXUS Dokumentation', inkl_unter: true }] } });
-    const li = s.doc.getElementById('wi-cfb-list');
-    check('⚠ Einbindung ohne Zuordnung wird als solche benannt',
-          /keiner Wissensgruppe zugeordnet/.test(li.textContent), li.textContent.trim());
-    // ⚠ NIE UNGEPRUEFT DEREFERENZIEREN: fehlt die Marke, WIRFT `.title` – der
-    // Lauf bricht dann ohne Bilanz ab und ist von "nicht gelaufen" nicht zu
-    // unterscheiden. Genau so hat die Gegenprobe "Marke raus" statt 2 FAIL
-    // einen Abbruch gemeldet (Register).
-    const marke = li.querySelector('.wi-cfb-nogrp');
-    check('und die Marke ist als solche gestaltet', !!marke);
-    check('der Hinweis nennt den Weg (entfernen und neu einbinden)',
-          !!marke && /neu einbinden|Entferne/.test(marke.title || ''),
-          marke ? marke.title : 'keine Marke');
-    s.zu();
-}
-{
-    // Eine Gruppe wurde geloescht: 2 Kennungen, nur 1 aufloesbar.
-    const s = await seite({ spaces: SPACES, bindung: { ok: true, aktiv: true, bereiche: [
-        { id: 'a', key: 'NEXUS', name: 'N', inkl_unter: true, gruppen: ['g1', 'weg'],
-          gruppen_info: [{ id: 'g1', name: 'Technik', color: '#888' }] }] } });
-    const li = s.doc.getElementById('wi-cfb-list');
-    check('die vorhandene Gruppe steht da', /Technik/.test(li.textContent));
-    check('⚠ und die geloeschte wird BENANNT (nicht verschwiegen)',
-          /1 .*gel(ö|oe)scht/i.test(li.textContent), li.textContent.trim());
-    s.zu();
-}
-{
-    // ⚠ HALBER DEPLOY: ein aelteres Backend liefert `gruppen`, aber kein
-    // `gruppen_info`. Dann stehen die Kennungen da – haesslich, aber KEINE
-    // Falschaussage "keiner Gruppe zugeordnet".
-    const s = await seite({ spaces: SPACES, bindung: { ok: true, aktiv: true, bereiche: [
-        { id: 'a', key: 'NEXUS', name: 'N', inkl_unter: true, gruppen: ['g1'] }] } });
-    const li = s.doc.getElementById('wi-cfb-list');
-    check('⚠ ohne gruppen_info werden die Kennungen gezeigt', /g1/.test(li.textContent),
-          li.textContent.trim());
-    check('⚠ und NICHT faelschlich "keiner Wissensgruppe zugeordnet"',
-          !/keiner Wissensgruppe/.test(li.textContent), li.textContent.trim());
-    s.zu();
-}
-
-// ════════════════════════════════════════════════════════════════════════
-section('6. Fremdtext und Sprachwechsel');
-{
-    const s = await seite({ spaces: [{ key: 'X', name: '<img src=x onerror=alert(1)>' }],
+    const s = await seite({ spaces: [{ key: 'Y', name: '<img src=x>', type: 'global' }],
         bindung: { ok: true, aktiv: true, bereiche: [
-            { id: 'a', key: 'Y', name: '<b>boese</b>', inkl_unter: true }] } });
-    check('⚠ Bereichsname aus Confluence wird maskiert (Liste)',
-          s.doc.querySelectorAll('#wi-cfb-list b').length === 0
-          && /<b>boese<\/b>/.test(s.doc.getElementById('wi-cfb-list').textContent));
-    check('⚠ und im Pulldown',
-          s.doc.querySelectorAll('#wi-cfb-space img').length === 0);
+            { id: 'a', name: '<b>boese</b>', gruppen: [], auswahl: [{ key: 'Y', start: true }] }] } });
+    check('⚠ Namen aus Confluence werden maskiert (Liste)',
+          s.doc.querySelectorAll('#wi-cfb-list b').length === 0);
+    check('⚠ und im Baum', s.doc.querySelectorAll('#wi-cfb-tree img').length === 0);
     s.zu();
 }
 {
-    const s = await seite({ spaces: SPACES });
+    const s = await seite();
     s.win.setLang ? s.win.setLang('en') : (s.win.applyLang && s.win.applyLang('en'));
     await warten(40);
     const h = s.doc.querySelector('#wi-sec-cfbind h2');
-    check('Sprachwechsel erreicht die Ueberschrift',
-          /Dynamic Confluence binding/.test(h.textContent), h.textContent.trim());
+    check('Sprachwechsel erreicht die Ueberschrift', /Dynamic Confluence binding/.test(h.textContent));
     s.zu();
 }
 

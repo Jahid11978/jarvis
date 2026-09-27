@@ -255,9 +255,18 @@ class CronManager:
                 # demselben Grund wie oben, nur andersherum begruendet: hier
                 # gibt es schlicht nichts zu entscheiden. Der Lauf sieht nach,
                 # ob sich etwas geaendert hat, und indiziert nur dann nach.
-                from backend import rag_autoindex
+                #
+                # ⚠ ERST Confluence, DANN der Index (Vorgabe 2026-09-27): der
+                # Confluence-Abgleich schreibt geaenderte Seiten als Dateien in
+                # die Wissensordner, und der Index-Abgleich danach nimmt sie im
+                # SELBEN Takt auf - ueber den einen vorhandenen Indizierweg.
+                # Andersherum laege jede Aenderung einen Takt laenger brach.
+                from backend import rag_autoindex, confluence_abgleich
+                cf = await asyncio.to_thread(confluence_abgleich.lauf)
                 erg = await asyncio.to_thread(rag_autoindex.lauf)
                 result = str(erg.get("grund") or "")
+                if cf.get("aktiv"):
+                    result += " · Confluence: " + str(cf.get("grund") or "")
             elif _agent_manager:
                 agent = _agent_manager.get_or_create_main()
                 result = await agent.run_task_headless(

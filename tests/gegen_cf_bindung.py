@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Gegenproben zur dynamischen Confluence-Einbindung.
+"""Gegenproben zur dynamischen Confluence-Einbindung (Baum + Abgleich, 2026-09-27).
 
 Jede Probe dreht GENAU EINE Zusage zurueck und misst, ob der zustaendige
 Waechter das meldet. Eine Probe, die nicht beisst, ist ein Testmangel – kein
@@ -33,14 +33,17 @@ MARKE = ABL / "LAUF"
 
 DATEIEN = [
     "backend/confluence_bindung.py",
+    "backend/confluence_abgleich.py",
     "backend/main.py",
     "backend/sandbox.py",
+    "backend/scheduler.py",
     "frontend/wissen.html",
     "frontend/js/wissen.js",
     "frontend/js/i18n.js",
 ]
 
 PY_W = [sys.executable, str(ROOT / "tests" / "test_cf_bindung.py")]
+CA_W = [sys.executable, str(ROOT / "tests" / "test_cf_abgleich.py")]
 JS_W = ["node", str(ROOT / "tests" / "test_cf_bindung_ui.js")]
 
 
@@ -91,8 +94,10 @@ def bewerte(cmd) -> tuple[bool, str]:
 
 # ── Proben ──────────────────────────────────────────────────────────────────
 CFB = "backend/confluence_bindung.py"
+CFA = "backend/confluence_abgleich.py"
 MAIN = "backend/main.py"
 SB = "backend/sandbox.py"
+SCH = "backend/scheduler.py"
 HTML = "frontend/wissen.html"
 WJS = "frontend/js/wissen.js"
 I18N = "frontend/js/i18n.js"
@@ -100,10 +105,8 @@ I18N = "frontend/js/i18n.js"
 def _tausche_bloecke(s: str) -> str:
     """Vertauscht den Einbindungs-Container mit dem Block "Mein Wissen".
 
-    Damit steht `wi-sec-cfbind` HINTER `wi-sec-files` – genau die Eigenschaft,
-    die der Waechter zusichert. Findet die Funktion ihre Marken nicht, gibt sie
-    den Text unveraendert zurueck; der Aufrufer wertet das als unbrauchbare
-    Probe (und nicht als bestandenen Waechter)."""
+    Findet die Funktion ihre Marken nicht, gibt sie den Text unveraendert
+    zurueck; der Aufrufer wertet das als unbrauchbare Probe."""
     a = s.find("        <!-- Dynamische Confluence-Einbindung.")
     b = s.find("        <!-- Mein Wissen -->")
     e = s.find("    </div>\n\n    <script src=", b if b > 0 else 0)
@@ -112,282 +115,165 @@ def _tausche_bloecke(s: str) -> str:
     return s[:a] + s[b:e] + s[a:b] + s[e:]
 
 
-# Sabotage-Bausteine, die sich schlecht inline schreiben lassen.
-KNOPF_MARKUP = (
-    '                <button type="button" class="sec-btn primary wi-cfb-add" id="wi-cfb-add"\n'
-    '                        data-i18n="wissen.cfb_add" disabled>Übernehmen</button>\n'
-)
-KLICK = (
-    "        var cfbBtn = $('wi-cfb-add');\n"
-    "        if (cfbBtn) cfbBtn.addEventListener('click', function () {\n"
-    "            cfbAdd(($('wi-cfb-space') || {}).value);\n"
-    "        });"
-)
-
-def _gruppenpruefung_verschieben(s: str) -> str:
-    """Schiebt die Wissensgruppen-Pruefung HINTER das Einbinden.
-
-    Sie steht dann immer noch da – aber wirkungslos: der Eintrag ist zu dem
-    Zeitpunkt geschrieben. Genau diese Reihenfolge sichert der Waechter zu, und
-    eine Textsuche saehe den Unterschied nicht."""
-    block = ("""    ok, err = _wissen_check_groups(user, req_groups)\n"""
-             """    if not ok:\n"""
-             """        return JSONResponse({"ok": False, "error": err}, status_code=403)\n""")
-    anker = """    return JSONResponse({"ok": True, "bereich": eintrag,"""
-    if s.count(block) != 1 or s.count(anker) != 1:
-        return s
-    return s.replace(block, "").replace(anker, block + anker)
-
-
 PROBEN = [
-    # ── Wissensgruppen-Pflicht (Vorgabe 2026-09-22) ────────────────────────
-    ("⚠ Pflicht im Modul raus (Einbindung ohne Ziel moeglich)", CFB,
-     '    if not aus:\n        raise BindungFehler("Bitte mindestens eine Wissensgruppe zuordnen.")',
-     '    if False:\n        raise BindungFehler("Bitte mindestens eine Wissensgruppe zuordnen.")', PY_W),
+    # ── Ablage (confluence_bindung) ─────────────────────────────────────────
+    ("Zweig ist nicht mehr automatisch markierte Seite", CFB,
+     "        for z in zweige:\n            if z not in seiten:\n                seiten.append(z)\n", "", PY_W),
+    ("ganz per Falsyness statt is True", CFB,
+     '        ganz = el.get("ganz") is True\n', '        ganz = bool(el.get("ganz"))\n', PY_W),
+    ("Wissensgruppen-Pflicht an der Ablage weg", CFB,
+     '    if not aus:\n        raise BindungFehler("Bitte mindestens eine Wissensgruppe zuordnen.")\n', "", PY_W),
+    ("Anzeigename aus dem Rumpf gewinnt", CFB,
+     "        name = (namen or {}).get(k) if namen else None\n", "        name = None\n", PY_W),
+    ("Altbestand: 'inkl. Unterseiten' wird ignoriert", CFB,
+     '        ganz = c.get("inkl_unter") is True\n', "        ganz = False\n", PY_W),
+    ("Bearbeiten ueberschreibt das Anlagedatum", CFB,
+     '                    "angelegt": b.get("angelegt") or "",\n',
+     '                    "angelegt": datetime.now().isoformat(timespec="seconds"),\n', PY_W),
+    ("zu langer Schluessel wird gekuerzt statt abgewiesen", CFB,
+     "        if len(k) > KEY_MAX or not _KEY_RE.match(k):\n            raise BindungFehler(\"Der Bereichs-Schluessel",
+     "        if not _KEY_RE.match(k[:KEY_MAX]):\n            raise BindungFehler(\"Der Bereichs-Schluessel", PY_W),
+    ("Seitenkennung wird nicht mehr geprueft", CFB,
+     "        if len(k) > SEITE_MAX or not _SEITE_RE.match(k):\n", "        if False:\n", PY_W),
 
-    ("die Zuordnung wird gar nicht gespeichert", CFB,
-     '            "gruppen": gr,\n', '', PY_W),
+    # ── Endpunkte (main.py) ─────────────────────────────────────────────────
+    ("unsichtbarer Bereich wird angenommen", MAIN, "    if fremd:\n", "    if False:\n", PY_W),
+    ("PUT verliert fremde Wissensgruppen", MAIN,
+     "    gruppen = list(req_groups) + [g for g in (alt.get(\"gruppen\") or [])\n"
+     "                                  if g not in eigene and g not in req_groups]\n",
+     "    gruppen = list(req_groups)\n", PY_W),
+    ("Gruppenpruefung gegen den eigenen Bereich weg", MAIN,
+     '    req_groups = _gruppen_normieren(body.get("groups"))\n    ok, err = _wissen_check_groups(user, req_groups)\n',
+     '    req_groups = _gruppen_normieren(body.get("groups"))\n    ok, err = True, ""\n', PY_W),
+    ("Namen vom Server werden nicht uebergeben", MAIN,
+     "        eintrag = _cfb.hinzufuegen(auswahl, _display_name(user), req_groups, namen)\n",
+     "        eintrag = _cfb.hinzufuegen(auswahl, _display_name(user), req_groups)\n", PY_W),
+    ("Liste traegt kein Abgleichsergebnis mehr", MAIN,
+     '        c["abgleich"] = staende.get(c.get("id") or "")\n', "", PY_W),
+    ("eigene Gruppen als dicts statt Kennungen", MAIN,
+     '    eigene = {g.get("id") for g in (_editable_groups_for(user) or []) if isinstance(g, dict)}\n',
+     '    eigene = set(str(g) for g in (_editable_groups_for(user) or []))\n', PY_W),
 
-    # Eine Zeichenkette ist iterierbar und nie gemeint: "technik" wuerde sonst
-    # zu den Gruppen 't','e','c','h','n','i','k'.
-    ("Zeichenkette zaehlt wieder als Gruppenliste", CFB,
-     'if isinstance(gruppen, str) or not isinstance(gruppen, (list, tuple)):',
-     'if not isinstance(gruppen, (list, tuple, str)):', PY_W),
+    # ── Sperrlisten ─────────────────────────────────────────────────────────
+    ("Abgleichsstand faellt aus _APP_DENY_REL", SB,
+     '\n    "data/confluence_bindung.json", "data/confluence_abgleich.json",\n',
+     '\n    "data/confluence_bindung.json",\n', PY_W),
+    ("Abgleichsstand faellt aus dem Shell-Muster", SB,
+     "    r'confluence_bindung\\.json\\b|confluence_abgleich\\.json\\b|'\n",
+     "    r'confluence_bindung\\.json\\b|'\n", PY_W),
 
-    ("Deckel fuer die Gruppenzahl raus", CFB,
-     'if len(aus) > MAX_GRUPPEN:', 'if False:', PY_W),
+    # ── Abgleich ────────────────────────────────────────────────────────────
+    ("⚠ ein fehlgeschlagener Abruf LOESCHT", CFA,
+     '        if (alt.get("space") or "") in gescheitert:\n            seiten_neu[pid] = alt\n            continue\n',
+     "", CA_W),
+    ("Versionsaenderung wird nicht erkannt", CFA,
+     'int(alt.get("v") or -1) == g["version"]\n                   and ', "", CA_W),
+    ("Zweig nimmt die Nachfahren nicht mit", CFA,
+     "            aus |= _nachfahren(kinder, z)\n", "", CA_W),
+    ("ganzer Bereich wird ignoriert", CFA,
+     '    if sel.get("ganz") is True:\n        return set(ids)\n', "", CA_W),
+    ("fremde Seitenkennung wird durchgelassen", CFA,
+     '    aus = {s for s in (sel.get("seiten") or []) if s in ids}\n',
+     '    aus = set(sel.get("seiten") or [])\n', CA_W),
+    ("Skill aus: der Abgleich laeuft trotzdem", CFA,
+     '    if not ok:\n        return {**leer, "grund": grund}\n', "    if not ok:\n        pass\n", CA_W),
+    ("kein Deckel je Takt", CFA, "        if abrufe >= MAX_ABRUFE_JE_LAUF:\n", "        if False:\n", CA_W),
+    ("Gruppen zweier Eintraege werden ueberschrieben statt vereinigt", CFA,
+     '                for gid in gruppen:           # mehrere Eintraege: Gruppen vereinigen\n'
+     '                    if gid not in g["gruppen"]:\n                        g["gruppen"].append(gid)\n',
+     '                g["gruppen"] = list(gruppen)\n', CA_W),
+    ("kaputter Stand: weiter mit leerem Stand", CFA,
+     '        raise RuntimeError(f"Stand {p} nicht lesbar ({type(e).__name__}: {e})") from e\n',
+     '        return {"version": 1, "seiten": {}, "eintraege": {}}\n', CA_W),
+    ("Zuordnung der Wissensgruppe wird nicht gesetzt", CFA,
+     '                kg.set_assignment(rel, g["gruppen"])\n', "                pass\n", CA_W),
+    ("Eintrag ohne Wissensgruppe wird trotzdem abgeglichen", CFA,
+     "        if not gruppen:\n", "        if False:\n", CA_W),
+    ("geloeschte Seite behaelt ihre Datei", CFA,
+     '        _datei_weg(alt.get("datei") or "")\n        entfernt += 1\n', "        entfernt += 1\n", CA_W),
+    ("Abgleich nutzt eine eigene Aktiv-Regel", CFA,
+     "        from backend.main import _cfb_aktiv\n        skill, conf = _cfb_aktiv()\n",
+     "        skill, conf = True, True\n", PY_W),
 
-    ("Laengen-/Steuerzeichenpruefung der Kennung raus", CFB,
-     'if len(k) > GRUPPE_MAX or any(ord(c) < 32 for c in k):', 'if False:', PY_W),
+    # ── Cron-Auftrag ────────────────────────────────────────────────────────
+    ("⚠ Index VOR Confluence (Aenderung liegt einen Takt brach)", SCH,
+     "                cf = await asyncio.to_thread(confluence_abgleich.lauf)\n"
+     "                erg = await asyncio.to_thread(rag_autoindex.lauf)\n",
+     "                erg = await asyncio.to_thread(rag_autoindex.lauf)\n"
+     "                cf = await asyncio.to_thread(confluence_abgleich.lauf)\n", CA_W),
+    ("Confluence wird im Auftrag gar nicht gerufen", SCH,
+     "                cf = await asyncio.to_thread(confluence_abgleich.lauf)\n", "                cf = {}\n", CA_W),
 
-    # ⚠ `_wissen_check_groups(user, req_groups)` steht mehrfach in main.py
-    # (auch bei der Entwurfs-Freigabe) – der Anker nimmt deshalb den Kommentar
-    # des CF-Endpunkts mit.
-    # ⚠ LIVE GEFUNDEN: ohne `strip()` laeuft eine Eingabe aus Leerraum in
-    # "Keine Berechtigung fuer Gruppe(n):   " – richtig abgewiesen, falscher Grund.
-    ("Kennungen werden nicht mehr getrimmt (irrefuehrender Grund)", MAIN,
-     '''    req_groups = [t for t in (str(g or "").strip()
-                              for g in ((body.get("groups") if isinstance(body, dict) else None) or []))
-                  if t]''',
-     '''    req_groups = [g for g in ((body.get("groups") if isinstance(body, dict) else None) or []) if g]''',
-     PY_W),
+    # ── Markup ──────────────────────────────────────────────────────────────
+    ("Container rutscht hinter 'Mein Wissen'", HTML, _tausche_bloecke, None, PY_W),
+    ("Pulldown kommt zurueck", HTML,
+     '            <div class="wi-cf-tree wi-cfb-tree" id="wi-cfb-tree"',
+     '            <select id="wi-cfb-space"></select>\n            <div class="wi-cf-tree wi-cfb-tree" id="wi-cfb-tree"', PY_W),
+    ("Warnung 'noch nicht produktiv' kommt zurueck", HTML,
+     '            <p class="desc" data-i18n="wissen.cfb_sync_hint">',
+     '            <p class="desc wi-cfb-soon" data-i18n="wissen.cfb_soon">x</p>\n            <p class="desc" data-i18n="wissen.cfb_sync_hint">', PY_W),
+    ("Rueckfall-Markup des Abgleich-Hinweises weicht von DE ab", HTML,
+     '<p class="desc" data-i18n="wissen.cfb_sync_hint">Gespeicherte Einträge',
+     '<p class="desc" data-i18n="wissen.cfb_sync_hint">Alte Einträge', PY_W),
+    ("Knopf startet frei", HTML,
+     '                        data-i18n="wissen.cfb_add" disabled>Übernehmen</button>',
+     '                        data-i18n="wissen.cfb_add">Übernehmen</button>', PY_W),
 
-    ("⚠ Endpunkt prueft die Zuordnung nicht mehr", MAIN,
-     '    ok, err = _wissen_check_groups(user, req_groups)\n    if not ok:\n'
-     '        return JSONResponse({"ok": False, "error": err}, status_code=403)\n'
-     '    c = _confluence_client()',
-     '    ok, err = (True, None)\n    if not ok:\n'
-     '        return JSONResponse({"ok": False, "error": err}, status_code=403)\n'
-     '    c = _confluence_client()', PY_W),
-
-    ("⚠ Gruppenpruefung erst NACH dem Einbinden", MAIN,
-     _gruppenpruefung_verschieben, None, PY_W),
-
-    ("die geprueften Gruppen werden nicht uebergeben", MAIN,
-     '_display_name(user), req_groups)', '_display_name(user))', PY_W),
-
-    # ⚠ Der Client kennt nur SEINEN Bereich – haette der Server die Namen von
-    # dort aufgeloest, saehe ein Editor die Zuordnung eines Kollegen als
-    # "geloeschte Gruppe". Eine Falschaussage ueber einen normalen Zustand.
-    ("Gruppennamen aus dem Bereich des Abrufers statt aus allen", MAIN,
-     'bekannt = {g["id"]: g for g in kg.list_groups().get("groups", [])}',
-     'bekannt = {g["id"]: g for g in _editable_groups_for("")}', PY_W),
-
-    ("GET liefert die Bereiche ohne Gruppennamen", MAIN,
-     '"bereiche": _cfb_mit_gruppen(_cfb.liste()) if (skill and conf) else []',
-     '"bereiche": _cfb.liste() if (skill and conf) else []', PY_W),
-
-    ("Wissensgruppen-Reihe aus dem Markup", HTML,
-     '                <div class="wi-groups" id="wi-cfb-groups"></div>',
-     '                <div class="wi-groups"></div>', PY_W),
-
-    ("die Reihe steht unter der Auswahlzeile statt darueber", HTML,
-     (lambda s: (
-         s.replace('            <div class="wi-cfb-groups-wrap">\n'
-                   '                <label data-i18n="wissen.groups_label">Wissensgruppen (dein Bereich) *</label>\n'
-                   '                <div class="wi-groups" id="wi-cfb-groups"></div>\n'
-                   '            </div>\n', "", 1)
-          .replace('            <div class="wi-status" id="wi-cfb-status"></div>',
-                   '            <div class="wi-cfb-groups-wrap">\n'
-                   '                <label data-i18n="wissen.groups_label">Wissensgruppen (dein Bereich) *</label>\n'
-                   '                <div class="wi-groups" id="wi-cfb-groups"></div>\n'
-                   '            </div>\n'
-                   '            <div class="wi-status" id="wi-cfb-status"></div>', 1))),
-     None, PY_W),
-
-    ("⚠ der Knopf verlangt keine Wissensgruppe mehr", WJS,
-     'btn.disabled = !!laeuft || _cfbLaeuft || !key || !grp || (sel && sel.disabled);',
-     'btn.disabled = !!laeuft || _cfbLaeuft || !key || (sel && sel.disabled);', JS_W),
-
-    ("der Grund nennt wieder nur den Bereich", WJS,
-     "            : (!key ? t('wissen.cfb_add_hint') : t('wissen.cfb_need_group'));",
-     "            : t('wissen.cfb_add_hint');", JS_W),
-
-    ("⚠ die Zuordnung geht nicht mit dem Rumpf raus", WJS,
-     'body: JSON.stringify({ key: key, inkl_unter: sub, groups: grp })',
-     'body: JSON.stringify({ key: key, inkl_unter: sub })', JS_W),
-
-    ("⚠ die Gruppen werden bei jedem Render neu gezeichnet (Auswahl weg)", WJS,
-     "        if (box.querySelector('.wi-grp-cfb')) return;\n", "", JS_W),
-
-    ("die Kaestchen geben den Knopf nicht frei", WJS,
-     "        if (cfbGrp) cfbGrp.addEventListener('change', function () { cfbAddKnopf(); });",
-     "        if (cfbGrp) { /* nichts */ }", JS_W),
-
-    ("⚠ eine Einbindung ohne Zuordnung wird NICHT mehr benannt", WJS,
-     '            if (!gi.length) {', '            if (false) {', JS_W),
-
-    ("⚠ Rueckfall auf die Kennungen raus (aelteres Backend -> Falschaussage)", WJS,
-     "            if (!gi) gi = ids.map(function (id) { return { id: id, name: id, color: '' }; });",
-     "            if (!gi) gi = [];", JS_W),
-
-    ("eine geloeschte Gruppe wird verschwiegen", WJS,
-     '            } else if (gi.length < ids.length) {', '            } else if (false) {', JS_W),
-
-    ("neuer i18n-Schluessel fehlt in EN", I18N,
-     "        'wissen.cfb_need_group': 'Select at least one knowledge group',\n", "", PY_W),
-
-    ("Dubletten-Pruefung raus", CFB,
-     'if isinstance(b, dict) and (b.get("key") or "") == k:\n                raise BindungFehler("Dieser Bereich ist bereits eingebunden.")',
-     'if False:\n                raise BindungFehler("Dieser Bereich ist bereits eingebunden.")', PY_W),
-
-    ("Schluessel wird wieder GEKUERZT statt abgewiesen", CFB,
-     'if len(k) > KEY_MAX or not _KEY_RE.match(k):',
-     'k = k[:KEY_MAX]\n    if not _KEY_RE.match(k):', PY_W),
-
-    # Der gemeldete Fall vom 2026-09-21: ohne `@` fallen alle PERSOENLICHEN
-    # Bereiche durch (am echten Bestand 185 von 489).
-    ("Zeichenmenge wieder zu eng (kein @)", CFB,
-     'r"^[A-Za-z0-9._~@+-]+$"', 'r"^[A-Za-z0-9._~-]+$"', PY_W),
-
-    ("inkl_unter per Falsyness statt 'is True'", CFB,
-     '"inkl_unter": inkl_unter is True,', '"inkl_unter": bool(inkl_unter),', PY_W),
-
-    ("Deckel raus", CFB,
-     'if len(bereiche) >= MAX_BEREICHE:', 'if False:', PY_W),
-
-    ("kaputte Datei wird ueberschrieben", CFB,
-     '        return _leer()\n    if not isinstance(d, dict):',
-     '        _speichern(_leer())\n        return _leer()\n    if not isinstance(d, dict):', PY_W),
-
-    ("Lesefehler wird wieder still verschluckt", CFB,
-     """        print(f"[CF-Bindung] {p} nicht lesbar ({type(e).__name__}: {e}) – "
-              f"die Liste erscheint LEER. Pruefe Eigentuemer/Rechte "
-              f"(erwartet: jarvis:jarvis 0640) bzw. den JSON-Inhalt.")""",
-     "        pass", PY_W),
-
-    ("entfernen meldet immer Erfolg", CFB,
-     '        if len(d["bereiche"]) == vorher:\n            return False',
-     '        if False:\n            return False', PY_W),
-
-    ("POST prueft den Wissensbereich nicht", MAIN,
-     '''    if not _editable_groups_for(user):
-        return JSONResponse({"ok": False, "error": "Dir ist kein Wissensbereich zugewiesen."},
-                            status_code=403)
-    import backend.confluence_bindung as _cfb
-    from backend.confluence_client import ConfluenceError''',
-     '''    import backend.confluence_bindung as _cfb
-    from backend.confluence_client import ConfluenceError''', PY_W),
-
-    ("Sichtbarkeits-Pruefung NACH dem Einbinden", MAIN,
-     '''    treffer = next((s for s in sichtbar if (s.get("key") or "") == key), None)
-    if treffer is None:
-        return JSONResponse({"ok": False, "error": "Bereich nicht sichtbar/erlaubt."},
-                            status_code=403)
-    try:
-        eintrag = _cfb.hinzufuegen(key, treffer.get("name") or key,''',
-     '''    try:
-        eintrag = _cfb.hinzufuegen(key, key,''', PY_W),
-
-    ("Anzeigename aus dem Rumpf", MAIN,
-     'eintrag = _cfb.hinzufuegen(key, treffer.get("name") or key,',
-     'eintrag = _cfb.hinzufuegen(key, body.get("name") or treffer.get("name") or key,', PY_W),
-
-    ("_cfb_aktiv prueft den Skill nicht mehr", MAIN,
-     'return bool(_skill_active("confluence")), bool(_confluence_client().configured)',
-     'return True, bool(_confluence_client().configured)', PY_W),
-
-    # ⚠ Der Name steht ZWEIMAL in sandbox.py (auch in PRIVATE_FILES, dort tief
-    # eingerueckt). Ohne den fuehrenden Zeilenumbruch traf die Ersetzung beide
-    # und die Probe war unbrauchbar – gegen HEAD gemessen ebenso, also
-    # Vorzustand und nicht Folge dieser Aenderung.
-    ("Ablage faellt aus _APP_DENY_REL", SB,
-     '\n    "data/confluence_bindung.json",\n', '\n', PY_W),
-
-    # ⚠ Diese Probe MUSS wirklich verschieben. Ein blosser Kommentar davor
-    # laesst die Reihenfolge unveraendert – die erste Fassung sah dadurch wie
-    # ein zahnloser Waechter aus und war eine schlecht platzierte Sabotage.
-    ("Container steht NACH 'Mein Wissen'", HTML, _tausche_bloecke, None, PY_W),
-
-    ("Kaestchen nicht mehr vorbelegt", HTML,
-     '<input type="checkbox" id="wi-cfb-sub" checked>',
-     '<input type="checkbox" id="wi-cfb-sub">', PY_W),
-
-    ("Hinweis 'Abgleich folgt spaeter' raus", HTML,
-     'data-i18n="wissen.cfb_soon"', 'data-i18n="wissen.cfb_weg"', PY_W),
-
-    ("zweiter, eigener Abruf der Bereichsliste", WJS,
-     "    function cfbLaden() {\n        fetch('/api/wissen/confluence/bindung'",
-     "    function cfbLaden() {\n        fetch('/api/wissen/confluence/spaces', { headers: authH() });\n        fetch('/api/wissen/confluence/bindung'", PY_W),
-
-    ("EN-Schluessel fehlt", I18N,
-     "        'wissen.cfb_scope_top': 'this entry only',\n", "", PY_W),
-
-    # ── Oberflaeche: hier misst nur der ausgefuehrte Renderer ──────────────
-    # ── Übernahme per KNOPF (Vorgabe 2026-09-21) ────────────────
-    ("Klick-Verdrahtung des Knopfes raus", WJS, KLICK, "        /* Verdrahtung weg */", JS_W),
-
-    # ⚠ DER GEMELDETE ZUSTAND: das Pulldown bindet wieder direkt ein.
-    ("das Pulldown bindet wieder SOFORT ein (Altstand)", WJS,
-     "if (cfbSel) cfbSel.addEventListener('change', function () { cfbAddKnopf(); });",
-     "if (cfbSel) cfbSel.addEventListener('change', function () { cfbAdd(cfbSel.value); });", JS_W),
-
-    ("Knopf ist ohne Auswahl nicht gesperrt", WJS,
-     "btn.disabled = !!laeuft || _cfbLaeuft || !key || !grp || (sel && sel.disabled);",
-     "btn.disabled = false;", JS_W),
-
-    ("gesperrter Knopf ohne Grund im title", WJS,
-     "        btn.title = !btn.disabled ? ''\n"
-     "            : (!key ? t('wissen.cfb_add_hint') : t('wissen.cfb_need_group'));",
-     "        btn.title = '';", JS_W),
-
-    ("Knopfzustand wird nach dem Zeichnen nicht nachgezogen", WJS,
-     "        sel.value = '';\n        cfbAddKnopf();", "        sel.value = '';", JS_W),
-
-    ("Knopf aus dem Markup", HTML, KNOPF_MARKUP, "", PY_W),
-
-    ("Knopf startet nicht gesperrt", HTML,
-     'data-i18n="wissen.cfb_add" disabled>', 'data-i18n="wissen.cfb_add">', PY_W),
-
-    ("Container auch ohne aktiven Skill sichtbar", WJS,
-     "        if (!_cfbAktiv) { sec.style.display = 'none'; return; }",
-     "        if (false) { sec.style.display = 'none'; return; }", JS_W),
-
-    ("eingebundene Bereiche bleiben im Angebot", WJS,
-     "var frei = (_cfSpaces || []).filter(function (sp) { return !drin[sp.key]; });",
-     "var frei = (_cfSpaces || []);", JS_W),
-
-    ("inkl_unter wird nicht mitgesendet", WJS,
-     "body: JSON.stringify({ key: key, inkl_unter: sub, groups: grp })",
-     "body: JSON.stringify({ key: key, groups: grp })", JS_W),
-
-    ("Bereichsname unmaskiert in die Liste", WJS,
-     "+ '<span class=\"nm\">' + esc(b.name || b.key) + '</span>'",
-     "+ '<span class=\"nm\">' + (b.name || b.key) + '</span>'", JS_W),
-
-    ("Loeschen ohne Rueckfrage", WJS,
-     "if (!window.confirm(t('wissen.cfb_del_ask', { n: label || id }))) return;", "", JS_W),
-
-    ("Fehlschlag beim Einbinden wird verschluckt", WJS,
-     "                  cfbStatus('⚠️ ' + ((d && d.error) || t('wissen.cfb_err')), true);\n                  cfbRenderPick();   // Auswahl zuruecksetzen, Pulldown wieder frei\n                  return;",
-     "                  cfbRenderPick();\n                  return;", JS_W),
-
-    ("Reichweite steht nicht mehr als Wort in der Zeile", WJS,
-     "+ '<span class=\"wi-cfb-scope-tag\">' + esc(tag) + '</span>'", "", JS_W),
-
+    # ── Oberflaeche (wissen.js) ─────────────────────────────────────────────
+    ("⚠ [-] laesst die Unterbereiche markiert", WJS,
+     "            cfbOeffnen(li, false);\n            cfbUnten(li, false);\n",
+     "            cfbOeffnen(li, false);\n", JS_W),
+    ("⚠ [+] markiert die Unterbereiche nicht", WJS,
+     "            cfbUnten(li, true);\n            cfbOeffnen(li, true);\n",
+     "            cfbOeffnen(li, true);\n", JS_W),
+    ("[+] markiert den Eintrag selbst nicht", WJS,
+     "            var cb = cfbCb(li); if (cb) cb.checked = true;\n", "", JS_W),
+    ("⚠ der Name markiert beim Aufklappen", WJS,
+     "        return fertig.then(function () { cfbOeffnen(li, true); }, function () {});",
+     "        return fertig.then(function () { cfbOeffnen(li, true); cfbUnten(li, true); }, function () {});", JS_W),
+    ("⚠ ein Haken zieht die Unterbereiche mit", WJS,
+     "                if (ev.target.classList && ev.target.classList.contains('wi-cfb-cb')) cfbMarken();",
+     "                if (ev.target.classList && ev.target.classList.contains('wi-cfb-cb')) { cfbUnten(ev.target.closest('li'), ev.target.checked); cfbMarken(); }", JS_W),
+    ("ganzer Bereich geht nie als ganz raus", WJS,
+     "ganz: cfbKomplett(li) && (li._cfbZahl || 0) > 0,", "ganz: false,", JS_W),
+    ("ein Blatt zaehlt als Zweig", WJS,
+     "if (cfbKind(pg, 'wi-cf-kids') && cfbKomplett(pg)) zweige.push(id);",
+     "if (!cfbKind(pg, 'wi-cf-kids') || cfbKomplett(pg)) zweige.push(id);", JS_W),
+    ("Wissensgruppen gehen nicht mit", WJS,
+     "body: JSON.stringify({ auswahl: auswahl, groups: grp })", "body: JSON.stringify({ auswahl: auswahl })", JS_W),
+    ("⚠ Bearbeiten legt einen NEUEN Eintrag an", WJS,
+     "method: edit ? 'PUT' : 'POST'", "method: 'POST'", JS_W),
+    ("Baum bleibt nach dem Uebernehmen markiert", WJS,
+     "              cfbEditModus(null);\n              cfbBaumLeeren();\n              cfbRender();\n",
+     "              cfbEditModus(null);\n              cfbRender();\n", JS_W),
+    ("Baum wird bei jedem Render neu gezeichnet", WJS,
+     "        if (_cfbBaumFuer === _cfSpaces && tree.querySelector('.wi-cfb-sp')) { cfbAddKnopf(); return; }\n",
+     "", PY_W),
+    ("Knopf frei ohne Wissensgruppe", WJS,
+     "        btn.disabled = !!laeuft || _cfbLaeuft || !n || !grp;\n",
+     "        btn.disabled = !!laeuft || _cfbLaeuft || !n;\n", JS_W),
+    ("nicht ladbarer Bereich verliert beim Bearbeiten seine Auswahl", WJS,
+     "                if (li._cfbVorher && cb && cb.checked === !!li._cfbVorher.start) {\n"
+     "                    aus.push(li._cfbVorher);\n                } else if",
+     "                if (false) {\n                } else if", JS_W),
+    ("die Suche versteckt markierte Bereiche", WJS,
+     "            var drin = !q || li.getAttribute('data-such').indexOf(q) !== -1\n"
+     "                || (cb && (cb.checked || cb.indeterminate));\n",
+     "            var drin = !q || li.getAttribute('data-such').indexOf(q) !== -1;\n", JS_W),
+    ("gespeicherte Seiten werden beim Bearbeiten nicht angehakt", WJS,
+     "                    if ((a.seiten || []).indexOf(id2) !== -1) { var c = cfbCb(pg); if (c) c.checked = true; }\n",
+     "", JS_W),
+    ("Abgleichsergebnis fehlt in der Zeile", WJS, "                + cfbSyncZeile(b)\n", "", JS_W),
+    ("Eintrag ohne Gruppe wird nicht benannt", WJS, "            if (!gi.length) {\n", "            if (false) {\n", JS_W),
     ("kein Muelleimer mehr, sondern ×", WJS,
      "esc(t('wissen.cfb_del')) + '\">' + JarvisIcons.trash() + '</button>'",
      "esc(t('wissen.cfb_del')) + '\">×</button>'", JS_W),
+    ("Fehlschlag verwirft die Markierung", WJS,
+     "                  cfbStatus('⚠️ ' + ((d && d.error) || t('wissen.cfb_err')), true);\n                  cfbAddKnopf();\n",
+     "                  cfbStatus('⚠️ ' + ((d && d.error) || t('wissen.cfb_err')), true);\n                  cfbBaumLeeren();\n", JS_W),
+
+    # ── i18n ────────────────────────────────────────────────────────────────
+    ("EN-Schluessel fehlt", I18N, "        'wissen.cfb_save': 'Save',\n", "", PY_W),
 ]
 
 # ── REGEL: jede angefasste Datei muss gesichert sein ────────────────────────
@@ -404,7 +290,7 @@ sichern()
 # ── Basislauf ───────────────────────────────────────────────────────────────
 print("\033[1mBasislauf (muss gruen sein – sonst ist keine Probe deutbar)\033[0m")
 basis_ok = True
-for name, cmd in [("Backend/Regeln", PY_W), ("Oberflaeche (jsdom)", JS_W)]:
+for name, cmd in [("Backend/Regeln", PY_W), ("Abgleich", CA_W), ("Oberflaeche (jsdom)", JS_W)]:
     rc, aus = lauf(cmd)
     z = [l for l in aus.splitlines() if "Ergebnis:" in l]
     print(f"  {name}: rc={rc} {z[-1].strip() if z else '(keine Bilanz)'}")

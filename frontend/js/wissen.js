@@ -1418,21 +1418,29 @@
     }
 
     // ── Dynamische Confluence-Einbindung ────────────────────────────────
-    // Ein Pulldown-Eintrag ist die BASIS des spaeteren Imports; der Haken
-    // "inkl. Unterseiten" bestimmt, ob alles ihm Untergeordnete mitzaehlt.
-    // Die Liste ist global (sie speist die gemeinsame Wissensdatenbank).
+    // BAUM STATT PULLDOWN (Vorgabe 2026-09-27): Bereiche und ihre
+    // Unterbereiche (der Seitenbaum des Bereichs) werden markiert und mit
+    // EINEM Klick als EIN gespeicherter Eintrag uebernommen - auch bei
+    // mehreren markierten Bereichen. Gespeicherte Eintraege sind editierbar.
+    // Abgeglichen wird vom Cron-Auftrag "Wissensabgleich"
+    // (backend/confluence_abgleich.py); die Liste ist global.
     //
-    // ⚠ HIER WIRD NOCH NICHTS IMPORTIERT (Vorgabe 2026-09-21) - der Container
-    // pflegt die Einbindung, der Abgleich folgt spaeter. Der Hinweistext im
-    // Markup sagt das; ohne ihn wartet jemand auf Wissen, das nicht kommt.
+    // Bedienung, wie vom Betreiber festgelegt:
+    //   [+]  klappt auf UND markiert den Eintrag samt allem darunter
+    //   [-]  klappt zu UND nimmt die Markierung darunter zurueck
+    //        (der Eintrag selbst bleibt, wie er ist)
+    //   Name klappt nur auf/zu - Haken bleiben unveraendert
+    //   Haken: nur dieser eine Eintrag, jederzeit einzeln
     var _cfbAktiv = false;       // Skill installiert+aktiv UND konfiguriert
-    var _cfbBereiche = null;     // eingebundene Bereiche (null = noch nicht geladen)
+    var _cfbBereiche = null;     // gespeicherte Eintraege (null = noch nicht geladen)
     var _cfbSpacesFertig = false; // Bereichsliste des Extraktors durchgelaufen?
     // ⚠ EIGENER MERKER STATT NUR DES ARGUMENTS von cfbAddKnopf(): waehrend des
-    // POST kann der Benutzer ein Wissensgruppen-Kaestchen umstellen, und dessen
+    // Speicherns kann der Benutzer ein Kaestchen umstellen, und dessen
     // change-Handler ruft cfbAddKnopf() OHNE Argument - der Knopf waere wieder
-    // frei und ein zweiter POST moeglich, mitten im ersten.
+    // frei und ein zweiter Aufruf moeglich, mitten im ersten.
     var _cfbLaeuft = false;
+    var _cfbEdit = null;         // Kennung des Eintrags, der gerade bearbeitet wird
+    var _cfbBaumFuer = null;     // Bereichsliste, fuer die der Baum gezeichnet ist
 
     function cfbStatus(msg, warn) {
         var el = $('wi-cfb-status');
@@ -1443,7 +1451,7 @@
 
     // Wird von loadCfSpaces gerufen, sobald die Bereichsliste steht ODER
     // endgueltig gescheitert ist. Beides muss ankommen: ohne den Fehlerfall
-    // stuende im Pulldown fuer immer "Lade...".
+    // stuende im Baum fuer immer "Lade...".
     function cfbSpacesFertig() { _cfbSpacesFertig = true; cfbRender(); }
 
     function cfbLaden() {
@@ -1470,25 +1478,14 @@
         if (!_cfbAktiv) { sec.style.display = 'none'; return; }
         sec.style.display = '';
         cfbRenderGroups();
-        cfbRenderPick();
+        cfbRenderBaum();
         cfbRenderList();
     }
 
-    // ⚠ MINDESTENS EINE WISSENSGRUPPE IST PFLICHT (Vorgabe 2026-09-22) - sonst
-    // waere beim spaeteren Abgleich nicht entscheidbar, WOHIN das geholte
-    // Wissen gehoert. Angeboten wird der eigene Bereich (`SCOPE.groups`), also
-    // dieselbe Menge wie im Informationsextraktor darueber.
-    //
-    // ⚠ NUR EINMAL ZEICHNEN. cfbRender() laeuft nach JEDEM Einbinden und
-    // Entfernen; wuerde hier neu gezeichnet, waere die Haekchen-Auswahl danach
-    // weg - und wer mehrere Bereiche derselben Gruppe zuordnet, muesste sie
-    // jedes Mal von vorn setzen.
-    //
-    // Ist der eigene Bereich leer, bleibt die Reihe leer und der Knopf gesperrt
-    // MIT GRUND. Eine eigene Erklaerung dafuer gibt es bewusst nicht: ohne
-    // Wissensgruppe antwortet der Endpunkt mit 403, der Container erscheint
-    // dann gar nicht - ein Text fuer einen unerreichbaren Zustand waere toter
-    // Code.
+    // ⚠ MINDESTENS EINE WISSENSGRUPPE IST PFLICHT (Vorgabe 2026-09-22).
+    // ⚠ NUR EINMAL ZEICHNEN: cfbRender() laeuft nach JEDEM Speichern und
+    // Loeschen; ein Neuaufbau verwuerfe die Haekchen - und wer mehrere
+    // Eintraege derselben Gruppe zuordnet, muesste sie jedes Mal neu setzen.
     function cfbRenderGroups() {
         var box = $('wi-cfb-groups');
         if (!box) return;
@@ -1496,48 +1493,296 @@
         box.innerHTML = groupBoxes('cfb');
     }
 
-    function cfbRenderPick() {
-        var sel = $('wi-cfb-space');
-        if (!sel) return;
-        var drin = {};
-        (_cfbBereiche || []).forEach(function (b) { if (b && b.key) drin[b.key] = true; });
-        // Bereits eingebundene Bereiche fallen aus dem Angebot - sonst laeuft
-        // die Auswahl in ein "ist bereits eingebunden", und der Benutzer kann
-        // sich nicht erklaeren, warum nichts passiert.
-        var frei = (_cfSpaces || []).filter(function (sp) { return !drin[sp.key]; });
+    // ── Der Baum ──
+    // Direkte Kinder eines <li> (Register: querySelector am Elternteil sucht
+    // im ganzen Teilbaum, nicht bei den Geschwistern).
+    function cfbKind(li, klasse) {
+        for (var i = 0; li && i < li.children.length; i++) {
+            if (li.children[i].classList.contains(klasse)) return li.children[i];
+        }
+        return null;
+    }
+    function cfbCb(li) {
+        var n = cfbKind(li, 'wi-cf-node');
+        return n ? n.querySelector('.wi-cfb-cb') : null;
+    }
+    function cfbTog(li) {
+        var n = cfbKind(li, 'wi-cf-node');
+        return n ? n.querySelector('.wi-cfb-tog') : null;
+    }
 
-        var ph = t('wissen.cfb_pick'), aus = false;
-        if (!_cfbSpacesFertig && !_cfSpaces) { ph = t('common.loading'); aus = true; }
-        else if (!(_cfSpaces || []).length) { ph = t('wissen.cfb_nospaces'); aus = true; }
-        else if (!frei.length) { ph = t('wissen.cfb_all_bound'); aus = true; }
+    // ⚠ DER BAUM WIRD NUR NEU GEZEICHNET, WENN SICH DIE BEREICHSLISTE AENDERT.
+    // Die Haken leben im DOM; ein Neuaufbau nach jedem Speichern verwuerfe eine
+    // Markierung, an der jemand gerade arbeitet.
+    function cfbRenderBaum() {
+        var tree = $('wi-cfb-tree');
+        if (!tree) return;
+        if (!_cfbSpacesFertig && !_cfSpaces) {
+            tree.innerHTML = '<div class="wi-empty">' + esc(t('common.loading')) + '</div>';
+            cfbAddKnopf();
+            return;
+        }
+        if (!(_cfSpaces || []).length) {
+            tree.innerHTML = '<div class="wi-empty">' + esc(t('wissen.cfb_nospaces')) + '</div>';
+            _cfbBaumFuer = _cfSpaces;
+            cfbAddKnopf();
+            return;
+        }
+        if (_cfbBaumFuer === _cfSpaces && tree.querySelector('.wi-cfb-sp')) { cfbAddKnopf(); return; }
+        _cfbBaumFuer = _cfSpaces;
+        tree.innerHTML = '<ul>' + _cfSpaces.map(function (sp) {
+            return '<li role="treeitem" class="wi-cfb-sp" aria-expanded="false" data-key="' + esc(sp.key) + '"'
+                + ' data-such="' + esc(((sp.name || '') + ' ' + sp.key).toLowerCase()) + '">'
+                + '<div class="wi-cf-node">'
+                + '<input type="checkbox" class="wi-cfb-cb" data-art="space" aria-label="' + esc(sp.name || sp.key) + '">'
+                + '<span class="wi-cfb-nm" role="button" tabindex="0" title="' + esc(t('wissen.cfb_name_hint')) + '">'
+                + esc(sp.name || sp.key) + ' <span class="wi-cfb-key">(' + esc(sp.key) + ')</span></span>'
+                // Ob ein Bereich Unterbereiche hat, weiss erst der Abruf seines
+                // Seitenbaums - 500 Abrufe vorab waeren teurer als das Zeichen.
+                // Stellt sich der Bereich als leer heraus, verschwindet es.
+                + cfbTogHtml(false)
+                + '</div></li>';
+        }).join('') + '</ul>';
+        cfbFilter();
+        cfbMarken();
+    }
 
-        sel.disabled = aus;
-        sel.innerHTML = '<option value="">' + esc(ph) + '</option>'
-            + frei.map(function (sp) {
-                return '<option value="' + esc(sp.key) + '">'
-                    + esc((sp.name || sp.key) + ' (' + sp.key + ')') + '</option>';
-            }).join('');
-        sel.value = '';
+    function cfbTogHtml(offen) {
+        return '<button type="button" class="wi-cfb-tog" aria-expanded="' + (offen ? 'true' : 'false') + '"'
+            + ' title="' + esc(t(offen ? 'wissen.cfb_tog_close' : 'wissen.cfb_tog_open')) + '">'
+            + (offen ? '[-]' : '[+]') + '</button>';
+    }
+
+    function cfbSeiteHtml(n) {
+        var hatKids = n.kids.length > 0;
+        return '<li role="treeitem" class="wi-cfb-pg" data-id="' + esc(n.id) + '"'
+            + (hatKids ? ' aria-expanded="false"' : '') + '>'
+            + '<div class="wi-cf-node">'
+            + '<input type="checkbox" class="wi-cfb-cb" data-art="page" value="' + esc(n.id) + '" aria-label="' + esc(n.title) + '">'
+            + '<span class="wi-cfb-nm"' + (hatKids ? ' role="button" tabindex="0" title="' + esc(t('wissen.cfb_name_hint')) + '"' : '') + '>'
+            + esc(n.title) + '</span>'
+            + (hatKids ? ' <span class="wi-cf-cnt">(' + cfZahl(n) + ')</span>' + cfbTogHtml(false) : '')
+            + '</div>'
+            + (hatKids ? '<ul class="wi-cf-kids" role="group">' + n.kids.map(cfbSeiteHtml).join('') + '</ul>' : '')
+            + '</li>';
+    }
+
+    // Seitenbaum eines Bereichs EINMAL holen (Promise je Bereich gemerkt).
+    function cfbSeitenLaden(li) {
+        if (li._cfbLaden) return li._cfbLaden;
+        var key = li.getAttribute('data-key');
+        li._cfbLaden = fetch('/api/wissen/confluence/pages?space=' + encodeURIComponent(key), { headers: authH() })
+            .then(function (r) { return r.json(); })
+            .then(function (d) {
+                if (!d || !d.ok) throw new Error((d && d.error) || 'x');
+                var roots = cfBaum(d.pages || []);
+                var alt = cfbKind(li, 'wi-cf-kids');
+                if (alt) alt.remove();
+                var ul = document.createElement('ul');
+                ul.className = 'wi-cf-kids';
+                ul.setAttribute('role', 'group');
+                if (!roots.length) {
+                    // Kein Unterbereich: das [+] verschwindet, der Bereich
+                    // bleibt markierbar (dann zaehlt seine Startseite).
+                    var tg = cfbTog(li); if (tg) tg.remove();
+                    li.removeAttribute('aria-expanded');
+                    ul.innerHTML = '<li class="wi-cfb-leer">' + esc(t('wissen.cfb_nopages')) + '</li>';
+                } else {
+                    ul.innerHTML = roots.map(cfbSeiteHtml).join('');
+                }
+                li.appendChild(ul);
+                li._cfbGeladen = true;
+                li._cfbZahl = (d.pages || []).length;
+                return li;
+            })
+            .catch(function (e) {
+                li._cfbLaden = null;   // naechster Klick darf es erneut versuchen
+                cfbStatus('⚠️ ' + t('wissen.cfb_load_err') + ' (' + key + ')', true);
+                throw e;
+            });
+        return li._cfbLaden;
+    }
+
+    function cfbOeffnen(li, auf) {
+        var ul = cfbKind(li, 'wi-cf-kids');
+        if (ul) ul.classList.toggle('open', auf);
+        var tg = cfbTog(li);
+        if (tg) {
+            tg.setAttribute('aria-expanded', auf ? 'true' : 'false');
+            tg.textContent = auf ? '[-]' : '[+]';
+            tg.title = t(auf ? 'wissen.cfb_tog_close' : 'wissen.cfb_tog_open');
+        }
+        if (li.hasAttribute('aria-expanded')) li.setAttribute('aria-expanded', auf ? 'true' : 'false');
+    }
+
+    function cfbUnten(li, an) {
+        var ul = cfbKind(li, 'wi-cf-kids');
+        if (ul) ul.querySelectorAll('.wi-cfb-cb').forEach(function (x) { x.checked = an; });
+    }
+
+    // [+]: aufklappen UND markieren (samt allem darunter). [-]: zuklappen UND
+    // die Markierung darunter zuruecknehmen; der Eintrag selbst bleibt.
+    function cfbPlusMinus(li) {
+        var tg = cfbTog(li);
+        var offen = tg && tg.getAttribute('aria-expanded') === 'true';
+        if (offen) {
+            cfbOeffnen(li, false);
+            cfbUnten(li, false);
+            cfbMarken();
+            return Promise.resolve();
+        }
+        var fertig = li.classList.contains('wi-cfb-sp') && !li._cfbGeladen
+            ? cfbSeitenLaden(li) : Promise.resolve(li);
+        return fertig.then(function () {
+            var cb = cfbCb(li); if (cb) cb.checked = true;
+            cfbUnten(li, true);
+            cfbOeffnen(li, true);
+            cfbMarken();
+        }, function () { cfbMarken(); });
+    }
+
+    // Name: nur auf-/zuklappen - die Haken bleiben, wie sie sind.
+    function cfbNameKlick(li) {
+        var ul = cfbKind(li, 'wi-cf-kids');
+        var offen = !!(ul && ul.classList.contains('open'));
+        if (offen) { cfbOeffnen(li, false); return Promise.resolve(); }
+        var fertig = li.classList.contains('wi-cfb-sp') && !li._cfbGeladen
+            ? cfbSeitenLaden(li) : Promise.resolve(li);
+        return fertig.then(function () { cfbOeffnen(li, true); }, function () {});
+    }
+
+    // Anzeige nachziehen: halber Haken an einem Eintrag, der selbst NICHT
+    // markiert ist, aber Markiertes darunter hat; Zaehler; Knopf.
+    function cfbMarken() {
+        var tree = $('wi-cfb-tree');
+        if (!tree) return;
+        tree.querySelectorAll('li[role="treeitem"]').forEach(function (li) {
+            var ul = cfbKind(li, 'wi-cf-kids'), cb = cfbCb(li);
+            if (!cb) return;
+            cb.indeterminate = !cb.checked && !!(ul && ul.querySelector('.wi-cfb-cb:checked'));
+        });
+        var n = cfbAuswahl().length;
+        var m = $('wi-cfb-marked');
+        if (m) m.textContent = n ? t('wissen.cfb_marked', { n: n }) : '';
         cfbAddKnopf();
     }
 
-    // Der Uebernehmen-Knopf folgt der Auswahl. GESPERRT MIT GRUND statt
-    // verborgen (Projektregel): ein Knopf, der je nach Datenlage auftaucht und
-    // wieder verschwindet, ist unerklaerbar - und ohne den `title` kann niemand
-    // ableiten, WAS zu tun ist, damit er wieder geht.
+    function cfbFilter() {
+        var tree = $('wi-cfb-tree');
+        if (!tree) return;
+        var q = ((($('wi-cfb-such') || {}).value) || '').trim().toLowerCase();
+        tree.querySelectorAll('li.wi-cfb-sp').forEach(function (li) {
+            // Ein markierter Bereich bleibt sichtbar - eine Markierung, die
+            // hinter einem Suchbegriff verschwindet, uebernimmt man blind.
+            var cb = cfbCb(li);
+            var drin = !q || li.getAttribute('data-such').indexOf(q) !== -1
+                || (cb && (cb.checked || cb.indeterminate));
+            li.style.display = drin ? '' : 'none';
+        });
+    }
+
+    // Ist der Zweig unter `li` komplett markiert (der Knoten eingeschlossen)?
+    function cfbKomplett(li) {
+        var cb = cfbCb(li), ul = cfbKind(li, 'wi-cf-kids');
+        if (!cb || !cb.checked || !ul) return false;
+        var alle = ul.querySelectorAll('.wi-cfb-cb');
+        return alle.length > 0 && ul.querySelectorAll('.wi-cfb-cb:checked').length === alle.length;
+    }
+
+    // Die Markierung als Auswahl fuer den Server. Je Bereich:
+    //   start  - der Bereich selbst ist markiert
+    //   ganz   - Bereich UND alle Unterbereiche markiert (neue Seiten kommen mit)
+    //   seiten - markierte Seiten
+    //   zweige - Seiten MIT Unterseiten, deren Zweig komplett markiert ist
+    //            (ein Blatt ist kein Zweig - siehe confluence_bindung.py)
+    function cfbAuswahl() {
+        var tree = $('wi-cfb-tree');
+        if (!tree) return [];
+        var aus = [];
+        tree.querySelectorAll('li.wi-cfb-sp').forEach(function (li) {
+            var key = li.getAttribute('data-key');
+            var cb = cfbCb(li);
+            if (!li._cfbGeladen) {
+                // Nie aufgeklappt: beim Bearbeiten gilt die gespeicherte
+                // Auswahl weiter (sie ist nicht sichtbar, aber nicht verworfen).
+                if (li._cfbVorher && cb && cb.checked === !!li._cfbVorher.start) {
+                    aus.push(li._cfbVorher);
+                } else if (cb && cb.checked) {
+                    aus.push({ key: key, start: true, ganz: false, seiten: [], zweige: [] });
+                }
+                return;
+            }
+            var seiten = [], zweige = [];
+            li.querySelectorAll('li.wi-cfb-pg').forEach(function (pg) {
+                var pcb = cfbCb(pg);
+                if (!pcb || !pcb.checked) return;
+                var id = pg.getAttribute('data-id');
+                seiten.push(id);
+                if (cfbKind(pg, 'wi-cf-kids') && cfbKomplett(pg)) zweige.push(id);
+            });
+            var start = !!(cb && cb.checked);
+            if (!start && !seiten.length) return;
+            aus.push({ key: key, start: start, ganz: cfbKomplett(li) && (li._cfbZahl || 0) > 0,
+                       seiten: seiten, zweige: zweige });
+        });
+        return aus;
+    }
+
+    // Alle Haken weg, alles zu, Bearbeiten beendet.
+    function cfbBaumLeeren() {
+        var tree = $('wi-cfb-tree');
+        if (!tree) return;
+        tree.querySelectorAll('.wi-cfb-cb').forEach(function (x) { x.checked = false; x.indeterminate = false; });
+        tree.querySelectorAll('li[role="treeitem"]').forEach(function (li) { cfbOeffnen(li, false); li._cfbVorher = null; });
+        cfbFilter();
+        cfbMarken();
+    }
+
+    // Der Knopf folgt der Auswahl. GESPERRT MIT GRUND statt verborgen
+    // (Projektregel) - und der Grund muss der RICHTIGE sein: ein Knopf, der
+    // "markieren" sagt, obwohl markiert ist und die Wissensgruppe fehlt,
+    // schickt an die falsche Stelle.
     function cfbAddKnopf(laeuft) {
         var btn = $('wi-cfb-add');
         if (!btn) return;
-        var sel = $('wi-cfb-space');
-        var key = sel ? sel.value : '';
+        var n = cfbAuswahl().length;
         var grp = checkedGroups('cfb').length;
-        btn.disabled = !!laeuft || _cfbLaeuft || !key || !grp || (sel && sel.disabled);
-        // ⚠ DER GRUND MUSS DER RICHTIGE SEIN. Ein Knopf, der "Bereich waehlen"
-        // sagt, obwohl der Bereich steht und die Wissensgruppe fehlt, schickt
-        // den Benutzer an die falsche Stelle - dieselbe Klasse wie
-        // "mount error(13)": richtig und trotzdem nutzlos.
+        btn.disabled = !!laeuft || _cfbLaeuft || !n || !grp;
         btn.title = !btn.disabled ? ''
-            : (!key ? t('wissen.cfb_add_hint') : t('wissen.cfb_need_group'));
+            : (!n ? t('wissen.cfb_add_hint') : t('wissen.cfb_need_group'));
+    }
+
+    function cfbZusammenfassung(b) {
+        return (b.auswahl || []).map(function (a) {
+            var teile = [];
+            if (a.ganz) teile.push(t('wissen.cfb_sum_ganz'));
+            else {
+                if (a.start) teile.push(t('wissen.cfb_sum_start'));
+                if ((a.seiten || []).length) teile.push(t('wissen.cfb_sum_seiten', { n: a.seiten.length }));
+                if ((a.zweige || []).length) teile.push(t('wissen.cfb_sum_zweige'));
+            }
+            return a.key + ': ' + teile.join(', ');
+        }).join(' · ');
+    }
+
+    // Ergebnis des letzten Abgleichs - ohne diese Zeile nimmt der Container
+    // einen Eintrag an, und niemand sieht, ob je etwas ankommt.
+    function cfbSyncZeile(b) {
+        var s = b.abgleich;
+        if (!s) return '<div class="wi-cfb-sync">' + esc(t('wissen.cfb_sync_none')) + '</div>';
+        var zeit = '';
+        try { zeit = new Date(s.zeit).toLocaleString(undefined, { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' }); }
+        catch (e) { zeit = s.zeit || ''; }
+        var warn = !!s.fehler;
+        // Nichts geholt UND ein Fehler: dann ist "Abgeglichen: 0 Seiten" eine
+        // Falschaussage - es wurde gar nicht abgeglichen. Nur der Grund steht da.
+        if (warn && !s.seiten) {
+            return '<div class="wi-cfb-sync warn">' + esc(t('wissen.cfb_sync_err', { e: s.fehler })) + '</div>';
+        }
+        var txt = t('wissen.cfb_sync_ok', { t: zeit, n: (s.seiten || 0) - (s.offen || 0) });
+        if (s.offen) txt += ' · ' + t('wissen.cfb_sync_offen', { n: s.offen });
+        if (warn) txt += ' · ' + t('wissen.cfb_sync_err', { e: s.fehler });
+        return '<div class="wi-cfb-sync' + (warn ? ' warn' : '') + '">' + esc(txt) + '</div>';
     }
 
     function cfbRenderList() {
@@ -1549,14 +1794,9 @@
             return;
         }
         box.innerHTML = arr.map(function (b) {
-            // Die Reichweite steht als WORT da, nicht nur als Farbe oder Haken -
-            // sonst ist "mit Unterseiten" von "ohne" nicht zu unterscheiden.
-            var tag = b.inkl_unter ? t('wissen.cfb_scope_sub') : t('wissen.cfb_scope_top');
             // ⚠ DIE NAMEN KOMMEN VOM SERVER (`gruppen_info`), nicht aus
-            // SCOPE.groups: der Client kennt nur SEINEN Bereich, und die
-            // Zuordnung eines Kollegen saehe sonst wie eine geloeschte Gruppe
-            // aus. Fehlt das Feld ganz (aelteres Backend, halber Deploy),
-            // stehen die Kennungen da - haesslich, aber keine Falschaussage.
+            // SCOPE.groups: der Client kennt nur SEINEN Bereich. Fehlt das Feld
+            // ganz (aelteres Backend), stehen die Kennungen da.
             var ids = b.gruppen || [];
             var gi = b.gruppen_info;
             if (!gi) gi = ids.map(function (id) { return { id: id, name: id, color: '' }; });
@@ -1564,9 +1804,8 @@
                 return '<span class="wi-chip" style="border-color:' + esc(g.color || 'var(--border)')
                     + ';font-size:0.7rem;">' + esc(g.name || g.id) + '</span>';
             }).join(' ');
-            // Keine Zuordnung (Altbestand vor 2026-09-22) bzw. eine Gruppe, die
-            // es nicht mehr gibt: beides wird BENANNT statt verschwiegen - eine
-            // Einbindung ohne Ziel kann der spaetere Abgleich nicht ausfuehren.
+            // Keine Zuordnung (Altbestand) bzw. eine geloeschte Gruppe: beides
+            // wird BENANNT - ein Eintrag ohne Ziel wird nicht abgeglichen.
             if (!gi.length) {
                 chips = '<span class="wi-cfb-nogrp" title="' + esc(t('wissen.cfb_nogroup_hint'))
                     + '">' + esc(t('wissen.cfb_nogroup')) + '</span>';
@@ -1575,13 +1814,15 @@
                     + esc(t('wissen.cfb_grp_gone', { n: ids.length - gi.length })) + '</span>';
             }
             return '<div class="wi-item" data-id="' + esc(b.id) + '"'
-                + ' data-label="' + esc(b.name || b.key) + '">'
+                + ' data-label="' + esc(b.name || b.id) + '">'
                 + '<div class="wi-fmeta">'
-                + '<span class="nm">' + esc(b.name || b.key) + '</span>'
-                + '<div class="wi-fpath">' + esc(b.key) + '</div>'
+                + '<span class="nm">' + esc(b.name || b.id) + '</span>'
+                + '<div class="wi-fpath wi-cfb-sum">' + esc(cfbZusammenfassung(b)) + '</div>'
+                + cfbSyncZeile(b)
                 + '</div>'
                 + chips
-                + '<span class="wi-cfb-scope-tag">' + esc(tag) + '</span>'
+                + '<button type="button" class="sec-btn small wi-cfb-edit" title="'
+                + esc(t('wissen.cfb_edit_hint')) + '">' + esc(t('wissen.cfb_edit')) + '</button>'
                 + '<button type="button" class="sec-btn small danger wi-cfb-del" title="'
                 + esc(t('wissen.cfb_del')) + '">' + JarvisIcons.trash() + '</button>'
                 + '</div>';
@@ -1592,53 +1833,109 @@
                 cfbEntfernen(row.getAttribute('data-id'), row.getAttribute('data-label'));
             });
         });
+        box.querySelectorAll('.wi-cfb-edit').forEach(function (btn) {
+            btn.addEventListener('click', function () {
+                cfbBearbeiten(btn.closest('.wi-item').getAttribute('data-id'));
+            });
+        });
     }
 
-    // KNOPFDRUCK = Einbindung (Vorgabe 2026-09-21). Der Haken wird dabei SO
-    // uebernommen, wie er im Moment des Klicks steht - deshalb steht er neben
-    // dem Pulldown und nicht an der fertigen Zeile.
-    //
-    // ⚠ NICHT AM `change` DES PULLDOWNS. Ein `<select>` feuert `change` bei
-    // Tastatur-Navigation fuer JEDEN Pfeilschritt: wer mit den Pfeiltasten
-    // durch die Liste geht, haette jeden ueberflogenen Bereich eingebunden -
-    // jeden davon als eigenen Serveraufruf, und danach faellt er aus dem
-    // Angebot heraus. Dasselbe gilt fuer einen Fehlgriff mit der Maus: eine
-    // Auswahl ist kein Auftrag.
-    function cfbAdd(key) {
-        if (!key) return;
-        var sel = $('wi-cfb-space');
-        var sub = !!(($('wi-cfb-sub') || {}).checked);
+    function cfbEditModus(b) {
+        _cfbEdit = b ? b.id : null;
+        var add = $('wi-cfb-add'), ab = $('wi-cfb-cancel'), note = $('wi-cfb-editnote');
+        if (add) add.textContent = t(b ? 'wissen.cfb_save' : 'wissen.cfb_add');
+        if (ab) ab.style.display = b ? '' : 'none';
+        if (note) {
+            note.style.display = b ? '' : 'none';
+            note.textContent = b ? t('wissen.cfb_editing', { n: b.name || b.id }) : '';
+        }
+    }
+
+    // Einen gespeicherten Eintrag in den Baum laden: Haken und Gruppen so, wie
+    // sie gespeichert sind; die betroffenen Bereiche stehen aufgeklappt da.
+    function cfbBearbeiten(id) {
+        var b = (_cfbBereiche || []).filter(function (x) { return x.id === id; })[0];
+        var tree = $('wi-cfb-tree');
+        if (!b || !tree) return;
+        cfbBaumLeeren();
+        cfbEditModus(b);
+        cfbStatus('');
+        // Gruppen: nur die des eigenen Bereichs sind Kaestchen - fremde
+        // Zuordnungen haelt der Server beim Speichern fest (PUT).
+        var box = $('wi-cfb-groups');
+        if (box) box.querySelectorAll('.wi-grp-cfb').forEach(function (x) {
+            x.checked = (b.gruppen || []).indexOf(x.value) !== -1;
+        });
+        var warten = (b.auswahl || []).map(function (a) {
+            var li = null;
+            tree.querySelectorAll('li.wi-cfb-sp').forEach(function (x) {
+                if (x.getAttribute('data-key') === a.key) li = x;
+            });
+            if (!li) return Promise.resolve();
+            li._cfbVorher = a;
+            var cb = cfbCb(li); if (cb) cb.checked = !!a.start;
+            return cfbSeitenLaden(li).then(function () {
+                if (a.ganz) cfbUnten(li, true);
+                var zw = {};
+                (a.zweige || []).forEach(function (z) { zw[z] = true; });
+                li.querySelectorAll('li.wi-cfb-pg').forEach(function (pg) {
+                    var id2 = pg.getAttribute('data-id');
+                    if ((a.seiten || []).indexOf(id2) !== -1) { var c = cfbCb(pg); if (c) c.checked = true; }
+                    if (zw[id2]) cfbUnten(pg, true);
+                });
+                cfbOeffnen(li, true);
+            }, function () { /* nicht ladbar: gespeicherte Auswahl bleibt (_cfbVorher) */ });
+        });
+        Promise.all(warten).then(function () { cfbFilter(); cfbMarken(); });
+        cfbMarken();
+    }
+
+    // KNOPFDRUCK = Speichern (Vorgabe 2026-09-21: eine Auswahl ist kein Auftrag).
+    function cfbAdd() {
+        var auswahl = cfbAuswahl();
         var grp = checkedGroups('cfb');
+        if (!auswahl.length) { cfbStatus('⚠️ ' + t('wissen.cfb_add_hint'), true); return; }
         // Zweite Schranke neben dem gesperrten Knopf: das Kaestchen laesst sich
         // waehrend eines Laufs umstellen, und der Server weist es ohnehin ab -
         // aber der Benutzer soll den Grund HIER lesen, nicht als Serverfehler.
         if (!grp.length) { cfbStatus('⚠️ ' + t('wissen.cfb_need_group'), true); return; }
-        if (sel) sel.disabled = true;
+        var edit = _cfbEdit;
         _cfbLaeuft = true;
         cfbAddKnopf(true);
         cfbStatus(t('common.loading'));
-        fetch('/api/wissen/confluence/bindung', {
-            method: 'POST', headers: authH({ 'Content-Type': 'application/json' }),
-            body: JSON.stringify({ key: key, inkl_unter: sub, groups: grp })
+        fetch('/api/wissen/confluence/bindung' + (edit ? '/' + encodeURIComponent(edit) : ''), {
+            method: edit ? 'PUT' : 'POST', headers: authH({ 'Content-Type': 'application/json' }),
+            body: JSON.stringify({ auswahl: auswahl, groups: grp })
         }).then(function (r) { return r.json(); })
           .then(function (d) {
               _cfbLaeuft = false;
               if (!d || !d.ok) {
+                  // Die Markierung BLEIBT stehen - wer sie korrigieren will,
+                  // soll nicht von vorn anfangen.
                   cfbStatus('⚠️ ' + ((d && d.error) || t('wissen.cfb_err')), true);
-                  cfbRenderPick();   // Auswahl zuruecksetzen, Pulldown wieder frei
+                  cfbAddKnopf();
                   return;
               }
-              // Die Antwort des Servers gewinnt gegen den Formularstand: er
-              // vergibt die Kennung und kennt den Anzeigenamen des Bereichs.
+              // Die Antwort des Servers gewinnt: er vergibt die Kennung und
+              // kennt die Anzeigenamen der Bereiche.
               _cfbBereiche = d.bereiche || [];
-              cfbStatus('✅ ' + t('wissen.cfb_added',
-                        { n: (d.bereich && d.bereich.name) || key }));
+              var nm = (d.bereich && d.bereich.name) || '';
+              cfbStatus('✅ ' + t(edit ? 'wissen.cfb_saved' : 'wissen.cfb_added', { n: nm }));
+              cfbEditModus(null);
+              cfbBaumLeeren();
               cfbRender();
           })
           .catch(function () {
               _cfbLaeuft = false;
-              cfbStatus('⚠️ ' + t('wissen.cfb_err'), true); cfbRenderPick();
+              cfbStatus('⚠️ ' + t('wissen.cfb_err'), true);
+              cfbAddKnopf();
           });
+    }
+
+    function cfbAbbrechen() {
+        cfbEditModus(null);
+        cfbBaumLeeren();
+        cfbStatus('');
     }
 
     function cfbEntfernen(id, label) {
@@ -1650,10 +1947,44 @@
             .then(function (d) {
                 if (!d || !d.ok) { cfbStatus('⚠️ ' + ((d && d.error) || t('wissen.cfb_err')), true); return; }
                 _cfbBereiche = d.bereiche || [];
+                // Wer den Eintrag loescht, den er gerade bearbeitet, bearbeitet
+                // danach nichts mehr - sonst liefe "Speichern" in ein 404.
+                if (_cfbEdit === id) { cfbEditModus(null); cfbBaumLeeren(); }
                 cfbStatus('🗑️ ' + t('wissen.cfb_removed', { n: label || id }));
                 cfbRender();
             })
             .catch(function () { cfbStatus('⚠️ ' + t('wissen.cfb_err'), true); });
+    }
+
+    function cfbVerdrahten() {
+        var tree = $('wi-cfb-tree');
+        if (tree) {
+            tree.addEventListener('click', function (ev) {
+                var tg = ev.target.closest && ev.target.closest('.wi-cfb-tog');
+                if (tg) { cfbPlusMinus(tg.closest('li')); return; }
+                var nm = ev.target.closest && ev.target.closest('.wi-cfb-nm');
+                if (nm && nm.getAttribute('role') === 'button') cfbNameKlick(nm.closest('li'));
+            });
+            tree.addEventListener('keydown', function (ev) {
+                var nm = ev.target.closest && ev.target.closest('.wi-cfb-nm');
+                if (nm && (ev.key === 'Enter' || ev.key === ' ')) { ev.preventDefault(); cfbNameKlick(nm.closest('li')); }
+            });
+            // Ein Haken wirkt NUR auf seinen Eintrag - nichts wird mitgezogen.
+            tree.addEventListener('change', function (ev) {
+                if (ev.target.classList && ev.target.classList.contains('wi-cfb-cb')) cfbMarken();
+            });
+        }
+        var such = $('wi-cfb-such');
+        if (such) such.addEventListener('input', cfbFilter);
+        var btn = $('wi-cfb-add');
+        if (btn) btn.addEventListener('click', function () { cfbAdd(); });
+        var ab = $('wi-cfb-cancel');
+        if (ab) ab.addEventListener('click', cfbAbbrechen);
+        // Wissensgruppen-Pflicht: der Knopf folgt der Auswahl. DELEGIERT am
+        // Container - die Kaestchen entstehen erst beim Zeichnen. Nur auf
+        // `change` hoeren und NIE selbst umschalten (am AD-Picker bezahlt).
+        var grp = $('wi-cfb-groups');
+        if (grp) grp.addEventListener('change', function () { cfbAddKnopf(); });
     }
 
     // ── Confluence-Import (alle sichtbaren Bereiche) ────────────────────
@@ -2126,22 +2457,10 @@
             cfSearch.addEventListener('keydown', spaceSearchKey);
             cfSearch.addEventListener('blur', function () { setTimeout(closeSpaceDropdown, 150); });
         }
-        // Dynamische Confluence-Einbindung: die AUSWAHL bindet ein (Vorgabe).
-        // Die AUSWAHL gibt den Knopf nur FREI - eingebunden wird erst auf
+        // Dynamische Confluence-Einbindung: Baum, Suchfeld, Knoepfe.
+        // Markieren gibt den Knopf nur FREI - gespeichert wird erst auf
         // Knopfdruck (Vorgabe 2026-09-21, Begruendung an cfbAdd).
-        var cfbSel = $('wi-cfb-space');
-        if (cfbSel) cfbSel.addEventListener('change', function () { cfbAddKnopf(); });
-        var cfbBtn = $('wi-cfb-add');
-        if (cfbBtn) cfbBtn.addEventListener('click', function () {
-            cfbAdd(($('wi-cfb-space') || {}).value);
-        });
-        // Wissensgruppen-Pflicht: der Knopf folgt der Auswahl. DELEGIERT am
-        // Container - die Kaestchen entstehen erst beim Zeichnen, ein direkt
-        // gebundener Handler waere danach weg. Nur auf `change` hoeren und NIE
-        // selbst umschalten: die Kaestchen stecken in einem <label>, der
-        // Browser schaltet bereits um (am AD-Picker bezahlt).
-        var cfbGrp = $('wi-cfb-groups');
-        if (cfbGrp) cfbGrp.addEventListener('change', function () { cfbAddKnopf(); });
+        cfbVerdrahten();
 
         var cfRefresh = $('wi-cf-refresh'); if (cfRefresh) cfRefresh.addEventListener('click', function () { loadCfSpaces(true); });
 

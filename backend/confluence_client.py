@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import html
 import re
+from urllib.parse import quote
 
 import requests
 
@@ -137,20 +138,26 @@ class ConfluenceClient:
         return out
 
     def pages_in_space(self, space: str, limit: int = 500,
-                       with_parent: bool = False) -> list[dict]:
+                       with_parent: bool = False,
+                       with_version: bool = False) -> list[dict]:
         """Alle Seiten eines Bereichs (Space) mit ID, Titel und Web-Link.
 
         with_parent=True haengt je Seite `parent` an (ID der direkten
         Elternseite, "" fuer eine Wurzelseite) - Grundlage fuer die
         Baumansicht. Opt-in, weil `expand=ancestors` die Antwort vergroessert
         und die uebrigen Aufrufer nur die IDs brauchen.
+
+        with_version=True haengt `version` an (Versionsnummer der Seite) -
+        daran erkennt der Confluence-Abgleich eine Aenderung, OHNE jede Seite
+        mit ihrem Inhalt abzurufen.
         """
         out: list[dict] = []
         start, page = 0, 50
+        expand = [e for e, an in (("ancestors", with_parent), ("version", with_version)) if an]
         while len(out) < limit:
             params = {"spaceKey": space, "type": "page", "start": start, "limit": page}
-            if with_parent:
-                params["expand"] = "ancestors"
+            if expand:
+                params["expand"] = ",".join(expand)
             d = self._request("GET", "/rest/api/content", params=params)
             results = d.get("results", [])
             for s in results:
@@ -163,6 +170,8 @@ class ConfluenceClient:
                     # ancestors ist von der Wurzel zur direkten Elternseite sortiert
                     anc = s.get("ancestors") or []
                     item["parent"] = str((anc[-1] or {}).get("id") or "") if anc else ""
+                if with_version:
+                    item["version"] = int(((s.get("version") or {}).get("number")) or 0)
                 out.append(item)
             if len(results) < page:
                 break
@@ -236,6 +245,12 @@ class ConfluenceClient:
                 raise ConfluenceError(404, "Keine Seite mit Titel '%s' gefunden." % title)
             return res[0]
         raise ConfluenceError(0, "page_id oder title erforderlich.")
+
+    def space_homepage(self, space: str) -> str:
+        """Kennung der Startseite eines Bereichs ("" wenn keine hinterlegt ist)."""
+        d = self._request("GET", "/rest/api/space/%s" % quote(space, safe=""),
+                          params={"expand": "homepage"})
+        return str(((d.get("homepage") or {}).get("id")) or "")
 
     def get_child_pages(self, page_id: str, limit: int = 100) -> list:
         """Direkte Unterseiten einer Seite (id + title, ohne Inhalt)."""

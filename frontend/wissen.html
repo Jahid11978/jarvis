@@ -207,17 +207,38 @@
         .wi-cf-tog-leer { flex: 0 0 18px; }
         .wi-cf-cnt { color: var(--text-muted); font-size: 0.75rem; }
 
-        /* Dynamische Confluence-Einbindung: Pulldown + Reichweite in EINER Zeile.
-           `flex-wrap` laesst sie auf schmalen Fenstern umbrechen, statt
-           ueberzulaufen; `min-width: 0` am Pulldown ist Pflicht, sonst schiebt
-           ein langer Bereichsname den Haken aus der Zeile (ein Flex-Kind
-           schrumpft von sich aus nicht unter seine Inhaltsbreite). */
+        /* Dynamische Confluence-Einbindung: Suchfeld ueber dem Baum, Knopfzeile
+           darunter. `flex-wrap` laesst die Knopfzeile auf schmalen Fenstern
+           umbrechen, statt ueberzulaufen. */
         .wi-cfb-pick { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; margin-top: 6px; }
-        .wi-cfb-pick > select { flex: 1 1 240px; min-width: 0; }
-        /* Der Uebernehmen-Knopf darf nicht mitwachsen: `.wi-cfb-pick` ist ein
-           Flex-Container, und ohne `flex: 0 0 auto` zoege ein Knopf mit
-           Vorgabe-Flex Breite vom Pulldown ab. */
+        .wi-cfb-pick > input { flex: 1 1 240px; min-width: 0; }
+        .wi-cfb-tree { margin-top: 6px; }
+        /* Der Name klappt auf/zu (ohne Haken zu aendern) - er ist deshalb KEIN
+           <label>: ein Klick darauf wuerde sonst das Kaestchen umschalten. */
+        .wi-cfb-nm { cursor: pointer; min-width: 0; overflow-wrap: anywhere; }
+        .wi-cfb-nm:hover { color: var(--accent); }
+        .wi-cfb-key { color: var(--text-muted); font-size: 0.78rem; }
+        /* [+]/[-] steht HINTER dem Namen (Vorgabe) und bleibt als Zeichen
+           lesbar - der Zustand steht damit als Zeichen da, nicht nur als Drehung.
+           ⚠ NICHT IN --accent: im dunklen Thema gemessen 3,80:1 (unter 4,5:1).
+           Textfarbe + halbfett traegt das Zeichen, der Akzent nur beim Zeigen. */
+        .wi-cfb-tog { flex: 0 0 auto; padding: 0 3px; border: none; background: none;
+                      color: var(--text-primary); font-weight: 600; cursor: pointer;
+                      font-family: monospace; font-size: 0.82rem; line-height: 18px; }
+        .wi-cfb-tog:hover { color: var(--accent); }
+        .wi-cfb-leer { color: var(--text-muted); font-size: 0.78rem; padding: 2px 0 2px 24px; }
+        .wi-cfb-actions { display: flex; align-items: center; gap: 10px; flex-wrap: wrap;
+                          justify-content: flex-end; margin-top: 8px; }
+        .wi-cfb-marked { font-size: 0.8rem; color: var(--text-secondary); margin-right: auto; }
+        .wi-cfb-editnote { font-size: 0.8rem; color: var(--text-primary); flex: 1 1 100%;
+                           border-left: 3px solid var(--accent); padding: 4px 10px; }
+        /* Die Knoepfe duerfen nicht mitwachsen: `.wi-cfb-actions` ist ein
+           Flex-Container. */
         .wi-cfb-add { flex: 0 0 auto; }
+        .wi-cfb-sum { font-size: 0.75rem; color: var(--text-secondary); }
+        .wi-cfb-sync { font-size: 0.75rem; color: var(--text-secondary); }
+        .wi-cfb-sync.warn { color: var(--text-primary); border-left: 3px solid var(--warning);
+                            padding-left: 6px; }
         /* Wissensgruppen-Pflicht: Beschriftung wie im Extraktor darueber
            (dieselbe Groesse/Farbe), damit beide Bloecke als dasselbe gelesen
            werden. `margin-bottom: 0` am Wrap, weil der Hinweistext darunter
@@ -233,37 +254,6 @@
         .wi-cfb-nogrp { font-size: 0.72rem; padding: 2px 8px; border-radius: 999px;
                         border: 1px dashed var(--warning); color: var(--text-primary);
                         white-space: nowrap; flex: 0 0 auto; }
-        .wi-cfb-scope { display: inline-flex; align-items: center; gap: 6px; flex: 0 0 auto;
-                        font-size: 0.85rem; color: var(--text-primary); cursor: pointer; }
-        /* Reichweite als WORT, nicht nur als Farbe – dieselbe Regel wie bei den
-           Anwesenheits-Pillen. */
-        .wi-cfb-scope-tag { font-size: 0.72rem; padding: 2px 8px; border-radius: 999px;
-                            border: 1px solid var(--border); color: var(--text-secondary);
-                            white-space: nowrap; flex: 0 0 auto; }
-        /* ⚠ DEUTLICH, UND NICHT NUR FARBIG (Vorgabe 2026-09-21). Der Container
-           nimmt Einbindungen an, der Abgleich dahinter laeuft noch nicht - wer
-           das ueberliest, wartet auf Wissen, das nicht kommt. Die Aussage steht
-           deshalb im TEXT, die Farbe ist die zweite Ebene.
-           Der Abstand nach oben bleibt: ohne ihn klebt der Hinweis am untersten
-           Eintrag und liest sich wie dessen Fussnote (im Screenshot gesehen). */
-        /* ⚠ DER SELEKTOR MUSS SPEZIFISCHER SEIN ALS `.wi-section .desc` (0,2,0).
-           Der Hinweis traegt beide Klassen, und mit `.wi-cfb-soon` allein (0,1,0)
-           gewann die Vorgabefarbe: im DUNKLEN Thema stand er grau da, im hellen
-           rot (dort greift die body.light-Regel). Gesehen hat das nur die
-           optische Abnahme - der Quelltext-Waechter fand `--danger` und war
-           gruen. Register: erst die Klasse ansehen, dann benutzen. */
-        /* ⚠ --danger PUR reicht in KEINEM der beiden Themen: dunkel gemessen
-           4,40:1, hell 3,45:1 - beide unter 4,5:1. Also in beide Richtungen
-           angepasst, nicht nur ins Helle (gemessen 5,55:1 bzw. 5,19:1). */
-        .wi-section p.wi-cfb-soon { margin-top: 12px;
-                       color: color-mix(in srgb, var(--danger) 80%, #fff);
-                       font-weight: 600; border-left: 3px solid var(--danger);
-                       border-radius: 8px; padding: 8px 12px;
-                       background: rgba(var(--danger-rgb), 0.08); }
-        /* --danger liegt im hellen Thema bei 3,45:1 und damit unter 4,5:1 -
-           dieselbe Abdunklung wie bei den Zertifikats-Urteilen in theme.css. */
-        body.light .wi-section p.wi-cfb-soon {
-                       color: color-mix(in srgb, var(--danger) 78%, #000); }
         /* ── Wissens-Destillat ──────────────────────────────────────────
            AUSSCHLIESSLICH ueber Variablen: die Seite hat kein eigenes
            `body.light`-Gegenstueck fuer diesen Container, und genau deshalb
@@ -717,47 +707,40 @@
              damit der Container beim Laden nicht aufblitzt. -->
         <div class="wi-section" id="wi-sec-cfbind" style="display:none;">
             <h2><span data-i18n="wissen.sec_cfbind">Dynamische Confluence-Einbindung</span><span class="wi-sec-tog">▼</span></h2>
-            <p class="desc" data-i18n="wissen.sec_cfbind_desc">Binde Confluence-Bereiche dauerhaft ein: ein gewählter Bereich ist die Basis für den Import und erscheint unten als konfigurierter Bereich.</p>
-            <!-- Auswahl: EIN Bereich je Vorgang. Der Haken bestimmt die Reichweite
-                 und wird IM MOMENT DER ÜBERNAHME übernommen – er steht deshalb neben
-                 dem Pulldown und nicht an der fertigen Zeile.
-                 ⚠ ÜBERNOMMEN WIRD PER KNOPF, nicht schon beim Wechsel im Pulldown
-                 (Vorgabe 2026-09-21): ein `change` feuert bei Tastatur-Navigation
-                 für JEDEN Pfeilschritt – wer mit den Pfeiltasten durch die Liste
-                 geht, hätte sonst jeden überflogenen Bereich eingebunden. Der Knopf
-                 bleibt sichtbar und ist ohne Auswahl GESPERRT MIT GRUND (title) –
-                 ein Knopf, der je nach Datenlage verschwindet, ist unerklärbar. -->
+            <p class="desc" data-i18n="wissen.sec_cfbind_desc">Binde Confluence-Bereiche dauerhaft ein: markiere Bereiche und Unterbereiche im Baum und übernimm sie als Eintrag. Gespeicherte Einträge lassen sich jederzeit bearbeiten.</p>
             <!-- ⚠ MINDESTENS EINE WISSENSGRUPPE IST PFLICHT (Vorgabe 2026-09-22).
-                 Sie steht ÜBER der Auswahlzeile, weil der Übernehmen-Knopf dort
-                 klebt: alles, was er braucht, soll darüber stehen – und der
-                 Informationsextraktor darüber ordnet die Gruppen an derselben
-                 Stelle an (erst der Bereich, dann die Aktion).
-                 Der Schlüssel `wissen.groups_label` ist bewusst DERSELBE wie
-                 dort: gleiche Bedeutung, gleicher Text – zwei Schlüssel dafür
-                 liefen beim nächsten Umformulieren auseinander. -->
+                 Sie steht ÜBER dem Baum, weil der Übernehmen-Knopf darunter
+                 klebt: alles, was er braucht, soll davor stehen. Der Schlüssel
+                 `wissen.groups_label` ist bewusst DERSELBE wie im
+                 Informationsextraktor: gleiche Bedeutung, gleicher Text. -->
             <div class="wi-cfb-groups-wrap">
                 <label data-i18n="wissen.groups_label">Wissensgruppen (dein Bereich) *</label>
                 <div class="wi-groups" id="wi-cfb-groups"></div>
             </div>
-            <p class="desc" data-i18n="wissen.cfb_groups_hint">Der eingebundene Bereich wird beim späteren Abgleich diesen Wissensgruppen zugeordnet.</p>
+            <p class="desc" data-i18n="wissen.cfb_groups_hint">Das Wissen aus dem Eintrag wird diesen Wissensgruppen zugeordnet – mindestens eine ist Pflicht.</p>
+            <!-- Baum statt Pulldown (Vorgabe 2026-09-27): [+] klappt auf und
+                 markiert samt Unterbereichen, [-] klappt zu und nimmt deren
+                 Markierung zurück, der NAME klappt nur auf/zu. Das frühere
+                 Kästchen „inkl. Unterseiten" entfällt damit.
+                 ⚠ ÜBERNOMMEN WIRD PER KNOPF, nie schon beim Markieren (Vorgabe
+                 2026-09-21): eine Auswahl ist kein Auftrag. -->
             <div class="wi-cfb-pick">
-                <select class="wi-input" id="wi-cfb-space">
-                    <option value="" data-i18n="wissen.cfb_pick">– Bereich wählen –</option>
-                </select>
-                <label class="wi-cfb-scope">
-                    <input type="checkbox" id="wi-cfb-sub" checked>
-                    <span data-i18n="wissen.cfb_sub">inkl. Unterseiten</span>
-                </label>
+                <input type="text" class="wi-input" id="wi-cfb-such" autocomplete="off"
+                       placeholder="Bereich suchen…" data-i18n-placeholder="wissen.cfb_search_ph">
+            </div>
+            <div class="wi-cf-tree wi-cfb-tree" id="wi-cfb-tree" role="tree"><div class="wi-empty" data-i18n="common.loading">Lade…</div></div>
+            <p class="desc" data-i18n="wissen.cfb_tree_hint">[+] klappt einen Eintrag auf und markiert ihn samt allen Unterbereichen, [-] klappt ihn zu und nimmt die Markierung der Unterbereiche zurück. Ein Klick auf den Namen klappt auf oder zu, ohne Markierungen zu ändern; jeder Haken lässt sich einzeln setzen. Ist ein Zweig komplett markiert, kommen später in Confluence angelegte Unterseiten automatisch mit.</p>
+            <div class="wi-cfb-actions">
+                <span class="wi-cfb-marked" id="wi-cfb-marked"></span>
+                <span class="wi-cfb-editnote" id="wi-cfb-editnote" style="display:none;"></span>
+                <button type="button" class="sec-btn wi-cfb-add" id="wi-cfb-cancel" style="display:none;"
+                        data-i18n="common.cancel">Abbrechen</button>
                 <button type="button" class="sec-btn primary wi-cfb-add" id="wi-cfb-add"
                         data-i18n="wissen.cfb_add" disabled>Übernehmen</button>
             </div>
-            <p class="desc" data-i18n="wissen.cfb_sub_hint">Mit Haken zählt alles mit, was dem gewählten Eintrag untergeordnet ist; ohne Haken nur der Eintrag selbst.</p>
             <div class="wi-status" id="wi-cfb-status"></div>
             <div class="wi-list" id="wi-cfb-list"><div class="wi-empty">—</div></div>
-            <!-- Ehrlicher Hinweis: gespeichert wird die Einbindung sofort, der
-                 Abgleich kommt erst. Ohne diesen Satz wartet jemand auf Wissen,
-                 das nie eintrifft, und hält die Funktion für kaputt. -->
-            <p class="desc wi-cfb-soon" data-i18n="wissen.cfb_soon">⚠ Noch nicht produktiv verwendbar (21.09.2026) – der Abgleich wird erst zu einem späteren Zeitpunkt aktiviert. Die Einbindung selbst wird gespeichert.</p>
+            <p class="desc" data-i18n="wissen.cfb_sync_hint">Gespeicherte Einträge prüft der Wissensabgleich alle 5 Minuten auf Änderungen und übernimmt sie direkt ins Wissen. Abgewählte oder in Confluence gelöschte Seiten verschwinden dabei wieder aus dem Wissen.</p>
         </div>
 
         <!-- Mein Wissen -->
@@ -788,7 +771,7 @@
     <script src="/static/js/dlkey.js?v=2"></script>
     <script src="/static/js/cpubar.js?v=1"></script>
     <script src="/static/js/syspackages.js?v=2"></script>
-    <script src="/static/js/i18n.js?v=288"></script>
+    <script src="/static/js/i18n.js?v=289"></script>
     <script src="/static/js/theme.js?v=3"></script>
     <script src="/static/js/profile_switcher.js?v=5"></script>
     <script src="/static/js/issues.js?v=12"></script>
@@ -799,7 +782,7 @@
     <script src="/static/js/sessions.js?v=8"></script>
     <script src="/static/js/logo_home.js?v=1"></script>
     <script src="/static/js/wissen_destillat.js?v=3"></script>
-    <script src="/static/js/wissen.js?v=55"></script>
+    <script src="/static/js/wissen.js?v=57"></script>
 <script src="/static/js/settings_btn.js?v=4"></script>
     <script src="/static/js/branding.js?v=26"></script>
 <!-- Avatar-Assistent (nur aktiv, wenn der Avatar-Skill eingeschaltet ist) -->

@@ -18688,13 +18688,14 @@ async def wissen_confluence_pages(space: str = "", user: str = Depends(require_a
 
 
 # ─── Dynamische Confluence-Einbindung (/wissen) ──────────────────────────────
-# Der Editor waehlt einen sichtbaren Bereich aus einem Pulldown; dieser erscheint
-# danach als konfigurierter Bereich. Die Liste ist GLOBAL (sie speist die
-# gemeinsame Wissensdatenbank) und wird von `backend/confluence_bindung.py`
-# gehalten.
+# Der Editor markiert in einem Baum sichtbare Bereiche und deren Unterbereiche
+# (Seitenbaum) und uebernimmt die Markierung als EINEN gespeicherten Eintrag;
+# gespeicherte Eintraege sind editierbar (Vorgabe 2026-09-27). Die Liste ist
+# GLOBAL (sie speist die gemeinsame Wissensdatenbank) und wird von
+# `backend/confluence_bindung.py` gehalten.
 #
-# ⚠ ES WIRD HIER NOCH NICHTS IMPORTIERT (Vorgabe 2026-09-21: nur bis zu diesem
-# Punkt bauen). Die Endpunkte pflegen die Einbindung – der Abgleich folgt.
+# Die Endpunkte pflegen nur die Auswahl. Geholt wird vom Cron-Auftrag
+# "Wissensabgleich" (`backend/confluence_abgleich.py`, alle fuenf Minuten).
 
 
 def _cfb_aktiv() -> tuple[bool, bool]:
@@ -18737,6 +18738,14 @@ def _cfb_mit_gruppen(bereiche: list) -> list:
         # die Kennungen – eine Liste ganz zu verweigern waere teurer.
         print(f"[Wissen/CF-Bindung] Gruppennamen nicht ermittelbar: {e}")
         return bereiche
+    # Ergebnis des letzten Abgleichs je Eintrag: ohne diese Zeile nimmt der
+    # Container eine Einbindung an, und niemand sieht, ob je etwas ankommt.
+    try:
+        from backend import confluence_abgleich as _cfa
+        staende = _cfa.eintrag_staende()
+    except Exception as e:  # noqa: BLE001
+        print(f"[Wissen/CF-Bindung] Abgleichsstand nicht ermittelbar: {e}")
+        staende = {}
     aus = []
     for b in bereiche:
         c = dict(b)
@@ -18747,6 +18756,7 @@ def _cfb_mit_gruppen(bereiche: list) -> list:
                 info.append({"id": g["id"], "name": g.get("name") or g["id"],
                              "color": g.get("color") or ""})
         c["gruppen_info"] = info
+        c["abgleich"] = staende.get(c.get("id") or "")
         aus.append(c)
     return aus
 
@@ -18770,71 +18780,127 @@ async def wissen_cf_bindung_lesen(user: str = Depends(require_auth)):
                          "bereiche": _cfb_mit_gruppen(_cfb.liste()) if (skill and conf) else []})
 
 
+async def _cfb_auswahl_lesen(request: Request, user: str):
+    """Rumpf von POST/PUT lesen und pruefen. Rueckgabe ``(fehlerantwort, auswahl,
+    gruppen, namen)`` – ist die Fehlerantwort gesetzt, wird sie zurueckgegeben.
+
+    ⚠ REIHENFOLGE IST DIE SICHERHEIT: erst Skill/Konfiguration, dann die
+    Wissensgruppen (oertlich), dann die FORM der Auswahl (oertlich), erst dann
+    die Sichtbarkeit (Netzrundreise zu Confluence). Billig vor teuer – eine
+    fehlende Zuordnung soll nicht erst nach einer Anfrage an ein fremdes System
+    auffallen.
+    """
+    import backend.confluence_bindung as _cfb
+    from backend.confluence_client import ConfluenceError
+    skill, conf = _cfb_aktiv()
+    if not skill:
+        return (JSONResponse({"ok": False, "error": "Der Confluence-Skill ist nicht aktiv."},
+                             status_code=400), None, None, None)
+    if not conf:
+        return (JSONResponse({"ok": False, "error": "Confluence ist nicht konfiguriert."},
+                             status_code=400), None, None, None)
+    try:
+        body = await request.json()
+    except Exception:  # noqa: BLE001
+        body = {}
+    if not isinstance(body, dict):
+        body = {}
+    # ⚠ GETRIMMT, NICHT NUR AUF FALSYNESS GEFILTERT. `["", "  "]` ueberlebt ein
+    # blosses `if g`, und `_wissen_check_groups` meldet dann "Keine Berechtigung
+    # fuer Gruppe(n):   " – richtig abgewiesen, aber der Grund schickt an die
+    # falsche Stelle (es fehlt eine Auswahl, es fehlt kein Recht).
+    req_groups = _gruppen_normieren(body.get("groups"))
+    ok, err = _wissen_check_groups(user, req_groups)
+    if not ok:
+        return (JSONResponse({"ok": False, "error": err}, status_code=403), None, None, None)
+    # Die FORM vorab (ohne Namen): Muell soll ohne Netzrundreise abgewiesen werden.
+    try:
+        auswahl = _cfb._auswahl_pruefen(body.get("auswahl"))
+    except _cfb.BindungFehler as e:
+        return (JSONResponse({"ok": False, "error": str(e)}, status_code=400), None, None, None)
+    c = _confluence_client()
+    try:
+        sichtbar = await _wissen_visible_spaces(c)
+    except ConfluenceError as e:
+        return (JSONResponse({"ok": False, "status": e.status, "error": str(e)},
+                             status_code=502), None, None, None)
+    # ⚠ JEDER Bereich der Auswahl muss SICHTBAR sein – dieselbe Schranke wie
+    # `wissen_confluence_pages`. Die Anzeigenamen kommen von HIER, nie aus dem
+    # Rumpf.
+    namen = {(s.get("key") or ""): (s.get("name") or s.get("key") or "") for s in sichtbar}
+    fremd = [a["key"] for a in auswahl if a["key"] not in namen]
+    if fremd:
+        return (JSONResponse({"ok": False, "error": "Bereich nicht sichtbar/erlaubt: "
+                              + ", ".join(fremd[:5])}, status_code=403), None, None, None)
+    return None, body.get("auswahl"), req_groups, namen
+
+
 @app.post("/api/wissen/confluence/bindung")
 async def wissen_cf_bindung_anlegen(request: Request, user: str = Depends(require_auth)):
-    """Einen sichtbaren Bereich einbinden. Body: ``{key, inkl_unter}``.
+    """Die markierten Bereiche als EINEN Eintrag speichern.
 
-    ⚠ DER ANZEIGENAME KOMMT VOM SERVER, nicht aus dem Rumpf – und der
-    Schluessel muss in den SICHTBAREN Bereichen stehen (dieselbe Schranke wie
-    `wissen_confluence_pages`). Ohne sie waere der Endpunkt der bequemste Weg,
-    einen Bereich einzubinden, den der hinterlegte Token gar nicht lesen darf:
-    die Liste sieht danach gepflegt aus und der spaetere Abgleich laeuft
-    dauerhaft in ein 404.
+    Body: ``{auswahl: [{key, start, ganz, seiten, zweige}], groups: [...]}``.
+
+    ⚠ DER ANZEIGENAME KOMMT VOM SERVER, nicht aus dem Rumpf – und jeder
+    Schluessel muss in den SICHTBAREN Bereichen stehen. Ohne diese Schranke
+    waere der Endpunkt der bequemste Weg, einen Bereich einzubinden, den der
+    hinterlegte Token gar nicht lesen darf.
 
     Der BENUTZER kommt ausschliesslich aus der Anmeldung (`von`), nie aus dem
     Rumpf.
 
     ⚠ MINDESTENS EINE WISSENSGRUPPE IST PFLICHT (Vorgabe 2026-09-22) – und sie
-    muss im Bereich des Anlegenden liegen. Beides prueft `_wissen_check_groups`,
-    dieselbe Regel, die auch ueber Upload und Entwurfs-Freigabe entscheidet: eine
-    zweite Fassung liefe beim naechsten Feinschliff auseinander, und dann duerfte
-    man hier zuordnen, was man dort nicht darf.
+    muss im Bereich des Anlegenden liegen (`_wissen_check_groups`, dieselbe
+    Regel wie bei Upload und Entwurfs-Freigabe).
     """
     if not _editable_groups_for(user):
         return JSONResponse({"ok": False, "error": "Dir ist kein Wissensbereich zugewiesen."},
                             status_code=403)
     import backend.confluence_bindung as _cfb
-    from backend.confluence_client import ConfluenceError
-    skill, conf = _cfb_aktiv()
-    if not skill:
-        return JSONResponse({"ok": False, "error": "Der Confluence-Skill ist nicht aktiv."},
-                            status_code=400)
-    if not conf:
-        return JSONResponse({"ok": False, "error": "Confluence ist nicht konfiguriert."},
-                            status_code=400)
+    fehler, auswahl, req_groups, namen = await _cfb_auswahl_lesen(request, user)
+    if fehler is not None:
+        return fehler
     try:
-        body = await request.json()
-    except Exception:  # noqa: BLE001
-        body = {}
-    key = str(body.get("key") or "").strip()
-    inkl = body.get("inkl_unter")
-    # ⚠ GETRIMMT, NICHT NUR AUF FALSYNESS GEFILTERT. `["", "  "]` ueberlebt ein
-    # blosses `if g`, und `_wissen_check_groups` meldet dann "Keine Berechtigung
-    # fuer Gruppe(n):   " – richtig abgewiesen, aber der Grund schickt an die
-    # falsche Stelle (es fehlt eine Auswahl, es fehlt kein Recht). Live
-    # gemessen; dieselbe Normierung macht `_gruppen_pruefen` in der Ablage.
-    req_groups = _gruppen_normieren(body.get("groups") if isinstance(body, dict) else None)
-    if not key:
-        return JSONResponse({"ok": False, "error": "Es wurde kein Bereich gewaehlt."},
-                            status_code=400)
-    # VOR dem Confluence-Abruf: die Gruppenpruefung ist rein oertlich, der Abruf
-    # der sichtbaren Bereiche eine Netzrundreise. Eine fehlende Zuordnung soll
-    # nicht erst nach einer Anfrage an ein fremdes System auffallen.
-    ok, err = _wissen_check_groups(user, req_groups)
-    if not ok:
-        return JSONResponse({"ok": False, "error": err}, status_code=403)
-    c = _confluence_client()
-    try:
-        sichtbar = await _wissen_visible_spaces(c)
-    except ConfluenceError as e:
-        return JSONResponse({"ok": False, "status": e.status, "error": str(e)}, status_code=502)
-    treffer = next((s for s in sichtbar if (s.get("key") or "") == key), None)
-    if treffer is None:
-        return JSONResponse({"ok": False, "error": "Bereich nicht sichtbar/erlaubt."},
+        eintrag = _cfb.hinzufuegen(auswahl, _display_name(user), req_groups, namen)
+    except _cfb.BindungFehler as e:
+        return JSONResponse({"ok": False, "error": str(e)}, status_code=400)
+    except Exception as e:  # noqa: BLE001
+        return JSONResponse({"ok": False, "error": f"Konnte nicht gespeichert werden: {e}"},
+                            status_code=500)
+    return JSONResponse({"ok": True, "bereich": eintrag,
+                         "bereiche": _cfb_mit_gruppen(_cfb.liste())})
+
+
+@app.put("/api/wissen/confluence/bindung/{bid}")
+async def wissen_cf_bindung_aendern(bid: str, request: Request,
+                                    user: str = Depends(require_auth)):
+    """Einen gespeicherten Eintrag bearbeiten – Bereiche/Unterbereiche hinzu
+    oder weg, Wissensgruppen. Body wie beim Anlegen.
+
+    ⚠ FREMDE WISSENSGRUPPEN BLEIBEN STEHEN. Der Bearbeitende sieht nur die
+    Gruppen SEINES Bereichs als Kaestchen; eine Zuordnung, die ein Kollege aus
+    einem anderen Bereich gesetzt hat, kann er weder sehen noch abwaehlen.
+    Wuerde sie hier mit dem Rumpf ueberschrieben, verloere dessen Gruppe beim
+    naechsten Abgleich still ihr Wissen – durch eine Aenderung, die mit ihr
+    nichts zu tun hatte.
+    """
+    if not _editable_groups_for(user):
+        return JSONResponse({"ok": False, "error": "Dir ist kein Wissensbereich zugewiesen."},
                             status_code=403)
+    import backend.confluence_bindung as _cfb
+    alt = _cfb.holen(bid)
+    if alt is None:
+        return JSONResponse({"ok": False, "error": "Einbindung nicht gefunden."}, status_code=404)
+    fehler, auswahl, req_groups, namen = await _cfb_auswahl_lesen(request, user)
+    if fehler is not None:
+        return fehler
+    eigene = {g.get("id") for g in (_editable_groups_for(user) or []) if isinstance(g, dict)}
+    gruppen = list(req_groups) + [g for g in (alt.get("gruppen") or [])
+                                  if g not in eigene and g not in req_groups]
     try:
-        eintrag = _cfb.hinzufuegen(key, treffer.get("name") or key,
-                                   inkl is True, _display_name(user), req_groups)
+        eintrag = _cfb.aendern(bid, auswahl, _display_name(user), gruppen, namen)
+    except KeyError:
+        return JSONResponse({"ok": False, "error": "Einbindung nicht gefunden."}, status_code=404)
     except _cfb.BindungFehler as e:
         return JSONResponse({"ok": False, "error": str(e)}, status_code=400)
     except Exception as e:  # noqa: BLE001
