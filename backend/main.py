@@ -694,7 +694,7 @@ _SESSION_ANHAENGE_SITZUNGEN = 200  # insgesamt, gegen unbegrenztes Wachsen
 
 
 def _bild_als_datei(b64daten: str, dateiname: str, benutzer: str,
-                    sitzung: str, werkzeuge=None) -> str:
+                    sitzung: str, werkzeuge=None, ablage: list | None = None) -> str:
     """Legt ein BILD zusaetzlich als Datei ab und liefert den Hinweis dazu.
 
     ⚠ EIN BILD WURDE BIS 2026-09-15 NIE ZUR DATEI – daran ist der Vorfall auf
@@ -719,6 +719,10 @@ def _bild_als_datei(b64daten: str, dateiname: str, benutzer: str,
     "unbekannt" und nennt sicherheitshalber keines – ein Hinweis auf ein
     fehlendes Werkzeug endet in "Tool nicht gefunden".
 
+    ``ablage``: optionale Liste, an die der Name der dauerhaften Ablage in
+    ``data/documents`` angehaengt wird. /chat merkt ihn sich im Verlauf, damit das
+    Bild nach dem Neuladen wieder erscheint (``/api/chat/attachment/{name}``).
+
     Rueckgabe: der Hinweistext, oder ``""`` wenn nichts abgelegt werden konnte.
     **FAIL-OPEN:** das ANSEHEN des Bildes darf nie daran haengen, dass die
     Platte voll ist – der Aufrufer reicht das Bild unabhaengig davon inline
@@ -735,6 +739,8 @@ def _bild_als_datei(b64daten: str, dateiname: str, benutzer: str,
         return ""
     if ziel is None:
         return ""
+    if ablage is not None:
+        ablage.append(ziel.name)
     try:
         _anhang_merken(sitzung, dateiname, ziel.name,
                        arbeit.as_posix() if arbeit else "")
@@ -6671,6 +6677,37 @@ async def get_document(name: str, user: str = Depends(require_auth_or_query)):
                         filename=f"{base}.{ext}",
                         content_disposition_type=disp,
                         headers={"Cache-Control": "private, max-age=3600"})
+
+
+@app.get("/api/chat/attachment/{name}")
+async def get_chat_attachment(name: str, user: str = Depends(require_auth_or_query)):
+    """Liefert ein im Chat HOCHGELADENES Bild aus (Anzeige nach dem Neuladen).
+
+    /chat speichert im Verlauf nur einen Verweis auf die Ablage in
+    ``data/documents`` (Name aus ``_anhang_ablegen``), kein base64.
+    ``/api/documents/{name}`` taugt dafuer nicht: es nimmt nur Capability-Namen
+    an, und Uploads tragen ihren Klarnamen (``image.png``) – der ist erratbar.
+    Die Schranke ist hier deshalb ALLEIN der Eigentuemer-Vermerk
+    (``register_upload``): nur der Hochladende und Admins, sonst 404.
+
+    Bewusst NUR Rastergrafik: ein SVG oder HTML inline aus der eigenen Herkunft
+    auszuliefern waere ein Skript-Einfallstor.
+    """
+    import re
+    _MEDIA = {"png": "image/png", "jpg": "image/jpeg", "jpeg": "image/jpeg",
+              "gif": "image/gif", "webp": "image/webp", "bmp": "image/bmp"}
+    m = re.fullmatch(r"[A-Za-z0-9_\-][A-Za-z0-9._\-]{0,200}\.([A-Za-z0-9]{1,8})", name or "")
+    media = _MEDIA.get(m.group(1).lower()) if m else None
+    if not media or ".." in name:
+        return JSONResponse({"error": "ungueltiger Name"}, status_code=400)
+    p = Path(__file__).parent.parent / "data" / "documents" / name
+    # 404 statt 403 auch bei fremder Datei: ob sie existiert, ist selbst eine Information.
+    if not p.is_file() or not _documents.may_access(name, user, _is_admin_user(user)):
+        return JSONResponse({"error": "nicht gefunden"}, status_code=404)
+    return FileResponse(str(p), media_type=media, content_disposition_type="inline",
+                        filename=name,
+                        headers={"Cache-Control": "private, max-age=3600",
+                                 "X-Content-Type-Options": "nosniff"})
 
 
 # ─── Geteilte Anzeige-History (Hauptfenster + jarvis/chat teilen denselben Verlauf) ───
@@ -22046,6 +22083,7 @@ async def handle_ws_message(ws: WebSocket, msg: dict):
         _PDF_PROMPT_MAX_CHARS = 120_000
         image_attachments  = []
         _text_prepend      = []   # Transkripte + PDF-Texte die dem task_text vorangestellt werden
+        _bild_ablagen      = []   # {name, mime_type, doc} – Rueckmeldung an /chat (Verlauf)
 
         if _raw_attachments:
             import base64 as _b64att
@@ -22077,8 +22115,13 @@ async def handle_ws_message(ws: WebSocket, msg: dict):
                                 agent_manager.main_agent, "_tool_instances", [])}
                         except Exception:  # noqa: BLE001
                             _vorh_i = None
+                        _abl_i = []
                         _hinweis_i = _bild_als_datei(
-                            _data, _name, _get_ws_username(ws), chat_sid, _vorh_i)
+                            _data, _name, _get_ws_username(ws), chat_sid, _vorh_i,
+                            ablage=_abl_i)
+                        if _abl_i:
+                            _bild_ablagen.append({"name": _name, "mime_type": _mime,
+                                                  "doc": _abl_i[0]})
                         if _hinweis_i:
                             _text_prepend.append(_hinweis_i)
                     else:
@@ -22350,6 +22393,16 @@ async def handle_ws_message(ws: WebSocket, msg: dict):
                         _text_prepend.append(f"[Datei {_name}: konnte nicht bereitgestellt werden – {_de}]")
             if _text_prepend:
                 task_text = "\n\n".join(_text_prepend) + "\n\n" + task_text
+            # /chat speichert im Verlauf nur Text (kein base64) – ohne diese
+            # Rueckmeldung war das Bild nach F5 weg und nur "[🖼️ image.png]"
+            # blieb stehen. Nur wer ein `att_ref` mitschickt, kennt das Ereignis.
+            _att_ref = str(msg.get("att_ref") or "")[:64]
+            if _att_ref and _bild_ablagen:
+                try:
+                    await ws.send_json({"type": "attachments_stored", "att_ref": _att_ref,
+                                        "items": _bild_ablagen})
+                except Exception as _se:  # noqa: BLE001
+                    print(f"[attach] Rueckmeldung Ablage fehlgeschlagen: {_se}", flush=True)
 
         # Folgefrage OHNE neuen Anhang: kurz erinnern, WO die Dateien dieser
         # Unterhaltung liegen. Ohne das sucht das Modell die Datei ueber den

@@ -902,10 +902,18 @@
         const attNote = _pendingAttachments.length > 0
             ? ' [' + _pendingAttachments.map(a => `${_attIcon(a.mime_type)} ${a.name || window.t('chat.file')}`).join(', ') + ']'
             : '';
-        _chatHistory.push({ role: 'user', text: finalText + attNote, time: timeStr(), date: _currentDateStr(), ts: Date.now() });
+        const _userEntry = { role: 'user', text: finalText + attNote, time: timeStr(), date: _currentDateStr(), ts: Date.now() };
+        if (attNote) { _userEntry.att_note = attNote; _userEntry.att_count = _pendingAttachments.length; }
+        _chatHistory.push(_userEntry);
         _saveHistory();
-        _syncAppend(_chatHistory[_chatHistory.length - 1]);
+        _syncAppend(_userEntry);
         const msg = { type: 'task', text: finalText, lang: window._lang || 'de' };
+        if (attNote) {
+            // Das Backend meldet die Ablage der Bilder unter dieser Kennung zurueck,
+            // damit sie nach dem Neuladen wieder angezeigt werden koennen.
+            msg.att_ref = 'a' + Date.now().toString(36) + Math.random().toString(36).slice(2, 8);
+            _attRefs.set(msg.att_ref, _userEntry);
+        }
         if (_activeSid) msg.session_id = _activeSid;
         _runSid = _activeSid;   // Ursprungs-Sitzung dieser Anfrage merken (Antwort-Routing)
         // Multi-Agent: an aktiven Sub-Agenten richten (sonst Hauptagent)
@@ -952,8 +960,28 @@
     //  NACHRICHTEN VERARBEITEN
     // ═════════════════════════════════════════════════════════════
 
+    // att_ref -> Verlaufs-Eintrag der Frage, deren Bilder das Backend gleich ablegt
+    const _attRefs = new Map();
+    function _onAttachmentsStored(msg) {
+        const entry = _attRefs.get(msg.att_ref);
+        _attRefs.delete(msg.att_ref);
+        // Inzwischen andere Sitzung geoeffnet? Dann NICHT speichern – _persistSession
+        // schriebe den Eintrag sonst in das Transkript der falschen Sitzung.
+        if (!entry || !_chatHistory.includes(entry) || !Array.isArray(msg.items)) return;
+        const items = msg.items
+            .filter(it => it && typeof it.doc === 'string' && it.doc)
+            .map(it => ({ name: String(it.name || ''), mime_type: String(it.mime_type || ''), doc: it.doc }));
+        if (!items.length) return;
+        entry.attachments = items;
+        _saveHistory();
+        _persistSession();
+    }
+
     function handleMessage(msg) {
         switch (msg.type) {
+            case 'attachments_stored':
+                _onAttachmentsStored(msg);
+                break;
             case 'status':
                 handleStatus(msg);
                 break;
@@ -1660,6 +1688,12 @@
                 { timeStr: timeStr(), dateStr: _currentDateStr() }
             );
         }
+        // Die neu gestellte Frage traegt keine Anhaenge mehr – der Verweis darf
+        // nach dem Neuladen kein Bild zeigen, das gar nicht mitging.
+        const _edited = _chatHistory[_chatHistory.length - 1];
+        if (_edited && _edited.role === 'user') {
+            delete _edited.attachments; delete _edited.att_note; delete _edited.att_count;
+        }
         _saveHistory();
         _syncReplace();
 
@@ -1862,6 +1896,13 @@
     // ─── Datei-Anhang-Rendering (Galerie, Lightbox, Kontextmenü) ─
 
     function _dataUrl(att) {
+        // Aus dem Verlauf wiederhergestellt: kein base64, nur der Ablagename
+        // (siehe 'attachments_stored'). Der Abruf-Schluessel kommt erst beim
+        // Rendern dazu – im gespeicherten Verlauf hat er nichts zu suchen.
+        if (!att.data && att.doc) {
+            const u = '/api/chat/attachment/' + encodeURIComponent(att.doc);
+            return window.JarvisDL ? window.JarvisDL.url(u) : u;
+        }
         return `data:${att.mime_type};base64,${att.data}`;
     }
 
@@ -2059,9 +2100,31 @@
 
         const bubble = document.createElement('div');
         bubble.className = 'msg-bubble';
+        // Gespeicherte Bilder: sie selbst zeigen statt des Hinweises "[🖼️ name]".
+        // Nur wenn ALLE Anhaenge einen Verweis haben – sonst ginge der Hinweis
+        // auf die uebrigen (PDF, Audio …) mit verloren.
+        const _atts = (entry.role === 'user' && Array.isArray(entry.attachments)) ? entry.attachments : [];
+        let _shownText = entry.text;
+        if (_atts.length && entry.att_note && typeof entry.text === 'string'
+                && entry.text.endsWith(entry.att_note)
+                && _atts.length === entry.att_count) {
+            _shownText = entry.text.slice(0, entry.text.length - entry.att_note.length);
+        }
         bubble.innerHTML = entry.role === 'user'
-            ? escapeHtml(entry.text)
+            ? escapeHtml(_shownText)
             : renderMarkdown(entry.text);
+        if (_atts.length) {
+            _renderAttachments(bubble, { attachments: _atts });
+            // Ablage abgelaufen (Aufbewahrungsfrist) oder fremd: totes Bild weg,
+            // dann wenigstens wieder den Namen zeigen.
+            bubble.querySelectorAll('.uc-ig-cell img').forEach(img => {
+                img.addEventListener('error', () => {
+                    const gal = img.closest('.uc-img-gallery');
+                    img.closest('.uc-ig-cell')?.remove();
+                    if (gal && !gal.querySelector('.uc-ig-cell')) bubble.textContent = entry.text;
+                }, { once: true });
+            });
+        }
 
         // Wiederholen- + Edit-Button für User-Bubbles (auch nach Reload nutzbar)
         if (entry.role === 'user') {
@@ -2077,7 +2140,7 @@
             const timeSpan = document.createElement('span');
             timeSpan.textContent = entry.time || '';
             timeEl.appendChild(timeSpan);
-            row.dataset.rawText = entry.text;
+            row.dataset.rawText = _shownText;
         } else {
             timeEl.textContent = entry.time || '';
         }
