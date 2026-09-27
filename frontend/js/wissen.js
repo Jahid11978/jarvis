@@ -147,6 +147,12 @@
                 loadPending();
                 loadCfSpaces();
                 cfbLaden();
+                // Wissens-Destillat: eigenes Modul, bekommt Scope und Token von
+                // HIER. Bewusst kein eigener /api/wissen/scope-Abruf dort –
+                // zwei Abrufe liefen beim naechsten Feinschliff auseinander.
+                if (window.WissenDestillat) {
+                    window.WissenDestillat.init({ scope: SCOPE, token: token });
+                }
             })
             .catch(function () { showLogin(); });
     }
@@ -1848,8 +1854,8 @@
 
         // Einklappbare Container (Zustand pro Browser gemerkt, analog Einstellungen).
         // Der Pfeil steht fest im Markup (eigener Span, damit applyLang ihn nicht wegwischt).
-        ['wi-sec-matrix', 'wi-sec-groups', 'wi-sec-upload', 'wi-sec-cfbind',
-         'wi-sec-files'].forEach(function (id) {
+        ['wi-sec-matrix', 'wi-sec-groups', 'wi-sec-upload', 'wi-sec-destillat',
+         'wi-sec-cfbind', 'wi-sec-files'].forEach(function (id) {
             var sec = $(id); if (!sec) return;
             var h = sec.querySelector('h2'); if (!h) return;
             var tog = h.querySelector('.wi-sec-tog'); if (!tog) return;
@@ -1908,4 +1914,10 @@
         loadScope();
         resumeCf();   // laufenden Confluence-Import nach Refresh wiederaufnehmen
     });
+
+    // Schmale Schnittstelle nach aussen. Das Destillat-Modul legt seinen
+    // Entwurf ueber den VORHANDENEN Pending-Weg ab und muss die Liste darunter
+    // nachziehen – ohne das sucht der Benutzer seinen frischen Entwurf dort
+    // vergeblich und haelt die Uebernahme fuer fehlgeschlagen.
+    window.WissenPortal = { reloadPending: function () { loadPending(); } };
 })();

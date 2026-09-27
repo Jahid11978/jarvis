@@ -194,6 +194,81 @@
            dieselbe Abdunklung wie bei den Zertifikats-Urteilen in theme.css. */
         body.light .wi-section p.wi-cfb-soon {
                        color: color-mix(in srgb, var(--danger) 78%, #000); }
+        /* ── Wissens-Destillat ──────────────────────────────────────────
+           AUSSCHLIESSLICH ueber Variablen: die Seite hat kein eigenes
+           `body.light`-Gegenstueck fuer diesen Container, und genau deshalb
+           darf hier keine feste Farbe stehen - sonst stimmt eines der beiden
+           Themen nicht. */
+        .wi-dest-feld { display: flex; flex-direction: column; gap: 4px; margin-top: 14px; }
+        .wi-dest-feld > label { font-size: 0.78rem; color: var(--text-secondary); }
+        /* `resize: vertical` statt `both`: waagerecht gezogen laeuft das Feld
+           aus dem Container (die Seite hat keinen waagerechten Scroller). */
+        .wi-dest-ta { font-family: inherit; line-height: 1.55; resize: vertical;
+                      min-height: 90px; }
+        .wi-dest-zaehler { font-size: 0.78rem; color: var(--text-secondary); text-align: right; }
+
+        /* Das Aufklapp-Feld der Auftraege. `--text-secondary`, NICHT
+           `--text-muted`: letzteres liegt in beiden Themen unter 4,5:1 - fuer
+           eine Beschriftung, die man lesen soll, zu wenig. */
+        .wi-dest-prompts { margin-top: 14px; border: 1px solid var(--border);
+                           border-radius: 10px; padding: 10px 14px; }
+        .wi-dest-prompts > summary { cursor: pointer; font-size: 0.86rem;
+                           color: var(--text-secondary); font-weight: 600; }
+        .wi-dest-prompts[open] > summary { margin-bottom: 6px; }
+        .wi-dest-prompts .sec-btn { margin-top: 10px; }
+
+        /* Fortschrittsbalken. `overflow: hidden` haelt die Fuellung im Radius. */
+        .wi-dest-bar { margin-top: 12px; height: 6px; border-radius: 4px;
+                       background: rgba(var(--fg-rgb), 0.12); overflow: hidden; }
+        .wi-dest-fill { height: 100%; width: 0; background: var(--accent);
+                        transition: width .35s ease; }
+
+        .wi-dest-out { margin-top: 16px; border: 1px solid var(--border);
+                       border-radius: 12px; padding: 14px 16px;
+                       background: rgba(var(--fg-rgb), 0.03); }
+        .wi-dest-outhead { display: flex; align-items: baseline; gap: 10px;
+                       font-weight: 600; margin-bottom: 8px; flex-wrap: wrap; }
+        .wi-dest-meta { font-size: 0.78rem; color: var(--text-secondary);
+                        font-weight: 400; }
+        /* Das Ergebnis kann sehr lang werden - eigener Scrollbereich, sonst
+           schiebt es die Knoepfe darunter aus dem Sichtfeld.
+           `overflow-wrap: anywhere` gegen eine lange URL ohne Trennstelle. */
+        .wi-dest-md { max-height: 420px; overflow-y: auto; overflow-wrap: anywhere;
+                      font-size: 0.9rem; line-height: 1.6; padding-right: 6px; }
+        .wi-dest-md h1, .wi-dest-md h2, .wi-dest-md h3 { margin: 12px 0 6px;
+                      line-height: 1.3; }
+        .wi-dest-md h1 { font-size: 1.15rem; }
+        .wi-dest-md h2 { font-size: 1.02rem; }
+        .wi-dest-md h3 { font-size: 0.94rem; }
+        .wi-dest-md p, .wi-dest-md ul, .wi-dest-md ol { margin: 6px 0; }
+        .wi-dest-md ul, .wi-dest-md ol { padding-left: 22px; }
+        .wi-dest-md code { background: rgba(var(--fg-rgb), 0.08); border-radius: 4px;
+                      padding: 1px 5px; font-size: 0.86em; }
+        .wi-dest-md pre { background: rgba(var(--fg-rgb), 0.06); border-radius: 8px;
+                      padding: 10px; overflow-x: auto; }
+        .wi-dest-md pre code { background: none; padding: 0; }
+        .wi-dest-md img { max-width: 100%; border-radius: 8px; margin: 8px 0; }
+        .wi-dest-md hr { border: none; border-top: 1px solid var(--border); margin: 14px 0; }
+        .wi-dest-md table { border-collapse: collapse; margin: 8px 0; }
+        .wi-dest-md th, .wi-dest-md td { border: 1px solid var(--border);
+                      padding: 5px 9px; text-align: left; }
+
+        .wi-dest-actions { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 12px; }
+        .wi-dest-take { margin-top: 12px; border-top: 1px solid var(--border);
+                        padding-top: 12px; }
+        .wi-dest-take > label { display: block; font-size: 0.78rem;
+                        color: var(--text-secondary); margin-bottom: 6px; }
+        .wi-dest-takebtns { display: flex; gap: 8px; margin-top: 10px; flex-wrap: wrap; }
+        /* Eine Dateizeile: `min-width: 0` am Textteil, sonst schiebt ein langer
+           Dateiname den Muelleimer aus der Zeile (Register). */
+        .wi-dest-file { display: flex; align-items: center; gap: 10px; }
+        .wi-dest-file .nm { flex: 1; min-width: 0; overflow: hidden;
+                        text-overflow: ellipsis; white-space: nowrap;
+                        line-height: 1.6; }
+        .wi-dest-file .sz { font-size: 0.78rem; color: var(--text-secondary);
+                        flex-shrink: 0; }
+        .wi-dest-file .er { font-size: 0.78rem; color: var(--danger); flex-shrink: 0; }
+
         .wi-review { border: 1px solid rgba(var(--accent-rgb),0.4); border-radius: 10px; padding: 14px 16px; margin-top: 12px;
             background: rgba(var(--accent-rgb), 0.05); }
         .wi-review pre { white-space: pre-wrap; word-break: break-word; font-size: 0.82rem; max-height: 220px; overflow: auto;
@@ -404,6 +479,105 @@
             <div class="wi-list" id="wi-pending-list"><div class="wi-empty">—</div></div>
         </div>
 
+        <!-- Wissens-Destillat (Import aus dev-core-busy/knowledge-distiller).
+             Sichtbarkeit GENAU WIE DER INFORMATIONSEXTRAKTOR darüber: an
+             SCOPE.groups gebunden (wissen.js::renderScope). Der Proxy-Teil des
+             Originals ist beim Import entfallen – er existiert nur, um von
+             AUSSEN an Jarvis zu kommen; hier sind wir angemeldet.
+             ⚠ KEINE Felder für Temperature/Max-Tokens (das Original hat sie):
+             beides ist in Jarvis Profil- bzw. Systemeinstellung und wäre hier
+             ein Versprechen, das der Provider-Pfad nicht einlöst. -->
+        <div class="wi-section" id="wi-sec-destillat">
+            <h2><span data-i18n="wissen.sec_dest">Wissens-Destillat</span><span class="wi-sec-tog">▼</span></h2>
+            <p class="desc" data-i18n="wissen.sec_dest_desc">Zerstreutes Wissen aus mehreren Dokumenten zu EINEM strukturierten Markdown zusammenführen – geeignet für Confluence oder als Entwurf für deine Wissensdatenbank.</p>
+
+            <!-- 1. Quellen -->
+            <div class="wi-drop" id="wi-dest-drop">
+                <div data-i18n="wissen.dest_drop">Dateien hierher ziehen oder klicken</div>
+                <div class="wi-drop-sub" data-i18n="wissen.dest_drop_sub">PDF, Word, Excel, PowerPoint, Text, Markdown – auch mehrere auf einmal</div>
+                <input type="file" id="wi-dest-files" multiple style="display:none;">
+            </div>
+            <div class="wi-list" id="wi-dest-filelist"></div>
+            <div class="wi-status" id="wi-dest-exstatus"></div>
+
+            <!-- 2. Text: gefüllt aus der Extraktion ODER frei eingegeben.
+                 Das Feld ist bewusst bearbeitbar – der Benutzer soll vor dem
+                 Lauf noch streichen und ergänzen können. -->
+            <div class="wi-dest-feld">
+                <label for="wi-dest-text" data-i18n="wissen.dest_text">Text (aus den Dateien extrahiert – bearbeitbar)</label>
+                <textarea class="wi-input wi-dest-ta" id="wi-dest-text" rows="8"
+                          data-i18n-placeholder="wissen.dest_text_ph"
+                          placeholder="Hier erscheint der extrahierte Text – oder gib direkt eigenen Text ein."></textarea>
+                <div class="wi-dest-zaehler" id="wi-dest-count"></div>
+            </div>
+
+            <!-- 3. Aufträge. Eingeklappt, weil sie eine Vorgabe haben, die im
+                 Regelfall trägt – wer sie braucht, klappt auf. -->
+            <details class="wi-dest-prompts" id="wi-dest-promptbox">
+                <summary data-i18n="wissen.dest_prompts">Aufträge an das Modell anpassen</summary>
+                <div class="wi-dest-feld">
+                    <label for="wi-dest-prompt" data-i18n="wissen.dest_prompt">Destillier-Auftrag</label>
+                    <textarea class="wi-input wi-dest-ta" id="wi-dest-prompt" rows="8"></textarea>
+                </div>
+                <div class="wi-dest-feld">
+                    <label for="wi-dest-gruppen" data-i18n="wissen.dest_gliederung">Gliederung (optional)</label>
+                    <textarea class="wi-input wi-dest-ta" id="wi-dest-gruppen" rows="6"></textarea>
+                </div>
+                <button type="button" class="sec-btn" id="wi-dest-reset"
+                        data-i18n="wissen.dest_reset">Aufträge zurücksetzen</button>
+            </details>
+
+            <div class="wi-row">
+                <div>
+                    <label for="wi-dest-mode" data-i18n="wissen.dest_mode">Verarbeitung</label>
+                    <select class="wi-input" id="wi-dest-mode">
+                        <option value="combined" data-i18n="wissen.dest_mode_all">Alles zusammen</option>
+                        <option value="file" data-i18n="wissen.dest_mode_file">Pro Datei getrennt</option>
+                    </select>
+                </div>
+                <button type="button" class="sec-btn primary" id="wi-dest-run"
+                        data-i18n="wissen.dest_run" disabled>Destillieren</button>
+            </div>
+
+            <!-- Fortschritt: ein Lauf dauert bei mehreren Blöcken Minuten. Ohne
+                 sichtbaren Fortschritt ist das von "hängt" nicht zu
+                 unterscheiden. -->
+            <div class="wi-dest-bar" id="wi-dest-bar" hidden><div class="wi-dest-fill" id="wi-dest-fill"></div></div>
+            <div class="wi-status" id="wi-dest-status"></div>
+
+            <!-- 4. Ergebnis -->
+            <div class="wi-dest-out" id="wi-dest-out" hidden>
+                <div class="wi-dest-outhead">
+                    <span data-i18n="wissen.dest_result">Destillat</span>
+                    <span class="wi-dest-meta" id="wi-dest-meta"></span>
+                </div>
+                <div class="wi-dest-md" id="wi-dest-md"></div>
+                <div class="wi-dest-actions">
+                    <button type="button" class="sec-btn" id="wi-dest-copy"
+                            data-i18n="wissen.dest_copy">Markdown kopieren</button>
+                    <button type="button" class="sec-btn" id="wi-dest-dl"
+                            data-i18n="wissen.dest_download">Herunterladen</button>
+                    <button type="button" class="sec-btn primary" id="wi-dest-take"
+                            data-i18n="wissen.dest_take">In die Wissensdatenbank</button>
+                </div>
+                <!-- Wissensgruppen für die Übernahme. Sie stehen HIER und nicht
+                     oben, weil sie nur für diesen einen Knopf gebraucht werden –
+                     Kopieren und Herunterladen brauchen keine Gruppe. -->
+                <div class="wi-dest-take" id="wi-dest-takebox" hidden>
+                    <label data-i18n="wissen.groups_label">Wissensgruppen (dein Bereich) *</label>
+                    <div class="wi-groups" id="wi-dest-groups"></div>
+                    <p class="desc" data-i18n="wissen.dest_take_hint">Das Destillat wird als Entwurf abgelegt – du prüfst und gibst ihn unten unter „Deine Entwürfe" frei. Bilder werden dabei nicht eingebettet (sie würden den Suchindex mit Zeichenrauschen füllen); ihre Stelle im Text bleibt als Hinweis erhalten.</p>
+                    <div class="wi-dest-takebtns">
+                        <button type="button" class="sec-btn primary" id="wi-dest-takego"
+                                data-i18n="wissen.approve">Übernehmen</button>
+                        <button type="button" class="sec-btn" id="wi-dest-takecancel"
+                                data-i18n="common.cancel">Abbrechen</button>
+                    </div>
+                    <div class="wi-status" id="wi-dest-takestatus"></div>
+                </div>
+            </div>
+        </div>
+
         <!-- Dynamische Confluence-Einbindung.
              Sichtbar NUR, wenn der Confluence-Skill installiert + aktiv ist UND
              konfiguriert wurde (wissen.js::cfbRender, Zustand von
@@ -482,7 +656,7 @@
     <script src="/static/js/dlkey.js?v=2"></script>
     <script src="/static/js/cpubar.js?v=1"></script>
     <script src="/static/js/syspackages.js?v=2"></script>
-    <script src="/static/js/i18n.js?v=282"></script>
+    <script src="/static/js/i18n.js?v=283"></script>
     <script src="/static/js/theme.js?v=3"></script>
     <script src="/static/js/profile_switcher.js?v=5"></script>
     <script src="/static/js/issues.js?v=12"></script>
@@ -492,7 +666,8 @@
     <script src="/static/js/knowledge.js?v=121"></script>
     <script src="/static/js/sessions.js?v=8"></script>
     <script src="/static/js/logo_home.js?v=1"></script>
-    <script src="/static/js/wissen.js?v=49"></script>
+    <script src="/static/js/wissen_destillat.js?v=1"></script>
+    <script src="/static/js/wissen.js?v=50"></script>
 <script src="/static/js/settings_btn.js?v=4"></script>
     <script src="/static/js/branding.js?v=26"></script>
 <!-- Avatar-Assistent (nur aktiv, wenn der Avatar-Skill eingeschaltet ist) -->

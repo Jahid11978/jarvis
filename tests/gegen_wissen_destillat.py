@@ -1,0 +1,404 @@
+#!/usr/bin/env python3
+"""Gegenproben zum Wissens-Destillat (/wissen).
+
+Jede Probe dreht GENAU EINE Zusage zurueck und misst, ob der zustaendige
+Waechter das meldet. Eine Probe, die nicht beisst, ist ein Testmangel – kein
+Beweis. Und wenn die Zusage gar nicht existiert, gehoert die Probe gestrichen,
+nicht der Waechter geschaerft.
+
+DREI REGELN AUS DEM REGISTER, hier als CODE statt als Vorsatz:
+
+* **Jede angefasste Datei steht in der Sicherung** – geprueft, nicht gepflegt
+  (Exit 2, sonst laesst ein Abbruch einen Rueckstand im Arbeitsbaum liegen).
+* **Laufmarke**: nach einem `kill -9` nimmt der naechste Start den Rueckstand
+  selbst zurueck; beim geordneten Ende wird sie abgeraeumt, damit ein spaeterer
+  Lauf keine veraltete Sicherung herstellt.
+* **Gruener Basislauf ist Bedingung** – ohne ihn ist keine Gegenprobe deutbar.
+
+Gemessen wird EXIT-CODE **und** Bilanzzeile: ein Lauf, der ohne Bilanz
+abbricht, ist von "bestanden" nicht zu unterscheiden.
+"""
+from __future__ import annotations
+
+import atexit
+import shutil
+import signal
+import subprocess
+import sys
+from pathlib import Path
+
+ROOT = Path(__file__).resolve().parent.parent
+ABL = Path.home() / ".gegen-wissen-destillat"
+MARKE = ABL / "LAUF"
+
+WD = "backend/wissen_destillat.py"
+MAIN = "backend/main.py"
+HTML = "frontend/wissen.html"
+JS = "frontend/js/wissen_destillat.js"
+WJS = "frontend/js/wissen.js"
+I18N = "frontend/js/i18n.js"
+
+DATEIEN = [WD, MAIN, HTML, JS, WJS, I18N]
+
+PY_W = [sys.executable, str(ROOT / "tests" / "test_wissen_destillat.py")]
+JS_W = ["node", str(ROOT / "tests" / "test_wissen_destillat_ui.js")]
+
+
+def sichern() -> None:
+    ABL.mkdir(parents=True, exist_ok=True)
+    for rel in DATEIEN:
+        shutil.copy2(ROOT / rel, ABL / rel.replace("/", "__"))
+    MARKE.write_text("laeuft\n", encoding="utf-8")
+
+
+def zurueck() -> None:
+    for rel in DATEIEN:
+        q = ABL / rel.replace("/", "__")
+        if q.is_file():
+            shutil.copy2(q, ROOT / rel)
+
+
+def aufraeumen() -> None:
+    zurueck()
+    if MARKE.exists():
+        MARKE.unlink()
+
+
+if MARKE.exists():
+    print("⚠ Rueckstand eines frueheren Laufs gefunden – wird zurueckgenommen.")
+    zurueck()
+    MARKE.unlink()
+
+
+def lauf(cmd) -> tuple[int, str]:
+    p = subprocess.run(cmd, cwd=ROOT, capture_output=True, text=True, timeout=300)
+    return p.returncode, p.stdout + p.stderr
+
+
+def bewerte(cmd) -> tuple[bool, str]:
+    """(hat gemeldet?, Kurztext). Eine fehlende Bilanzzeile zaehlt als Meldung
+    MIT Vorbehalt – sie bedeutet Abbruch, nicht Erfolg."""
+    rc, aus = lauf(cmd)
+    bilanz = [z for z in aus.splitlines() if "Ergebnis:" in z]
+    if not bilanz:
+        return True, "ABGEBROCHEN (keine Bilanz)"
+    fails = sum(1 for z in aus.splitlines() if "✗" in z)
+    return (rc != 0), f"{bilanz[-1].strip()} / {fails} FAIL"
+
+
+def _container_verschieben(s: str) -> str:
+    """Schiebt den Destillat-Container HINTER die Confluence-Einbindung.
+
+    Damit stimmt die zugesicherte Reihenfolge nicht mehr. Findet die Funktion
+    ihre Marken nicht, gibt sie den Text UNVERAENDERT zurueck – der Aufrufer
+    wertet das als unbrauchbare Probe und nicht als bestandenen Waechter.
+    """
+    a = s.find("        <!-- Wissens-Destillat (Import aus")
+    b = s.find("        <!-- Dynamische Confluence-Einbindung.")
+    e = s.find("        <!-- Mein Wissen -->")
+    if not (0 < a < b < e):
+        return s
+    return s[:a] + s[b:e] + s[a:b] + s[e:]
+
+
+def _rechte_verschieben(s: str) -> str:
+    """Schiebt die Rechte-Pruefung des Uebernehmen-Endpunkts HINTER das Lesen
+    des Rumpfes. Sie steht dann noch da, aber an der falschen Stelle – genau
+    diese Reihenfolge sichert der Waechter zu, und eine Textsuche saehe den
+    Unterschied nicht."""
+    block = ('    if not _destillat_erlaubt(user):\n'
+             '        return JSONResponse({"error": "Dir ist kein Wissensbereich zugewiesen."},\n'
+             '                            status_code=403)\n'
+             '    from backend import wissen_destillat as _wd\n'
+             '\n'
+             '    body = await request.json()\n'
+             '    markdown = str(body.get("markdown") or "").strip()\n')
+    ersatz = ('    from backend import wissen_destillat as _wd\n'
+              '\n'
+              '    body = await request.json()\n'
+              '    if not _destillat_erlaubt(user):\n'
+              '        return JSONResponse({"error": "Dir ist kein Wissensbereich zugewiesen."},\n'
+              '                            status_code=403)\n'
+              '    markdown = str(body.get("markdown") or "").strip()\n')
+    if s.count(block) != 1:
+        return s
+    return s.replace(block, ersatz)
+
+
+PROBEN = [
+    # ── Die zentrale Zusage: KEIN AGENT ────────────────────────────────────
+    ("⚠ tools=[] raus (aus der Hilfe wird eine Hintertuer)", WD,
+     "        tools=[],", "        tools=None,", PY_W),
+
+    ("Modellaufruf ueber get_provider statt provider_fuer_lauf", WD,
+     "provider, model = _llm.provider_fuer_lauf(prompt_tool_calling=False)",
+     "provider, model = _llm.get_provider(), 'x'", PY_W),
+
+    # ── Fremdtext ──────────────────────────────────────────────────────────
+    # An der FUNKTION angesetzt, nicht an einer Aufrufstelle: so trifft die
+    # Probe beide Aufrufer (Block-Auftrag UND Zusammenfuehrung) und haengt
+    # nicht an den Escape-Ebenen des Quelltexts (erster Anlauf verfehlte sie
+    # deshalb – ein Proben-Mangel, kein zahnloser Waechter).
+    ("Fremdtext wird nicht mehr entschaerft", WD,
+     "        from backend.short_tracks_runner import fremdtext_entschaerfen\n"
+     "        return fremdtext_entschaerfen(text)",
+     "        return text", PY_W),
+
+    ("Auftrag steht HINTER dem Inhalt (Dokument kann ihn ueberschreiben)", WD,
+     '        + "=== AUFTRAG ===\\n" + prompt.strip() + "\\n\\n"\n'
+     '        + ("=== GLIEDERUNG ===\\n" + gruppen_prompt.strip() + "\\n\\n"\n'
+     '           if gruppen_prompt.strip() else "")\n'
+     '        + f"=== INHALT ===\\nBEGINN INHALT-{kennung}\\n"\n'
+     '        + _entschaerfen(inhalt)\n'
+     '        + f"\\nENDE INHALT-{kennung}\\n")',
+     '        + f"=== INHALT ===\\nBEGINN INHALT-{kennung}\\n"\n'
+     '        + _entschaerfen(inhalt)\n'
+     '        + f"\\nENDE INHALT-{kennung}\\n"\n'
+     '        + "=== AUFTRAG ===\\n" + prompt.strip() + "\\n\\n"\n'
+     '        + ("=== GLIEDERUNG ===\\n" + gruppen_prompt.strip() + "\\n\\n"\n'
+     '           if gruppen_prompt.strip() else ""))', PY_W),
+
+    # ── Bloecke ────────────────────────────────────────────────────────────
+    ("ein Riesenabsatz wird NICHT mehr hart geteilt", WD,
+     "            for i in range(0, len(absatz), BLOCK_ZEICHEN):\n"
+     "                raus.append(absatz[i:i + BLOCK_ZEICHEN])\n"
+     "            continue",
+     "            raus.append(absatz)\n"
+     "            continue", PY_W),
+
+    # ── DOCX-Bilder ────────────────────────────────────────────────────────
+    ("⚠ alphabetische statt numerischer Sortierung (image10 vor image2)", WD,
+     "            for name in sorted(namen, key=_num):",
+     "            for name in sorted(namen):", PY_W),
+
+    ("magische Bytes werden nicht geprueft (EMF/Fake-PNG kommen durch)", WD,
+     "                mime = _bild_mime(daten)\n"
+     "                if not mime:\n"
+     "                    continue",
+     "                mime = _bild_mime(daten) or 'image/png'", PY_W),
+
+    ("Bild-Deckel raus", WD,
+     "                if len(raus) >= MAX_BILDER or gesamt >= MAX_BILDER_GESAMT:\n"
+     "                    break",
+     "                if False:\n"
+     "                    break", PY_W),
+
+    ("beschaedigtes Archiv wirft statt leer zurueckzugeben", WD,
+     "    except Exception:  # noqa: BLE001\n"
+     "        # Kein gueltiges ZIP / beschaedigt: der TEXT ist der primaere Weg und\n"
+     "        # muss trotzdem durchkommen. Genau so macht es das Original.\n"
+     "        return []",
+     "    except Exception:  # noqa: BLE001\n"
+     "        raise", PY_W),
+
+    # ── Bilder und Wissensdatenbank ────────────────────────────────────────
+    ("⚠ Bilder werden in die WISSENSDATENBANK eingebettet (Index-Rauschen)", MAIN,
+     "        inhalt = _wd.markdown_fuer_wissen(markdown, bilder if isinstance(bilder, list) else [])",
+     "        inhalt = _wd.markdown_mit_bildern(markdown, bilder if isinstance(bilder, list) else [])",
+     PY_W),
+
+    ("unbekannter Bild-Marker wird stillschweigend entfernt", WD,
+     "        if 0 <= i < len(bilder):\n"
+     "            return f\"\\n\\n![Bild]({bilder[i]})\\n\\n\"\n"
+     "        return m.group(0)",
+     "        if 0 <= i < len(bilder):\n"
+     "            return f\"\\n\\n![Bild]({bilder[i]})\\n\\n\"\n"
+     "        return \"\"", PY_W),
+
+    # ── Endpunkt-Rechte ────────────────────────────────────────────────────
+    ("Rechte-Pruefung im Lauf-Endpunkt raus", MAIN,
+     '    if not _destillat_erlaubt(user):\n'
+     '        return JSONResponse({"error": "Dir ist kein Wissensbereich zugewiesen."},\n'
+     '                            status_code=403)\n'
+     '    from backend import wissen_destillat as _wd\n'
+     '\n'
+     '    body = await request.json()\n'
+     '    text = str(body.get("text") or "")',
+     '    from backend import wissen_destillat as _wd\n'
+     '\n'
+     '    body = await request.json()\n'
+     '    text = str(body.get("text") or "")', PY_W),
+
+    ("⚠ Rechte-Pruefung HINTER dem Lesen des Rumpfes", MAIN, None,
+     _rechte_verschieben, PY_W),
+
+    ("Gruppen-Pruefung wird nachgebaut statt benutzt", MAIN,
+     "    ok, fehler = _wissen_check_groups(user, groups)\n"
+     "    if not ok:\n"
+     "        return JSONResponse({\"error\": fehler}, status_code=403)",
+     "    if not groups:\n"
+     "        return JSONResponse({\"error\": \"keine Gruppe\"}, status_code=403)", PY_W),
+
+    ("Benutzer kommt aus dem RUMPF statt aus der Anmeldung", MAIN,
+     '            "created_by": _norm_login(user),',
+     '            "created_by": str(body.get("user") or ""),', PY_W),
+
+    ("_destillat_erlaubt ist nicht mehr fail-closed", MAIN,
+     "    try:\n"
+     "        return bool(_editable_groups_for(user))\n"
+     "    except Exception:  # noqa: BLE001\n"
+     "        return False",
+     "    return bool(_editable_groups_for(user))", PY_W),
+
+    ("Extraktion laeuft im Event-Loop (Dienst steht fuer ALLE)", MAIN,
+     "        ergebnis = await asyncio.to_thread(_wd.extrahiere, dateien)",
+     "        ergebnis = _wd.extrahiere(dateien)", PY_W),
+
+    # ── Modul schreibt nichts Dauerhaftes ──────────────────────────────────
+    ("das Modul legt Dateien dauerhaft ab", WD,
+     "MAX_BLOECKE = 40 ",
+     "_LECK = Path('/tmp/x').write_text('y')\nMAX_BLOECKE = 40 ", PY_W),
+
+    # ── Frontend: Position und Sichtbarkeit ────────────────────────────────
+    ("⚠ Container steht HINTER der Confluence-Einbindung", HTML, None,
+     _container_verschieben, JS_W),
+
+    ("Container ist ohne Wissensgruppe SICHTBAR", JS,
+     "        if (!SCOPE || !SCOPE.groups || !SCOPE.groups.length) {\n"
+     "            sec.classList.add('hidden');\n"
+     "            return;\n"
+     "        }",
+     "        if (false) {\n"
+     "            sec.classList.add('hidden');\n"
+     "            return;\n"
+     "        }", JS_W),
+
+    ("Modul holt den Scope selbst (zwei Quellen)", JS,
+     "        SCOPE = opt.scope || null;",
+     "        SCOPE = opt.scope || null;\n"
+     "        fetch('/api/wissen/scope');", JS_W),
+
+    # ── Frontend: Renderer ─────────────────────────────────────────────────
+    ("⚠ Markdown wird NICHT maskiert (Einschleusung moeglich)", JS,
+     "        var s = esc(String(text || ''));",
+     "        var s = String(text || '');", JS_W),
+
+    ("javascript:-Links werden verlinkt", JS,
+     "        s = s.replace(/\\[([^\\]]+)\\]\\((https?:\\/\\/[^)\\s]+)\\)/g,\n"
+     "            '<a href=\"$2\" target=\"_blank\" rel=\"noopener noreferrer\">$1</a>');",
+     "        s = s.replace(/\\[([^\\]]+)\\]\\(([^)\\s]+)\\)/g,\n"
+     "            '<a href=\"$2\" target=\"_blank\" rel=\"noopener noreferrer\">$1</a>');", JS_W),
+
+    ("fremdes Bild-Schema wird durchgelassen", JS,
+     "            if (/^data:image\\/(png|jpe?g|gif|webp|bmp);base64,[A-Za-z0-9+/=]+$/.test(url)\n"
+     "                || /^https?:\\/\\//.test(url)) {\n"
+     "                return '<img src=\"' + url + '\" alt=\"' + alt + '\">';\n"
+     "            }\n"
+     "            return alt || '';   // alles andere: nur der Alt-Text",
+     "            return '<img src=\"' + url + '\" alt=\"' + alt + '\">';", JS_W),
+
+    ("⚠ Lookbehind wieder als LITERAL (stirbt auf Safari < 16.4 beim Parsen)", JS,
+     "        _FETT = new RegExp('\\\\*\\\\*(?=\\\\S)([^\\\\n]+?)(?<=\\\\S)\\\\*\\\\*', 'g');",
+     "        _FETT = /\\*\\*(?=\\S)([^\\n]+?)(?<=\\S)\\*\\*/g;", JS_W),
+
+    # ── Frontend: Knopf und Uebernahme ─────────────────────────────────────
+    ("Destillier-Knopf ist ohne Text bedienbar", JS,
+     "            run.disabled = laeuft || !ta.value.trim();",
+     "            run.disabled = false;", JS_W),
+
+    ("Knopf gesperrt OHNE Grund (unerklaertes Zeichen)", JS,
+     "            run.title = laeuft ? t('wissen.dest_running')\n"
+     "                : (ta.value.trim() ? '' : t('wissen.dest_need_text'));",
+     "            run.title = '';", JS_W),
+
+    ("Uebernahme sendet auch OHNE Wissensgruppe", JS,
+     "        if (!groups.length) {\n",
+     "        if (false) {\n", JS_W),
+
+    ("Gruppen werden bei jedem Zeichnen neu gebaut (Haken gehen verloren)", JS,
+     "        if (g && !g.innerHTML.trim()) g.innerHTML = gruppenBoxen();",
+     "        if (g) g.innerHTML = gruppenBoxen();", JS_W),
+
+    # ── Verdrahtung ────────────────────────────────────────────────────────
+    ("⚠ Skript-Tag fehlt (Container bliebe STILL leer)", HTML,
+     '    <script src="/static/js/wissen_destillat.js?v=1"></script>\n', "", JS_W),
+
+    ("wissen.js ruft init nicht mehr", WJS,
+     "                if (window.WissenDestillat) {\n"
+     "                    window.WissenDestillat.init({ scope: SCOPE, token: token });\n"
+     "                }",
+     "", JS_W),
+
+    ("Container nicht bei den Klapp-Containern registriert", WJS,
+     "'wi-sec-destillat',", "", JS_W),
+
+    ("Entwurfsliste wird nach der Uebernahme nicht nachgezogen", WJS,
+     "    window.WissenPortal = { reloadPending: function () { loadPending(); } };",
+     "", JS_W),
+
+    # ── i18n ───────────────────────────────────────────────────────────────
+    ("ein Schluessel fehlt im Englischen", I18N,
+     "        'wissen.dest_take': 'Into the knowledge base',\n", "", JS_W),
+]
+
+
+def main() -> int:
+    print(f"\033[1mGegenproben Wissens-Destillat ({len(PROBEN)})\033[0m\n")
+    sichern()
+    atexit.register(aufraeumen)
+    for sig in (signal.SIGTERM, signal.SIGINT):
+        signal.signal(sig, lambda *_: sys.exit(1))
+
+    # ── Regel statt Pflege: jede angefasste Datei MUSS gesichert sein ──────
+    unbekannt = {p[1] for p in PROBEN} - set(DATEIEN)
+    if unbekannt:
+        print(f"\033[31mABBRUCH: nicht gesichert: {sorted(unbekannt)}\033[0m")
+        return 2
+
+    # ── Basislauf. Ohne gruene Basis ist keine Gegenprobe deutbar. ─────────
+    print("\033[1mBasislauf\033[0m")
+    for cmd, name in ((PY_W, "Backend"), (JS_W, "UI")):
+        rc, aus = lauf(cmd)
+        bil = [z for z in aus.splitlines() if "Ergebnis:" in z]
+        print(f"  {name}: {bil[-1].strip() if bil else 'KEINE BILANZ'}")
+        if rc != 0:
+            print(f"\033[31mABBRUCH: Basislauf {name} nicht gruen\033[0m")
+            return 2
+
+    beisst = stumm = kaputt = 0
+    print()
+    for i, (name, datei, alt, neu, waechter) in enumerate(PROBEN, 1):
+        pfad = ROOT / datei
+        orig = pfad.read_text(encoding="utf-8")
+        if callable(neu):
+            sab = neu(orig)
+            traf = sab != orig
+        else:
+            traf = orig.count(alt) == 1
+            sab = orig.replace(alt, neu, 1) if traf else orig
+        if not traf:
+            # Eine Probe, die ihr Ziel verfehlt, ist ein PROBEN-Mangel – und
+            # wird als solcher ausgewiesen, nicht als zahnloser Waechter.
+            print(f"  \033[33m⚠\033[0m {i:2}. {name}\n"
+                  f"        SABOTAGE TRIFFT NICHT ({datei}) – Probe unbrauchbar")
+            kaputt += 1
+            continue
+        pfad.write_text(sab, encoding="utf-8")
+        try:
+            gemeldet, info = bewerte(waechter)
+        finally:
+            pfad.write_text(orig, encoding="utf-8")
+        if gemeldet:
+            beisst += 1
+            print(f"  \033[32m✓\033[0m {i:2}. {name}\n        {info}")
+        else:
+            stumm += 1
+            print(f"  \033[31m✗\033[0m {i:2}. {name}\n"
+                  f"        \033[31mSTUMM\033[0m – {info}")
+
+    print(f"\n\033[1mbeisst: {beisst}/{len(PROBEN)}"
+          + (f", stumm: {stumm}" if stumm else "")
+          + (f", unbrauchbar: {kaputt}" if kaputt else "") + "\033[0m")
+
+    # Byte-Gleichheit nach dem Lauf – eine Wiederherstellung, deren Erfolg
+    # niemand prueft, ist keine.
+    aufraeumen()
+    rest = [r for r in DATEIEN
+            if (ROOT / r).read_bytes() != (ABL / r.replace("/", "__")).read_bytes()]
+    print("Arbeitsbaum wiederhergestellt: "
+          + ("\033[32mja\033[0m" if not rest else f"\033[31mNEIN: {rest}\033[0m"))
+    return 0 if (not stumm and not kaputt and not rest) else 1
+
+
+if __name__ == "__main__":
+    sys.exit(main())

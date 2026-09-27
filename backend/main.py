@@ -18746,6 +18746,165 @@ async def wissen_extract_cancel(request: Request, user: str = Depends(require_au
     return JSONResponse({"ok": True})
 
 
+# ─── Wissens-Destillat (Import aus knowledge-distiller) ──────────────
+#
+# Rechte: GENAU WIE DER INFORMATIONSEXTRAKTOR daneben – wer eine Wissensgruppe
+# bearbeiten darf (`_editable_groups_for`), darf destillieren. Bewusst KEINE
+# eigene Freigabeliste: das waere eine Schranke vor einer offenen Tuer (die
+# Dateien bringt der Benutzer selbst mit), und eine zweite Liste liefe beim
+# naechsten Feinschliff auseinander. Der Container ist an dieselbe Bedingung
+# gebunden (`SCOPE.groups.length`), Sichtbarkeit und Recht sagen also dasselbe.
+
+def _destillat_erlaubt(user: str) -> bool:
+    """Darf der Benutzer den Destiller benutzen? Fail-closed."""
+    try:
+        return bool(_editable_groups_for(user))
+    except Exception:  # noqa: BLE001
+        return False
+
+
+@app.post("/api/wissen/destillat/extract")
+async def wissen_destillat_extract(request: Request, user: str = Depends(require_auth)):
+    """Hochgeladene Dateien -> Text (+ Bilder aus DOCX).
+
+    ⚠ SERVERSEITIG, und das ist der Kern des Imports: das Original liest PDF und
+    DOCX im Browser ueber zwei CDN-Bibliotheken. Hier laeuft die vorhandene
+    Jarvis-Extraktion – kein externer Abruf, und dafuer OCR bei gescannten PDFs.
+    """
+    if not _destillat_erlaubt(user):
+        return JSONResponse({"error": "Dir ist kein Wissensbereich zugewiesen."},
+                            status_code=403)
+    from backend import wissen_destillat as _wd
+
+    form = await request.form()
+    roh = form.getlist("files")
+    dateien: list[tuple[str, bytes]] = []
+    gesamt = 0
+    for f in roh:
+        if not hasattr(f, "read"):
+            continue
+        inhalt = await f.read()
+        gesamt += len(inhalt)
+        # Deckel auf die Rohdaten: 200 MB Upload wuerden sonst erst komplett im
+        # Speicher liegen und danach verworfen.
+        if gesamt > 200 * 1024 * 1024:
+            return JSONResponse({"error": "Upload zu groß (max. 200 MB gesamt)."},
+                                status_code=413)
+        dateien.append((getattr(f, "filename", "") or "datei", inhalt))
+
+    if not dateien:
+        return JSONResponse({"error": "Keine Dateien empfangen."}, status_code=400)
+
+    try:
+        # Extraktion ist blockierende Arbeit (pdfplumber, OCR, Tika) und gehoert
+        # deshalb NIE in den Event-Loop – sonst steht der Dienst fuer ALLE.
+        ergebnis = await asyncio.to_thread(_wd.extrahiere, dateien)
+    except _wd.DestillatFehler as e:
+        return JSONResponse({"error": str(e)}, status_code=400)
+    except Exception as e:  # noqa: BLE001
+        return JSONResponse({"error": str(e)}, status_code=500)
+    return JSONResponse({"ok": True, **ergebnis})
+
+
+@app.post("/api/wissen/destillat/lauf")
+async def wissen_destillat_lauf(request: Request, user: str = Depends(require_auth)):
+    """Text + Prompts -> destilliertes Markdown.
+
+    ⚠ HIER LAEUFT KEIN AGENT – ein Modellaufruf je Block mit ``tools=[]``.
+    Siehe Modul-Docstring von ``wissen_destillat``: der Text kommt aus
+    hochgeladenen Dateien und ist Fremdtext in Reinform.
+    """
+    if not _destillat_erlaubt(user):
+        return JSONResponse({"error": "Dir ist kein Wissensbereich zugewiesen."},
+                            status_code=403)
+    from backend import wissen_destillat as _wd
+
+    body = await request.json()
+    text = str(body.get("text") or "")
+    prompt = str(body.get("prompt") or "")
+    gruppen_prompt = str(body.get("gruppen_prompt") or "")
+    # "pro Datei getrennt": jede Quelldatei bekommt ihr eigenes Destillat.
+    je_datei = bool(body.get("je_datei"))
+
+    try:
+        _wd.drossel_pruefen(user)
+        if je_datei:
+            teile = _wd.teile_nach_dateien(text)
+            if len(teile) > 1:
+                stuecke = []
+                for name, abschnitt in teile:
+                    r = await _wd.destilliere(abschnitt, prompt, gruppen_prompt)
+                    stuecke.append(("## " + name + "\n\n" if name else "")
+                                   + r["markdown"])
+                return JSONResponse({"ok": True,
+                                     "markdown": "\n\n---\n\n".join(stuecke),
+                                     "bloecke": len(teile), "gekappt": False,
+                                     "je_datei": True})
+        ergebnis = await _wd.destilliere(text, prompt, gruppen_prompt)
+    except _wd.DestillatFehler as e:
+        return JSONResponse({"error": str(e)}, status_code=400)
+    except Exception as e:  # noqa: BLE001
+        from backend.llm import scrub_secrets
+        return JSONResponse({"error": scrub_secrets(str(e))}, status_code=500)
+    return JSONResponse({"ok": True, **ergebnis, "je_datei": False})
+
+
+@app.post("/api/wissen/destillat/uebernehmen")
+async def wissen_destillat_uebernehmen(request: Request,
+                                       user: str = Depends(require_auth)):
+    """Destillat als Entwurf in den VORHANDENEN Pending-Weg legen.
+
+    Kein zweiter Schreibweg in die Wissensdatenbank: der Entwurf erscheint unten
+    unter "Deine Entwürfe" und wird dort wie jeder andere geprueft und
+    freigegeben. Damit gelten dieselben Zusagen – Wissensgruppen-Pflicht,
+    Eigentuemer-Zuordnung, Freigabe durch einen Menschen.
+    """
+    if not _destillat_erlaubt(user):
+        return JSONResponse({"error": "Dir ist kein Wissensbereich zugewiesen."},
+                            status_code=403)
+    from backend import wissen_destillat as _wd
+
+    body = await request.json()
+    markdown = str(body.get("markdown") or "").strip()
+    # Leerraum wird getrimmt: ein String aus Leerzeichen ist nicht falsy und
+    # kam sonst als "Keine Berechtigung fuer Gruppe(n):   " zurueck – es fehlt
+    # aber eine AUSWAHL, das ist kein Rechteproblem (Lehre vom 2026-09-22).
+    groups = [str(g).strip() for g in (body.get("groups") or []) if str(g).strip()]
+    quelle = str(body.get("quelle") or "").strip()[:200]
+    bilder = body.get("bilder") or []
+
+    if not markdown:
+        return JSONResponse({"error": "Kein Destillat vorhanden."}, status_code=400)
+
+    ok, fehler = _wissen_check_groups(user, groups)
+    if not ok:
+        return JSONResponse({"error": fehler}, status_code=403)
+
+    try:
+        from backend.web_extractor import save_pending
+        # ⚠ OHNE eingebettete Bilder – siehe markdown_fuer_wissen(): ein
+        # Base64-Bild wird im Vektor-Index zu Dutzenden nutzloser Chunks.
+        inhalt = _wd.markdown_fuer_wissen(markdown, bilder if isinstance(bilder, list) else [])
+        doc = {
+            "id": str(uuid.uuid4())[:8],
+            "url": "",
+            "source_name": quelle or "Wissens-Destillat",
+            "title": _wd.titel_aus_markdown(markdown, quelle or "Destillat"),
+            "summary": inhalt,
+            "facts": [],
+            "qa_pairs": [],
+            "coverage": None,
+            "created_at": int(time.time()),
+            "created_by": _norm_login(user),
+            "status": "pending",
+        }
+        await asyncio.to_thread(save_pending, doc)
+    except Exception as e:  # noqa: BLE001
+        return JSONResponse({"error": str(e)}, status_code=500)
+    return JSONResponse({"ok": True, "id": doc["id"], "title": doc["title"]},
+                        status_code=201)
+
+
 # ─── Wissensgruppen (logische Tags, Modell B) ────────────────────────
 
 def _kb_all_rel_paths() -> list:
