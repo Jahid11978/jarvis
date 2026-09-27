@@ -343,7 +343,137 @@ abschnitt('9. Klapp-Registrierung und Einbindung');
           WJS.indexOf('window.WissenPortal') >= 0 && WJS.indexOf('reloadPending') >= 0);
 }
 
-console.log('\n\x1b[1mErgebnis: ' + ok + '/' + (ok + fail) + '\x1b[0m');
-bilanz = true;
-process.exit(fail ? 1 : 0);
+ordnerProbe().then(abschluss, function (e) {
+    check('Abschnitt 10 lief ohne Wurf', false, String(e && e.stack || e));
+    abschluss();
+});
+}
+
+// ════════════════════════════════════════════════════════════════════════════
+// 10. Ordner als Quelle (Meldung 2026-09-27: "im aufpoppenden Fenster ist nur
+// Dateiangabe moeglich"). Der Datei-Dialog eines Browsers kann ENTWEDER
+// Dateien ODER einen Ordner waehlen – deshalb ein zweiter Eingang. Gemessen
+// wird, was beim Server ANKOMMT (Namen im FormData), nicht das Markup.
+function warte(ms) { return new Promise(function (r) { setTimeout(r, ms); }); }
+function datei(w, pfad) {
+    const f = new w.File(['x'], pfad.split('/').pop());
+    Object.defineProperty(f, 'webkitRelativePath', { value: pfad });
+    return f;
+}
+function gesendeteNamen(gesendet) {
+    const ex = gesendet.filter(function (g) { return g.pfad === '/api/wissen/destillat/extract'; });
+    if (!ex.length) return null;
+    const body = ex[ex.length - 1].opt.body;
+    return body && body.getAll ? body.getAll('files').map(function (f) { return f.name; }) : null;
+}
+async function ordnerProbe() {
+    // ⚠ HIER, nicht auf Dateiebene: Abschnitt 6 verlaesst die umschliessende
+    // Funktion per `return` – ein `const` dahinter wird nie initialisiert
+    // (nur Funktionsdeklarationen sind gehoben).
+    const EXTRAKT = { '/api/wissen/destillat/extract': { ok: ['a'], text: 'Inhalt', fehler: {} } };
+    abschnitt('10. Ordner als Quelle');
+    {
+        const { doc } = seite(GRUPPEN, EXTRAKT);
+        const dirIn = doc.getElementById('wi-dest-dir');
+        const btn = doc.getElementById('wi-dest-dirbtn');
+        check('Ordner-Eingang existiert und ist ein Verzeichnis-Dialog',
+              !!(dirIn && dirIn.type === 'file' && dirIn.hasAttribute('webkitdirectory')));
+        check('Knopf "Ordner wählen" ist übersetzbar',
+              !!(btn && btn.getAttribute('data-i18n') === 'wissen.dest_pick_dir'));
+        if (!dirIn || !btn) return;
+
+        // Der Knopf liegt IN der Drop-Zone, deren Klick den DATEI-Dialog oeffnet.
+        let dirAuf = 0, dateiAuf = 0;
+        dirIn.click = function () { dirAuf++; };
+        doc.getElementById('wi-dest-files').click = function () { dateiAuf++; };
+        btn.click();
+        check('Knopf öffnet den Ordner-Dialog', dirAuf === 1, String(dirAuf));
+        check('… und NICHT zusätzlich den Datei-Dialog', dateiAuf === 0, String(dateiAuf));
+    }
+    {
+        const { w, doc, gesendet } = seite(GRUPPEN, EXTRAKT);
+        const dirIn = doc.getElementById('wi-dest-dir');
+        Object.defineProperty(dirIn, 'files', { configurable: true, value: [
+            datei(w, 'Projekt/z.md'), datei(w, 'Projekt/.DS_Store'),
+            datei(w, 'Projekt/Unter/a.pdf'), datei(w, 'Projekt/.git/config')
+        ] });
+        dirIn.dispatchEvent(new w.Event('change'));
+        await warte(30);
+        const namen = gesendeteNamen(gesendet);
+        check('Ordnerwahl sendet die Dateien', !!namen, JSON.stringify(namen));
+        check('… mit RELATIVEM Pfad als Name, sortiert',
+              JSON.stringify(namen) === '["Projekt/Unter/a.pdf","Projekt/z.md"]', JSON.stringify(namen));
+        const liste = doc.getElementById('wi-dest-filelist').textContent || '';
+        check('die Dateiliste zeigt den Pfad sichtbar', liste.indexOf('Projekt/Unter/a.pdf') >= 0, liste);
+        const st = doc.getElementById('wi-dest-exstatus').textContent || '';
+        check('übersprungene versteckte Dateien werden GENANNT (2)',
+              // window.t kennt keine Platzhalter – ersetzt wird wie im Modul.
+              st.indexOf(w.t('wissen.dest_dir_skipped').replace('{n}', '2')) >= 0, st);
+    }
+    {
+        const { w, doc, gesendet } = seite(GRUPPEN, EXTRAKT);
+        const dirIn = doc.getElementById('wi-dest-dir');
+        Object.defineProperty(dirIn, 'files', { configurable: true,
+            value: [datei(w, 'Leer/.DS_Store')] });
+        dirIn.dispatchEvent(new w.Event('change'));
+        await warte(30);
+        check('Ordner nur mit versteckten Dateien: KEINE Anfrage', gesendeteNamen(gesendet) === null);
+        const st = doc.getElementById('wi-dest-exstatus').textContent || '';
+        check('… und der Grund steht da', st.indexOf(w.t('wissen.dest_dir_empty')) >= 0, st);
+    }
+    {
+        // Gezogener Ordner. readEntries() liefert BLOCKWEISE (Chrome: <= 100);
+        // die Attrappe liefert zwei volle Bloecke, bevor sie leer meldet – wer
+        // nur einmal liest, verliert den zweiten.
+        const { w, doc, gesendet } = seite(GRUPPEN, EXTRAKT);
+        function fe(pfad) {
+            return { isFile: true, isDirectory: false, fullPath: '/' + pfad,
+                     file: function (ok) { ok(new w.File(['x'], pfad.split('/').pop())); } };
+        }
+        function de(pfad, bloecke) {
+            return { isFile: false, isDirectory: true, fullPath: '/' + pfad,
+                     createReader: function () {
+                         let i = 0;
+                         return { readEntries: function (ok) { ok(bloecke[i++] || []); } };
+                     } };
+        }
+        const wurzel = de('Doku', [
+            [fe('Doku/a.md'), de('Doku/Sub', [[fe('Doku/Sub/c.docx')]])],
+            [fe('Doku/b.md'), fe('Doku/.hidden')]
+        ]);
+        const ev = new w.Event('drop', { bubbles: true, cancelable: true });
+        Object.defineProperty(ev, 'dataTransfer', { value: {
+            files: [new w.File([''], 'Doku')],
+            items: [{ kind: 'file', webkitGetAsEntry: function () { return wurzel; } }],
+            types: ['Files']
+        } });
+        doc.getElementById('wi-dest-drop').dispatchEvent(ev);
+        await warte(40);
+        const namen = gesendeteNamen(gesendet);
+        check('gezogener Ordner wird rekursiv gelesen – auch der zweite Block',
+              JSON.stringify(namen) === '["Doku/Sub/c.docx","Doku/a.md","Doku/b.md"]', JSON.stringify(namen));
+    }
+    {
+        // Rueckwaerts: gezogene DATEIEN gehen wie bisher direkt durch.
+        const { w, doc, gesendet } = seite(GRUPPEN, EXTRAKT);
+        const f = new w.File(['x'], 'einzeln.pdf');
+        const ev = new w.Event('drop', { bubbles: true, cancelable: true });
+        Object.defineProperty(ev, 'dataTransfer', { value: {
+            files: [f],
+            items: [{ kind: 'file', webkitGetAsEntry: function () {
+                return { isFile: true, isDirectory: false, fullPath: '/einzeln.pdf' }; } }],
+            types: ['Files']
+        } });
+        doc.getElementById('wi-dest-drop').dispatchEvent(ev);
+        await warte(30);
+        check('gezogene Einzeldatei geht unverändert durch',
+              JSON.stringify(gesendeteNamen(gesendet)) === '["einzeln.pdf"]',
+              JSON.stringify(gesendeteNamen(gesendet)));
+    }
+}
+
+function abschluss() {
+    console.log('\n\x1b[1mErgebnis: ' + ok + '/' + (ok + fail) + '\x1b[0m');
+    bilanz = true;
+    process.exit(fail ? 1 : 0);
 }

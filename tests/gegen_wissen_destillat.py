@@ -21,6 +21,7 @@ abbricht, ist von "bestanden" nicht zu unterscheiden.
 from __future__ import annotations
 
 import atexit
+import re
 import shutil
 import signal
 import subprocess
@@ -249,6 +250,10 @@ PROBEN = [
      "MAX_BLOECKE = 40 ",
      "_LECK = Path('/tmp/x').write_text('y')\nMAX_BLOECKE = 40 ", PY_W),
 
+    ("Gruppen gehen NICHT durch die gemeinsame Normierung", MAIN,
+     '    groups = _gruppen_normieren(body.get("groups"))\n    quelle =',
+     '    groups = list(body.get("groups") or [])\n    quelle =', PY_W),
+
     # ── Frontend: Position und Sichtbarkeit ────────────────────────────────
     ("⚠ Container steht HINTER der Confluence-Einbindung", HTML, None,
      _container_verschieben, JS_W),
@@ -310,8 +315,11 @@ PROBEN = [
      "        if (g) g.innerHTML = gruppenBoxen();", JS_W),
 
     # ── Verdrahtung ────────────────────────────────────────────────────────
-    ("⚠ Skript-Tag fehlt (Container bliebe STILL leer)", HTML,
-     '    <script src="/static/js/wissen_destillat.js?v=1"></script>\n', "", JS_W),
+    # Callable statt fester Zeichenkette: der Cache-Buster zaehlt hoch, ein
+    # Anker mit fester ?v=N verfehlte sein Ziel beim naechsten Deploy.
+    ("⚠ Skript-Tag fehlt (Container bliebe STILL leer)", HTML, None,
+     lambda s: re.sub(r'    <script src="/static/js/wissen_destillat\.js\?v=\d+"></script>\n',
+                      "", s, count=1), JS_W),
 
     ("wissen.js ruft init nicht mehr", WJS,
      "                if (window.WissenDestillat) {\n"
@@ -329,6 +337,40 @@ PROBEN = [
     # ── i18n ───────────────────────────────────────────────────────────────
     ("ein Schluessel fehlt im Englischen", I18N,
      "        'wissen.dest_take': 'Into the knowledge base',\n", "", JS_W),
+    # ── Ordner als Quelle (2026-09-27) ─────────────────────────────────────
+    ("Ordner-Eingang ohne webkitdirectory (Dialog waehlt nur Dateien)", HTML,
+     'id="wi-dest-dir" webkitdirectory directory multiple',
+     'id="wi-dest-dir" multiple', JS_W),
+
+    ("Ordner-Knopf ohne stopPropagation (oeffnet zusaetzlich den Datei-Dialog)", JS,
+     "                    e.stopPropagation();\n                    dirIn.click();",
+     "                    dirIn.click();", JS_W),
+
+    ("⚠ readEntries nur EINMAL gelesen (grosse Ordner verlieren den Rest)", JS,
+     "                    kinder = kinder.concat(Array.prototype.slice.call(block));\n"
+     "                    weiter();",
+     "                    kinder = kinder.concat(Array.prototype.slice.call(block));\n"
+     "                    Promise.all(kinder.map(function (k) { return eintragLesen(k, raus); }))\n"
+     "                        .then(fertig);", JS_W),
+
+    ("versteckte Dateien werden mitgeschickt", JS,
+     "            if (versteckt(e.name)) { weg++; return; }\n", "", JS_W),
+
+    ("Ordnerwahl verliert den relativen Pfad", JS,
+     "return { datei: f, name: f.webkitRelativePath || f.name };",
+     "return { datei: f, name: f.name };", JS_W),
+
+    ("gezogener Ordner geht als leere Datei durch", JS,
+     "                if (!mitOrdner) {", "                if (true) {", JS_W),
+
+    ("uebersprungene Dateien werden verschwiegen", JS,
+     "                if (weg) teile.push(t('wissen.dest_dir_skipped', { n: weg }));\n", "", JS_W),
+
+    ("Ordnerinhalt unsortiert", JS,
+     "        nehmen.sort(", "        [].sort(", JS_W),
+
+    ("leerer Ordner schickt trotzdem eine Anfrage", JS,
+     "        if (!nehmen.length) {", "        if (false) {", JS_W),
 ]
 
 

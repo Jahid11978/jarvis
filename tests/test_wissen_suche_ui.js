@@ -180,7 +180,7 @@ async function seite(liste, inhalt, cfg) {
     win.document.dispatchEvent(new win.Event('DOMContentLoaded', { bubbles: true }));
     for (let i = 0; i < 80; i++) {
         await new Promise(function (r) { setTimeout(r, 5); });
-        if (win.document.querySelectorAll('#wi-files-list .wi-item').length) break;
+        if (win.document.querySelectorAll('#wi-files-list .wi-frow').length) break;
     }
     return { win, doc: win.document, gerufen };
 }
@@ -197,7 +197,7 @@ function tippe(s, text) {
 
 function namen(s) {
     return Array.prototype.slice
-        .call(s.doc.querySelectorAll('#wi-files-list .wi-item a.nm'))
+        .call(s.doc.querySelectorAll('#wi-files-list .wi-frow a.nm'))
         .map(function (a) { return a.textContent; });
 }
 function leerText(s) {

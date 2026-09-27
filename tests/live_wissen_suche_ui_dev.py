@@ -260,7 +260,7 @@ def laden(sock, thema):
     cdp(sock, "Page.navigate", url=f"{BASIS}/probe.html")
     for _ in range(80):
         time.sleep(0.15)
-        if js(sock, "!!document.querySelector('#wi-files-list .wi-item')"):
+        if js(sock, "!!document.querySelector('#wi-files-list .wi-frow')"):
             break
     # Abschnitt "Mein Wissen" aufklappen, falls zugeklappt - in einem
     # display:none-Vorfahren ist JEDES Rechteck 0 und jede Messung trivial.
@@ -291,7 +291,7 @@ try:
             check(f"Thema {thema} wirklich aktiv (Positivkontrolle)",
                   hell == (thema == "light"), f"body.light={hell}")
 
-            n = js(sock, "document.querySelectorAll('#wi-files-list .wi-item').length")
+            n = js(sock, "document.querySelectorAll('#wi-files-list .wi-frow').length")
             check("vier Dateizeilen gezeichnet", n == 4, f"gezeichnet={n}")
             if n != 4:
                 continue
@@ -336,7 +336,7 @@ try:
 
             # ── ECHTES Tippen filtert sichtbar ───────────────────────────
             tippe(sock, "urlaub")
-            n2 = js(sock, "document.querySelectorAll('#wi-files-list .wi-item').length")
+            n2 = js(sock, "document.querySelectorAll('#wi-files-list .wi-frow').length")
             check("echtes Tippen filtert die Liste auf eine Zeile", n2 == 1, f"Zeilen={n2}")
             zahl = js(sock, "(document.getElementById('wi-files-count')||{}).textContent||''")
             check("der Zaehler nennt die gefilterte Zahl", "1" in zahl and "4" in zahl, zahl)
@@ -371,7 +371,7 @@ try:
                 e.value='';e.dispatchEvent(new Event('input',{bubbles:true}));})()""")
             time.sleep(0.2)
             lang = js(sock, """(function(){
-                var rows=[].slice.call(document.querySelectorAll('#wi-files-list .wi-item'));
+                var rows=[].slice.call(document.querySelectorAll('#wi-files-list .wi-frow'));
                 var r=rows.filter(function(x){return /Jahresabschluss/.test(x.textContent);})[0];
                 if(!r)return null;var rr=r.getBoundingClientRect();
                 var b=r.querySelector('.wi-file-del').getBoundingClientRect();

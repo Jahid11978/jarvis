@@ -42,6 +42,10 @@
         .wi-status-dot.connected { background: var(--success); box-shadow: 0 0 6px var(--success); }
         .wi-status-dot.disconnected { background: var(--danger); }
         .wi-wrap { max-width: 900px; margin: 0 auto; padding: 26px 18px 80px; }
+        /* Maximiert: die Seite nutzt die ganze Fensterbreite (Knopf #wi-max). */
+        body.wi-breit .wi-wrap { max-width: none; }
+        .wi-max-btn { font-size: 18px; line-height: 1; }
+        .wi-max-btn.active { color: var(--accent); }
 
         /* Login */
         .wi-login { max-width: 380px; margin: 8vh auto 0; padding: 28px 26px;
@@ -133,6 +137,35 @@
         .wi-fmeta { flex: 1; min-width: 0; }
         .wi-fpath { font-size: 0.74rem; color: var(--text-secondary); margin-top: 2px;
             word-break: break-all; }
+        /* "Mein Wissen" als Tabelle (Vorgabe 2026-09-27): Name · Ordner ·
+           Wissensgruppen · Groesse, jede Spalte per Kopf sortierbar. Die
+           Tabelle scrollt waagerecht in ihrem Rahmen, nie die Seite. */
+        .wi-ftable-wrap { overflow-x: auto; margin-top: 6px; }
+        .wi-ftable { width: 100%; border-collapse: collapse; font-size: 0.88rem; }
+        .wi-ftable th { text-align: left; font-weight: 600; font-size: 0.78rem;
+            color: var(--text-secondary); border-bottom: 1px solid var(--border); padding: 0; }
+        .wi-ftable td { padding: 7px 10px; border-bottom: 1px solid var(--border); vertical-align: top; }
+        .wi-ftable tbody tr:hover td { background: rgba(var(--fg-rgb), 0.03); }
+        .wi-sortbtn { background: none; border: none; color: inherit; font: inherit; cursor: pointer;
+            padding: 7px 10px; width: 100%; text-align: inherit; white-space: nowrap; }
+        .wi-sortbtn:hover { color: var(--text-primary); }
+        .wi-sortbtn .wi-sortpfeil { display: inline-block; min-width: 1em; margin-left: 4px; }
+        th[aria-sort="ascending"] .wi-sortbtn, th[aria-sort="descending"] .wi-sortbtn { color: var(--text-primary); }
+        /* Name und Ordner sind Woerter ohne Trennstelle (Pfade) – ohne
+           overflow-wrap sprengt einer die Tabelle. */
+        .wi-ftable .wi-fname, .wi-ftable .wi-fpath { overflow-wrap: anywhere; }
+        .wi-ftable td.wi-fpath { font-size: 0.8rem; margin: 0; }
+        /* Gruppenmarken duerfen umbrechen: ohne das haelt ein langer
+           Gruppenname die Spalte breit, und auf schmalen Fenstern wird der
+           Dateiname auf wenige Zeichen je Zeile zerquetscht (Screenshot bei
+           520 px, die Ueberlauf-Messung war dabei gruen). Der Name bekommt
+           eine Mindestbreite – reicht der Platz nicht, scrollt der Rahmen. */
+        .wi-ftable .wi-fgrp .wi-chip { display: inline-block; margin: 0 4px 3px 0;
+            white-space: normal; overflow-wrap: anywhere; }
+        .wi-ftable td.wi-fname { min-width: 11em; }
+        .wi-ftable td.wi-fpath { min-width: 8em; }
+        .wi-ftable .wi-fsize, .wi-ftable th.wi-fsize { text-align: right; white-space: nowrap; }
+        .wi-ftable .wi-fdel { width: 1%; white-space: nowrap; text-align: right; }
         a.wi-flink { color: var(--text-primary); text-decoration: none; cursor: pointer; }
         a.wi-flink:hover { color: var(--accent); text-decoration: underline; }
         .wi-empty { color: var(--text-muted); font-size: 0.86rem; padding: 8px 0; }
@@ -268,6 +301,7 @@
         .wi-dest-file .sz { font-size: 0.78rem; color: var(--text-secondary);
                         flex-shrink: 0; }
         .wi-dest-file .er { font-size: 0.78rem; color: var(--danger); flex-shrink: 0; }
+        .wi-dest-dirbtn { margin-top: 10px; }
 
         .wi-review { border: 1px solid rgba(var(--accent-rgb),0.4); border-radius: 10px; padding: 14px 16px; margin-top: 12px;
             background: rgba(var(--accent-rgb), 0.05); }
@@ -297,6 +331,13 @@
                 <button class="lang-toggle-btn" data-lang="de" onclick="window.setLang && window.setLang('de')" title="Deutsch">DE</button>
                 <button class="lang-toggle-btn" data-lang="en" onclick="window.setLang && window.setLang('en')" title="English">EN</button>
             </div>
+            <!-- Breite: hebt die 900-px-Deckelung der Seite auf. DIESELBEN
+                 Zeichen wie /feedback, /tracks und der Einstellungs-Dialog
+                 (⛶ maximieren, 🗗 verkleinern) – die ausdrueckliche Ausnahme
+                 von der Emoji-Regel (Vorgabe 2026-08-18). -->
+            <button class="wi-icon-btn wi-max-btn" id="wi-max" type="button" aria-pressed="false"
+                    data-i18n-title="wissen.maximize" data-i18n-aria="wissen.maximize"
+                    title="Maximieren" aria-label="Maximieren">&#9974;</button>
             <!-- Issues/Feedback (fuer alle). Der Avatar-Schalter haengt sich zur
                  Laufzeit direkt davor (avatar.js). -->
             <button class="wi-icon-btn jv-issues-btn" id="wi-issues" type="button" data-i18n-title="sup.issues" title="Issues / Feedback" aria-label="Issues / Feedback" onclick="window.JarvisIssues && window.JarvisIssues.open()">
@@ -493,9 +534,15 @@
 
             <!-- 1. Quellen -->
             <div class="wi-drop" id="wi-dest-drop">
-                <div data-i18n="wissen.dest_drop">Dateien hierher ziehen oder klicken</div>
+                <div data-i18n="wissen.dest_drop">Dateien oder Ordner hierher ziehen oder klicken</div>
                 <div class="wi-drop-sub" data-i18n="wissen.dest_drop_sub">PDF, Word, Excel, PowerPoint, Text, Markdown – auch mehrere auf einmal</div>
+                <!-- Der Datei-Dialog des Browsers kann ENTWEDER Dateien ODER
+                     einen Ordner waehlen, nie beides – deshalb ein zweiter
+                     Eingang mit webkitdirectory hinter einem eigenen Knopf. -->
+                <button type="button" class="sec-btn wi-dest-dirbtn" id="wi-dest-dirbtn"
+                        data-i18n="wissen.dest_pick_dir">Ordner wählen</button>
                 <input type="file" id="wi-dest-files" multiple style="display:none;">
+                <input type="file" id="wi-dest-dir" webkitdirectory directory multiple style="display:none;">
             </div>
             <div class="wi-list" id="wi-dest-filelist"></div>
             <div class="wi-status" id="wi-dest-exstatus"></div>
@@ -656,7 +703,7 @@
     <script src="/static/js/dlkey.js?v=2"></script>
     <script src="/static/js/cpubar.js?v=1"></script>
     <script src="/static/js/syspackages.js?v=2"></script>
-    <script src="/static/js/i18n.js?v=283"></script>
+    <script src="/static/js/i18n.js?v=285"></script>
     <script src="/static/js/theme.js?v=3"></script>
     <script src="/static/js/profile_switcher.js?v=5"></script>
     <script src="/static/js/issues.js?v=12"></script>
@@ -666,8 +713,8 @@
     <script src="/static/js/knowledge.js?v=121"></script>
     <script src="/static/js/sessions.js?v=8"></script>
     <script src="/static/js/logo_home.js?v=1"></script>
-    <script src="/static/js/wissen_destillat.js?v=1"></script>
-    <script src="/static/js/wissen.js?v=50"></script>
+    <script src="/static/js/wissen_destillat.js?v=2"></script>
+    <script src="/static/js/wissen.js?v=51"></script>
 <script src="/static/js/settings_btn.js?v=4"></script>
     <script src="/static/js/branding.js?v=26"></script>
 <!-- Avatar-Assistent (nur aktiv, wenn der Avatar-Skill eingeschaltet ist) -->

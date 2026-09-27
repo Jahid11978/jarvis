@@ -18067,7 +18067,147 @@ async def wissen_files(user: str = Depends(require_auth)):
     # Name bleibt das erste Kriterium (danach sucht man), der Ordner das zweite:
     # gleichnamige Dateien standen sonst in zufaelliger Reihenfolge nebeneinander.
     out.sort(key=lambda x: (x["name"].lower(), x["folder"].lower()))
+    # Groesse fuer die Spalte "Groesse" (Vorgabe 2026-09-27). `None` heisst
+    # "nicht ermittelt" (Freigabe stumm, Zeitbudget aufgebraucht, Datei weg) –
+    # NIE 0: eine Null waere eine Behauptung ueber die Datei.
+    groessen = await _wissen_groessen([f["path"] for f in out])
+    for f in out:
+        f["size"] = groessen.get(f["path"])
     return JSONResponse({"ok": True, "files": out})
+
+
+# Groessen-Cache: der Endpunkt laeuft bei jedem Oeffnen von /wissen, und auf
+# ECHT liegt der Bestand ueberwiegend auf SMB-Freigaben (je stat() ein
+# Netz-Roundtrip). Kurzlebig, weil eine geaenderte Datei ihre neue Groesse
+# zeitnah zeigen soll.
+_WISSEN_GROESSE_CACHE: dict = {}
+_WISSEN_GROESSE_TTL = 300.0
+_WISSEN_GROESSE_BUDGET = 3.0
+
+
+def _wissen_absolut(rel: str) -> Path:
+    """Manifest-Schluessel -> Pfad auf Platte.
+
+    ⚠ `knowledge_groups._rel` streift bei Pfaden AUSSERHALB von PROJECT_ROOT
+    nur den fuehrenden Schraegstrich ab (`/mnt/rag/share_1/x` -> `mnt/rag/…`).
+    Gegen PROJECT_ROOT aufgeloest waere das `/opt/jarvis/mnt/rag/…`, also tot.
+    Entschieden wird am ERSTEN Pfadteil: existiert er unter PROJECT_ROOT
+    (`data`), ist der Schluessel relativ, sonst absolut. Das ist ein lokaler
+    stat, kein Netzzugriff."""
+    from backend.tools.knowledge import PROJECT_ROOT
+    rel = (rel or "").lstrip("/")
+    erster = rel.split("/", 1)[0]
+    root = Path(PROJECT_ROOT)
+    if erster and (root / erster).exists():
+        return root / rel
+    return Path("/" + rel)
+
+
+async def _wissen_groessen(pfade: list) -> dict:
+    """Groessen je Manifest-Schluessel, begrenzt und nie blockierend.
+
+    * **Je Verzeichnis EIN `scandir`** statt ein `stat` je Datei – auf CIFS
+      liefert das Auflisten die Attribute mit, die Einzelabfragen danach
+      kommen aus dem Attribut-Cache.
+    * **Stumme Freigabe:** vor dem ersten Zugriff auf einen Einhaengepunkt
+      `_safe_exists` (2 s, Ergebnis gecacht) – sonst haengt JEDER Aufruf an
+      demselben toten Mount.
+    * **Zeitbudget** (3 s): was bis dahin nicht ermittelt ist, bleibt `None`
+      und wird beim naechsten Aufruf nachgeholt (Cache). Die Liste wartet nie
+      auf eine schmueckende Spalte.
+    * Der Durchlauf laeuft in einem DAEMON-Thread: ein haengender Kernel-Aufruf
+      laesst sich nicht abbrechen, darf aber weder den Event-Loop noch den
+      Thread-Pool von asyncio festhalten."""
+    import threading   # modulweit erst weit unten importiert – nicht darauf bauen
+    from backend.tools.knowledge import _safe_exists
+    jetzt = time.time()
+    ergebnis: dict = {}
+    offen: dict = {}
+    for p in pfade:
+        c = _WISSEN_GROESSE_CACHE.get(p)
+        if c and jetzt - c[1] < _WISSEN_GROESSE_TTL:
+            ergebnis[p] = c[0]
+        else:
+            ziel = _wissen_absolut(p)
+            offen.setdefault(str(ziel.parent), []).append((p, ziel.name))
+    if not offen:
+        return ergebnis
+
+    ende = time.monotonic() + _WISSEN_GROESSE_BUDGET
+    gefunden: dict = {}
+
+    def _lauf():
+        tot: set = set()
+        for verz, eintraege in offen.items():
+            if time.monotonic() > ende:
+                return
+            teile = Path(verz).parts
+            # Einhaengepunkt einer Freigabe: /mnt/<basis>/<share_N>
+            mp = str(Path(*teile[:4])) if len(teile) >= 4 and teile[1] == "mnt" else ""
+            if mp:
+                if mp in tot:
+                    continue
+                if not _safe_exists(mp):
+                    tot.add(mp)
+                    continue
+            try:
+                namen = {n for _, n in eintraege}
+                with os.scandir(verz) as it:
+                    stats = {e.name: e.stat(follow_symlinks=False).st_size
+                             for e in it if e.name in namen and e.is_file(follow_symlinks=False)}
+            except OSError:
+                continue
+            for p, n in eintraege:
+                if n in stats:
+                    gefunden[p] = stats[n]
+
+    th = threading.Thread(target=_lauf, daemon=True)
+    th.start()
+    await asyncio.to_thread(th.join, _WISSEN_GROESSE_BUDGET + 0.5)
+    # Kopie: der Thread kann nach dem Zeitlimit noch weiterschreiben.
+    for p, g in dict(gefunden).items():
+        _WISSEN_GROESSE_CACHE[p] = (g, jetzt)
+        ergebnis[p] = g
+    if len(_WISSEN_GROESSE_CACHE) > 20000:
+        _WISSEN_GROESSE_CACHE.clear()
+    return ergebnis
+
+
+_WISSEN_DATEI_DECKEL = 5.0
+
+
+def _wissen_datei_ziel(rel: str):
+    """Manifest-Schluessel -> auszuliefernde Datei, mit Schranke.
+
+    Rueckgabe ``(pfad, None)`` oder ``(None, grund)`` mit grund
+    ``"ausserhalb"`` (Traversal/fremder Ort) bzw. ``"fehlt"``.
+
+    SCHRANKE, nach dem Aufloesen von Symlinks: das Ziel liegt unter
+    PROJECT_ROOT (die bisherige Regel – sie traegt auch Altbestand unter
+    `data/knowledge`, der nicht mehr als Wissensordner konfiguriert ist) ODER
+    in einem KONFIGURIERTEN Wissensordner (`_get_folders`, dieselbe Quelle wie
+    `/api/knowledge/file_raw`). Neu erreichbar werden damit genau die
+    Freigaben – kein beliebiger absoluter Pfad."""
+    from backend.tools.knowledge import PROJECT_ROOT, _get_folders
+    root = Path(PROJECT_ROOT).resolve()
+    target = _wissen_absolut(rel).resolve()
+    erlaubt = False
+    try:
+        target.relative_to(root)
+        erlaubt = True
+    except ValueError:
+        for ordner in _get_folders():
+            try:
+                target.relative_to(Path(ordner).resolve())
+                erlaubt = True
+                break
+            except ValueError:
+                continue
+    if not erlaubt:
+        return None, "ausserhalb"
+    if not target.is_file():
+        return None, "fehlt"
+    return target, None
 
 
 @app.get("/api/wissen/file")
@@ -18076,7 +18216,6 @@ async def wissen_file(path: str = "", user: str = Depends(require_auth_or_query)
     Nutzers zugeordnet ist. Anzeigbare Formate (PDF/Bild/Text) inline (zum Öffnen
     im Browser), alles andere als Download. Token via ?token= erlaubt (neuer Tab)."""
     from backend import knowledge_groups as kg
-    from backend.tools.knowledge import PROJECT_ROOT
     import mimetypes
     rel = (path or "").strip().lstrip("/")
     if not rel:
@@ -18085,14 +18224,23 @@ async def wissen_file(path: str = "", user: str = Depends(require_auth_or_query)
     gids = kg.get_assignment(rel)
     if not gids or not (allowed & set(gids)):
         return JSONResponse({"error": "Kein Zugriff auf diese Datei"}, status_code=403)
-    root = Path(PROJECT_ROOT).resolve()
-    try:
-        target = (root / rel).resolve()
-        target.relative_to(root)   # Path-Traversal-Schutz
-    except ValueError:
+    # ⚠ Freigabe-Dateien stehen im Manifest als `mnt/rag/…` (ohne fuehrenden
+    # Schraegstrich). Gegen PROJECT_ROOT aufgeloest waren sie ALLE 404 – auf
+    # ECHT gemessen 89 von 89 (2026-09-27). Aufloesung und Schranke stehen
+    # in `_wissen_datei_ziel`, begrenzt: auf einem toten CIFS-Mount haengt
+    # schon `resolve()`, und das hier ist ein async-Endpunkt.
+    from backend.tools.knowledge import _bounded_call
+    ziel, fehler = await asyncio.to_thread(
+        _bounded_call, lambda: _wissen_datei_ziel(rel), _WISSEN_DATEI_DECKEL,
+        (None, "stumm"))
+    if fehler == "ausserhalb":
         return JSONResponse({"error": "Ungueltiger Pfad"}, status_code=400)
-    if not target.is_file():
+    if fehler == "stumm":
+        return JSONResponse({"error": "Der Speicherort antwortet gerade nicht"},
+                            status_code=504)
+    if fehler:
         return JSONResponse({"error": "Nicht gefunden"}, status_code=404)
+    target = ziel
     _VIEWABLE = {".pdf", ".png", ".jpg", ".jpeg", ".gif", ".webp", ".svg",
                  ".txt", ".md", ".csv", ".log", ".json", ".html", ".htm"}
     disp = "inline" if target.suffix.lower() in _VIEWABLE else "attachment"
@@ -18106,7 +18254,8 @@ async def wissen_file_delete(request: Request, user: str = Depends(require_auth)
     """Löscht eine Wissensdatei – NUR wenn sie einer Gruppe im Bereich des Nutzers
     zugeordnet ist. Entfernt Datei, Gruppenzuordnung und Vektor-Index-Eintrag."""
     from backend import knowledge_groups as kg
-    from backend.tools.knowledge import PROJECT_ROOT
+    from backend.tools.knowledge import _bounded_call
+    import errno as _errno
     body = await request.json()
     rel = (body.get("path") or "").strip().lstrip("/")
     if not rel:
@@ -18115,18 +18264,47 @@ async def wissen_file_delete(request: Request, user: str = Depends(require_auth)
     gids = kg.get_assignment(rel)
     if not gids or not (allowed & set(gids)):
         return JSONResponse({"error": "Kein Zugriff auf diese Datei"}, status_code=403)
-    root = Path(PROJECT_ROOT).resolve()
-    try:
-        target = (root / rel).resolve()
-        target.relative_to(root)   # Path-Traversal-Schutz
-    except ValueError:
+    # DIESELBE Aufloesung und Schranke wie beim Oeffnen (`_wissen_datei_ziel`):
+    # Freigabe-Dateien waren bis 2026-09-27 auch hier stets 404. Auf Vorgabe
+    # des Betreibers loescht der Muelleimer sie jetzt – und damit das ORIGINAL
+    # auf dem Dateiserver; die Rueckfrage im Client nennt Ordner und Namen.
+    ziel, fehler = await asyncio.to_thread(
+        _bounded_call, lambda: _wissen_datei_ziel(rel), _WISSEN_DATEI_DECKEL,
+        (None, "stumm"))
+    if fehler == "ausserhalb":
         return JSONResponse({"error": "Ungueltiger Pfad"}, status_code=400)
-    if not target.is_file():
+    if fehler == "stumm":
+        return JSONResponse({"error": "Der Speicherort antwortet gerade nicht"},
+                            status_code=504)
+    if fehler:
         return JSONResponse({"error": "Nicht gefunden"}, status_code=404)
-    try:
-        target.unlink()
-    except Exception as e:  # noqa: BLE001
-        return JSONResponse({"error": f"Löschen fehlgeschlagen: {e}"}, status_code=500)
+    target = ziel
+
+    def _loeschen():
+        try:
+            target.unlink()
+            return None
+        except OSError as e:
+            return e
+
+    # Begrenzt: ein unlink auf einer haengenden Freigabe kehrt nicht zurueck.
+    # Default "Zeitablauf" – ob die Datei danach weg ist, weiss dann niemand,
+    # und genau das sagt die Meldung.
+    fehl = await asyncio.to_thread(_bounded_call, _loeschen, _WISSEN_DATEI_DECKEL, "zeit")
+    if fehl == "zeit":
+        return JSONResponse({"error": "Der Speicherort antwortet nicht – ob die Datei "
+                                      "gelöscht wurde, ist unbekannt. Bitte später "
+                                      "die Liste neu laden."}, status_code=504)
+    if isinstance(fehl, OSError):
+        # Eine nur lesend eingehaengte Freigabe ist der erwartbare Fall – der
+        # rohe Systemtext ("[Errno 30] Read-only file system") schickte den
+        # Benutzer auf die falsche Suche.
+        if fehl.errno in (_errno.EROFS, _errno.EACCES, _errno.EPERM):
+            return JSONResponse({"error": "Diese Datei kann hier nicht gelöscht werden: "
+                                          "der Speicherort erlaubt kein Löschen "
+                                          "(z. B. nur lesend eingebundene Freigabe)."},
+                                status_code=409)
+        return JSONResponse({"error": f"Löschen fehlgeschlagen: {fehl}"}, status_code=500)
     try:
         kg.set_assignment(rel, [])   # Gruppenzuordnung entfernen
     except Exception:  # noqa: BLE001

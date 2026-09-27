@@ -504,8 +504,18 @@ _ueb = ast.get_source_segment(MAIN, _fn["wissen_destillat_uebernehmen"]) if "wis
 # beantwortet BEIDE Fragen (mindestens eine – und nur aus dem eigenen Bereich).
 check("Uebernehmen: benutzt _wissen_check_groups (kein Nachbau)",
       "_wissen_check_groups(user, groups)" in _ueb)
-check("Uebernehmen: Gruppen werden getrimmt (Leerraum ist nicht falsy)",
-      ".strip()" in _ueb and "for g in" in _ueb)
+# Seit c16d761 geht das ueber die EINE gemeinsame Normierung
+# (`_gruppen_normieren`: Typpruefung, strip, leere raus). Gemessen wird die
+# EIGENSCHAFT am AST – `groups` wird aus diesem Aufruf gebildet –, nicht die
+# Schreibweise `.strip()`: die hat den Umbau als Fehler gemeldet, obwohl die
+# Zusage erfuellt war (Register: Waechter prueft die Schreibweise).
+_ueb_fn = _fn.get("wissen_destillat_uebernehmen")
+_normiert = bool(_ueb_fn) and any(
+    isinstance(z, ast.Assign) and any(isinstance(t, ast.Name) and t.id == "groups" for t in z.targets)
+    and isinstance(z.value, ast.Call) and getattr(z.value.func, "id", "") == "_gruppen_normieren"
+    for z in ast.walk(_ueb_fn))
+check("Uebernehmen: Gruppen gehen durch die gemeinsame Normierung (Leerraum ist nicht falsy)",
+      _normiert)
 # ⚠ DER UNTERSCHIED, der den Vektor-Index schuetzt.
 check("Uebernehmen: nutzt markdown_FUER_WISSEN, nicht markdown_mit_bildern",
       "markdown_fuer_wissen" in _ueb and "markdown_mit_bildern" not in _ueb)

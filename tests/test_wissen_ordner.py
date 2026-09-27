@@ -115,6 +115,10 @@ def _editable_groups_for_attrappe(user):
     return [] if user == "fremd" else [dict(g) for g in GRUPPEN]
 
 
+async def _groessen_attrappe(pfade):
+    return {}
+
+
 NS = {
     "json": json, "print": print, "Path": Path,
     "JSONResponse": Antwort,
@@ -122,6 +126,10 @@ NS = {
     "app": type("App", (), {"get": staticmethod(lambda *a, **k: (lambda f: f))})(),
     "_kb_current_folder_list": _kb_current_folder_list_attrappe,
     "_editable_groups_for": _editable_groups_for_attrappe,
+    # Groessen (Spalte "Groesse", 2026-09-27) prueft test_wissen_groesse.py –
+    # hier geht es um den Ordner. Die Attrappe hat die ECHTE Form: async,
+    # Liste von Schluesseln rein, dict raus.
+    "_wissen_groessen": _groessen_attrappe,
 }
 
 knoten = []

@@ -770,36 +770,155 @@
             box.innerHTML = '<div class="wi-empty">' + esc(grund) + '</div>';
             return;
         }
-        box.innerHTML = shown.map(function (f) {
-            var chips = f.groups.map(function (g) {
+        sortieren(shown);
+        var spalten = [
+            { key: 'name', lbl: 'wissen.col_name', cls: '' },
+            { key: 'folder', lbl: 'wissen.col_folder', cls: '' },
+            { key: 'groups', lbl: 'wissen.col_groups', cls: '' },
+            { key: 'size', lbl: 'wissen.col_size', cls: 'wi-fsize' }
+        ];
+        var kopf = spalten.map(function (c) {
+            var aktiv = _fsort.key === c.key;
+            // aria-sort traegt den Zustand fuer Vorleser, der Pfeil fuer das
+            // Auge – ein Pfeil allein waere nur ein Zeichen.
+            return '<th scope="col" class="' + c.cls + '" data-sort="' + c.key + '"'
+                + ' aria-sort="' + (aktiv ? (_fsort.dir > 0 ? 'ascending' : 'descending') : 'none') + '">'
+                + '<button type="button" class="wi-sortbtn" title="' + esc(t('wissen.sort_by', { col: t(c.lbl) })) + '">'
+                + esc(t(c.lbl))
+                + '<span class="wi-sortpfeil" aria-hidden="true">' + (aktiv ? (_fsort.dir > 0 ? '▲' : '▼') : '') + '</span>'
+                + '</button></th>';
+        }).join('') + '<th scope="col" class="wi-fdel"></th>';
+
+        var zeilen = shown.map(function (f) {
+            var chips = (f.groups || []).map(function (g) {
                 return '<span class="wi-chip" style="border-color:' + esc(g.color) + ';font-size:0.7rem;">' + esc(g.name) + '</span>';
-            }).join(' ');
+            }).join('');
             var url = '/api/wissen/file?path=' + encodeURIComponent(f.path) + '&token=' + encodeURIComponent(_dlk());
             var ord = ordnerText(f);
-            // Der Ordner steht SICHTBAR unter dem Namen, nicht nur im title:
-            // ein Tooltip ist unsichtbar, und zwei gleichnamige Dateien in
-            // verschiedenen Unterordnern waren so nicht zu unterscheiden.
-            var ordHtml = ord
-                ? '<div class="wi-fpath" title="' + esc(t('wissen.file_folder', { p: f.path })) + '">' + esc(ord) + '</div>'
-                : '';
-            return '<div class="wi-item" data-path="' + esc(f.path) + '"'
+            var gr = groesseText(f.size);
+            // Der Ordner steht in einer EIGENEN, sichtbaren Spalte – ein Tooltip
+            // ist unsichtbar, und zwei gleichnamige Dateien in verschiedenen
+            // Unterordnern waren sonst nicht zu unterscheiden. Der `title`
+            // traegt zusaetzlich den vollen technischen Pfad.
+            // ⚠ NICHT `wi-item`: die Klasse traegt `display: flex` (Entwurfsliste)
+            // und zerlegte die Tabellenzeile.
+            return '<tr class="wi-frow" data-path="' + esc(f.path) + '"'
                 + ' data-label="' + esc(ord ? ord + '/' + f.name : f.name) + '">'
-                + '<div class="wi-fmeta">'
-                + '<a class="nm wi-flink" href="' + esc(url) + '" target="_blank" rel="noopener" title="' + esc(t('wissen.open_file')) + '">' + esc(f.name) + '</a>'
-                + ordHtml
-                + '</div>'
-                + chips
-                + '<button type="button" class="sec-btn small danger wi-file-del" title="' + esc(t('wissen.delete_file')) + '">' + JarvisIcons.trash() + '</button>'
-                + '</div>';
+                + '<td class="wi-fname"><a class="nm wi-flink" href="' + esc(url) + '" target="_blank" rel="noopener" title="' + esc(t('wissen.open_file')) + '">' + esc(f.name) + '</a></td>'
+                + '<td class="wi-fpath" title="' + esc(t('wissen.file_folder', { p: f.path })) + '">' + esc(ord) + '</td>'
+                + '<td class="wi-fgrp">' + chips + '</td>'
+                + '<td class="wi-fsize"' + (f.size == null ? ' title="' + esc(t('wissen.size_unknown')) + '"' : '') + '>' + esc(gr) + '</td>'
+                + '<td class="wi-fdel"><button type="button" class="sec-btn small danger wi-file-del" title="' + esc(t('wissen.delete_file')) + '">' + JarvisIcons.trash() + '</button></td>'
+                + '</tr>';
         }).join('');
+
+        box.innerHTML = '<div class="wi-ftable-wrap"><table class="wi-ftable">'
+            + '<thead><tr>' + kopf + '</tr></thead><tbody>' + zeilen + '</tbody></table></div>';
+
+        box.querySelectorAll('th[data-sort] .wi-sortbtn').forEach(function (btn) {
+            btn.addEventListener('click', function () {
+                var k = btn.parentNode.getAttribute('data-sort');
+                // Gleiche Spalte: Richtung umkehren. Neue Spalte: aufsteigend.
+                if (_fsort.key === k) _fsort.dir = -_fsort.dir;
+                else { _fsort.key = k; _fsort.dir = 1; }
+                renderFileList();
+            });
+        });
         box.querySelectorAll('.wi-file-del').forEach(function (btn) {
             btn.addEventListener('click', function () {
-                var row = btn.closest('.wi-item');
+                var row = btn.closest('.wi-frow');
                 // Die Rueckfrage nennt Ordner UND Name (data-label) – bei
                 // gleichnamigen Dateien waere "Datei X loeschen?" nicht deutbar,
                 // und hier geht es um Datenverlust.
                 deleteFile(row.getAttribute('data-path'), row.getAttribute('data-label'));
             });
+        });
+    }
+
+    // ── Sortierung "Mein Wissen" ────────────────────────────────────────
+    // Der Zustand lebt im Modul (wie `_sortKey` der Massenzuordnung): er
+    // ueberlebt Suche, Filter und Neuladen der Liste, nach einem Neuladen der
+    // Seite gilt wieder die Vorgabe Name aufsteigend – die Reihenfolge, in der
+    // auch der Server liefert.
+    var _fsort = { key: 'name', dir: 1 };
+
+    function sprache() { return window._lang || 'de'; }
+
+    // Deutsch sortiert "Ä" zu "A" und "Datei 10" hinter "Datei 2" (numeric) –
+    // ein reiner Zeichencode-Vergleich stellte Umlaute ans Ende.
+    function vergleichText(a, b) {
+        return String(a || '').localeCompare(String(b || ''), sprache(), { numeric: true, sensitivity: 'base' });
+    }
+    function gruppenText(f) {
+        return (f.groups || []).map(function (g) { return g.name || ''; }).join(', ');
+    }
+
+    function sortieren(liste) {
+        var k = _fsort.key, d = _fsort.dir;
+        liste.sort(function (a, b) {
+            var r;
+            if (k === 'size') {
+                // Unbekannte Groesse steht IMMER am Ende, in beiden Richtungen:
+                // sie ist keine kleine Datei.
+                var an = a.size == null, bn = b.size == null;
+                if (an || bn) { if (an && bn) r = 0; else return an ? 1 : -1; }
+                else r = (a.size - b.size) * d;
+            } else if (k === 'folder') {
+                r = vergleichText(ordnerText(a), ordnerText(b)) * d;
+            } else if (k === 'groups') {
+                r = vergleichText(gruppenText(a), gruppenText(b)) * d;
+            } else {
+                r = vergleichText(a.name, b.name) * d;
+            }
+            // Stabil und vorhersehbar bei Gleichstand: Name, dann Ordner.
+            return r || vergleichText(a.name, b.name) || vergleichText(ordnerText(a), ordnerText(b));
+        });
+        return liste;
+    }
+
+    // Groesse lesbar, in der Sprache der Oberflaeche (1.024er-Stufen wie der
+    // Dateimanager). `null` = nicht ermittelt – dann ein Strich, NIE "0 B".
+    function groesseText(n) {
+        if (n == null || isNaN(n)) return '–';
+        var stufen = ['B', 'KB', 'MB', 'GB', 'TB'], i = 0, v = Number(n);
+        while (v >= 1024 && i < stufen.length - 1) { v /= 1024; i++; }
+        return v.toLocaleString(sprache(), { maximumFractionDigits: i && v < 10 ? 1 : 0 }) + ' ' + stufen[i];
+    }
+
+    // ── Seitenbreite (Knopf ⛶ in der Titelleiste) ─────────────────────
+    // Anders als das Vollbild in /feedback WIRD dieser Zustand gemerkt: dort
+    // ueberdeckt die Karte alles andere, hier wird nur die Seite breiter – wer
+    // mit breiten Tabellen arbeitet, will das nicht bei jedem Besuch neu
+    // einschalten.
+    var BREIT_SPEICHER = 'jarvis_wissen_breit';
+
+    function breitSetzen(an) {
+        document.body.classList.toggle('wi-breit', !!an);
+        var b = $('wi-max');
+        if (b) {
+            b.innerHTML = an ? '&#128471;' : '&#9974;';
+            b.classList.toggle('active', !!an);
+            b.setAttribute('aria-pressed', an ? 'true' : 'false');
+            var k = an ? 'wissen.minimize' : 'wissen.maximize';
+            // Die data-i18n-*-Attribute wandern mit, sonst holt der naechste
+            // Sprachwechsel den Text des ANDEREN Zustands zurueck.
+            b.setAttribute('data-i18n-title', k);
+            b.setAttribute('data-i18n-aria', k);
+            b.title = t(k);
+            b.setAttribute('aria-label', t(k));
+        }
+        try { localStorage.setItem(BREIT_SPEICHER, an ? '1' : '0'); }
+        catch (e) { /* privater Modus: gilt dann nur fuer diese Seite */ }
+    }
+    function breitInit() {
+        var b = $('wi-max');
+        if (!b || b._gebunden) return;
+        b._gebunden = true;
+        var an = false;
+        try { an = localStorage.getItem(BREIT_SPEICHER) === '1'; } catch (e) { /* s.o. */ }
+        breitSetzen(an);
+        b.addEventListener('click', function () {
+            breitSetzen(!document.body.classList.contains('wi-breit'));
         });
     }
 
@@ -1820,6 +1939,7 @@
             $(id).addEventListener('keydown', function (e) { if (e.key === 'Enter') doLogin(); });
         });
         $('wi-logout').addEventListener('click', logout);
+        breitInit();
 
         var drop = $('wi-drop'), fin = $('wi-file-input');
         drop.addEventListener('click', function () {

@@ -199,13 +199,22 @@
     }
 
     // ── Extraktion ──────────────────────────────────────────────────────
-    function dateienNehmen(liste) {
+    // Ein Eintrag ist ein File ODER {datei, name}: aus einem Ordner kommt der
+    // RELATIVE Pfad als Name mit. Er steht dann in der Kopfzeile
+    // `--- <name> ---` und in der Dateiliste – zwei gleichnamige Dateien aus
+    // verschiedenen Unterordnern waeren sonst nicht zu unterscheiden, und die
+    // Fehlerzuordnung je Datei (d.fehler[name]) traefe beide.
+    // `weg` = Zahl der beim Ordner-Import uebersprungenen versteckten Dateien.
+    // Sie steht in DERSELBEN Statuszeile wie das Ergebnis – eine eigene
+    // Meldung davor ueberschriebe die Extraktion sofort wieder.
+    function dateienNehmen(liste, weg) {
         if (!liste || !liste.length) return;
         var fd = new FormData();
         var neu = [];
-        Array.prototype.forEach.call(liste, function (f) {
-            fd.append('files', f, f.name);
-            neu.push({ name: f.name, size: f.size });
+        Array.prototype.forEach.call(liste, function (x) {
+            var f = x.datei || x, name = x.name && x.datei ? x.name : f.name;
+            fd.append('files', f, name);
+            neu.push({ name: name, size: f.size });
         });
         dateien = dateien.concat(neu);
         dateilisteZeichnen();
@@ -243,11 +252,71 @@
                 if (fehlZahl) teile.push(t('wissen.dest_failed_n', { n: fehlZahl }));
                 // Eine Kuerzung wird BEZIFFERT, nie stillschweigend gemacht.
                 if (d.gekappt) teile.push(t('wissen.dest_capped'));
+                if (weg) teile.push(t('wissen.dest_dir_skipped', { n: weg }));
                 status('wi-dest-exstatus', teile.join(' · '), fehlZahl ? 'err' : 'ok');
             })
             .catch(function (e) {
                 status('wi-dest-exstatus', String(e && e.message || e), 'err');
             });
+    }
+
+    // ── Ordner ──────────────────────────────────────────────────────────
+    // Versteckte Dateien und Ordner (".git", ".DS_Store", "__MACOSX") gehoeren
+    // nicht zum Inhalt eines Ordners, den jemand destillieren will – sie
+    // wuerden nur als "nicht lesbar" in der Liste stehen oder die Obergrenze
+    // der Dateizahl aufbrauchen. Gezaehlt und GENANNT, nicht still verworfen.
+    function versteckt(pfad) {
+        return String(pfad || '').split('/').some(function (teil) {
+            return teil.charAt(0) === '.' || teil === '__MACOSX';
+        });
+    }
+    function ordnerNehmen(eintraege) {
+        var nehmen = [], weg = 0;
+        eintraege.forEach(function (e) {
+            if (versteckt(e.name)) { weg++; return; }
+            nehmen.push(e);
+        });
+        // Feste Reihenfolge nach Pfad: der Browser liefert Ordnerinhalte in
+        // keiner zugesagten Ordnung, und die Reihenfolge ist die des Textes.
+        nehmen.sort(function (a, b) { return a.name < b.name ? -1 : a.name > b.name ? 1 : 0; });
+        if (!nehmen.length) {
+            status('wi-dest-exstatus', t('wissen.dest_dir_empty')
+                + (weg ? ' · ' + t('wissen.dest_dir_skipped', { n: weg }) : ''), 'err');
+            return;
+        }
+        dateienNehmen(nehmen, weg);
+    }
+    function ausOrdnerwahl(files) {
+        ordnerNehmen(Array.prototype.map.call(files || [], function (f) {
+            return { datei: f, name: f.webkitRelativePath || f.name };
+        }));
+    }
+    // Rekursiver Durchlauf eines gezogenen Ordners. readEntries() liefert
+    // BLOCKWEISE (Chrome: hoechstens 100 je Aufruf) – wer nur einmal liest,
+    // verliert bei grossen Ordnern still den Rest. Also lesen, bis leer.
+    function eintragLesen(eintrag, raus) {
+        return new Promise(function (fertig) {
+            if (eintrag.isFile) {
+                eintrag.file(function (f) {
+                    raus.push({ datei: f, name: eintrag.fullPath.replace(/^\//, '') });
+                    fertig();
+                }, function () { fertig(); });
+                return;
+            }
+            if (!eintrag.isDirectory) { fertig(); return; }
+            var leser = eintrag.createReader(), kinder = [];
+            (function weiter() {
+                leser.readEntries(function (block) {
+                    if (!block.length) {
+                        Promise.all(kinder.map(function (k) { return eintragLesen(k, raus); }))
+                            .then(fertig);
+                        return;
+                    }
+                    kinder = kinder.concat(Array.prototype.slice.call(block));
+                    weiter();
+                }, function () { fertig(); });
+            })();
+        });
     }
 
     // ── Lauf ────────────────────────────────────────────────────────────
@@ -445,12 +514,27 @@
         zaehlerZeichnen();
 
         var drop = $('wi-dest-drop'), input = $('wi-dest-files');
+        var dirIn = $('wi-dest-dir'), dirBtn = $('wi-dest-dirbtn');
         if (drop && input) {
             drop.addEventListener('click', function () { input.click(); });
             input.addEventListener('change', function () {
                 dateienNehmen(input.files);
                 input.value = '';   // dieselbe Datei erneut waehlbar
             });
+            if (dirIn && dirBtn) {
+                dirBtn.addEventListener('click', function (e) {
+                    // Der Knopf liegt IN der Drop-Zone: ohne stopPropagation
+                    // oeffnete derselbe Klick zusaetzlich den Datei-Dialog.
+                    e.stopPropagation();
+                    dirIn.click();
+                });
+                dirIn.addEventListener('click', function (e) { e.stopPropagation(); });
+                dirIn.addEventListener('change', function () {
+                    ausOrdnerwahl(dirIn.files);
+                    dirIn.value = '';
+                });
+            }
+            input.addEventListener('click', function (e) { e.stopPropagation(); });
             ['dragenter', 'dragover'].forEach(function (ev) {
                 drop.addEventListener(ev, function (e) {
                     // NUR bei Dateien abfangen – gezogener Text soll sich
@@ -466,7 +550,18 @@
             drop.addEventListener('drop', function (e) {
                 if (!e.dataTransfer || !e.dataTransfer.files.length) return;
                 e.preventDefault();
-                dateienNehmen(e.dataTransfer.files);
+                // Ein gezogener ORDNER erscheint in `files` als Eintrag ohne
+                // Inhalt – nur ueber die Eintraege ist er lesbar.
+                // webkitGetAsEntry() MUSS synchron im drop-Handler laufen:
+                // danach ist dataTransfer geleert.
+                var eintraege = Array.prototype.map.call(e.dataTransfer.items || [], function (it) {
+                    return it.kind === 'file' && it.webkitGetAsEntry ? it.webkitGetAsEntry() : null;
+                });
+                var mitOrdner = eintraege.some(function (x) { return x && x.isDirectory; });
+                if (!mitOrdner) { dateienNehmen(e.dataTransfer.files); return; }
+                var raus = [];
+                Promise.all(eintraege.filter(Boolean).map(function (x) { return eintragLesen(x, raus); }))
+                    .then(function () { ordnerNehmen(raus); });
             });
         }
 

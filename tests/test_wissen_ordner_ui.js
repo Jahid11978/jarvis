@@ -17,8 +17,8 @@
  *      rohe Verzeichnispfad da – nie nichts
  *   4. die Loesch-Rueckfrage nennt Ordner UND Namen (Datenverlust-Risiko)
  *   5. Fremdtext wird maskiert (der Ordnername kommt aus einem Dateipfad)
- *   6. `.wi-fmeta` traegt flex:1 UND min-width:0 – ohne min-width schiebt ein
- *      langer Pfad Gruppen-Marken und Muelleimer aus der Zeile
+ *   6. die Tabelle scrollt in ihrem Rahmen, lange Namen/Pfade brechen um
+ *      (bis 2026-09-27 Listenform: `.wi-fmeta` mit min-width:0)
  *   7. `.wi-item .nm { flex: 1 }` BLEIBT – die Entwurfsliste darunter benutzt
  *      `.nm` weiter als direktes Flex-Kind
  */
@@ -156,7 +156,7 @@ async function seite(dateien) {
     // Auf die gerenderte Liste warten (zwei fetch-Runden: scope -> files).
     for (let i = 0; i < 60; i++) {
         await new Promise(function (r) { setTimeout(r, 5); });
-        if (win.document.querySelectorAll('#wi-files-list .wi-item').length) break;
+        if (win.document.querySelectorAll('#wi-files-list .wi-frow').length) break;
     }
     return { win, doc: win.document, gerufen, bestaetigt };
 }
@@ -181,8 +181,15 @@ function versteckterVorfahr(el) {
     abschnitt('1 – Der Ordner ist SICHTBAR, nicht nur im title');
 
     const a = await seite(standardDateien());
-    const zeilen = Array.prototype.slice.call(
-        a.doc.querySelectorAll('#wi-files-list .wi-item'));
+    // ⚠ Zuordnung ueber data-path, NICHT ueber die Position: die Tabelle
+    // sortiert selbst (Vorgabe Name aufsteigend), die Reihenfolge der
+    // Attrappen-Antwort ist dafuer kein Massstab.
+    const nachPfad = function (liste, doc) {
+        return liste.map(function (f) {
+            return doc.querySelector('#wi-files-list .wi-frow[data-path="' + f.path + '"]');
+        }).filter(Boolean);
+    };
+    const zeilen = nachPfad(standardDateien(), a.doc);
     check('drei Dateizeilen gezeichnet', zeilen.length === 3, 'gezeichnet: ' + zeilen.length);
     if (zeilen.length !== 3) abbruch('ohne gezeichnete Liste ist jede weitere Aussage trivial');
 
@@ -225,14 +232,17 @@ function versteckterVorfahr(el) {
           groups: [GRUPPEN[0]] },
         { path: 'ganz-oben.md', name: 'ganz-oben.md', groups: [GRUPPEN[0]] },
     ]);
-    const bz = Array.prototype.slice.call(
-        b.doc.querySelectorAll('#wi-files-list .wi-item'));
+    const bz = nachPfad([{ path: 'data/community/Vertrieb/Preisliste.xlsx' },
+                         { path: 'ganz-oben.md' }], b.doc);
     check('beide Zeilen gezeichnet', bz.length === 2, 'gezeichnet: ' + bz.length);
     check('der Verzeichnisteil des Pfads erscheint sichtbar',
           bz.length === 2 && sichtbar(bz[0]).indexOf('data/community/Vertrieb') !== -1,
           bz.length === 2 ? sichtbar(bz[0]) : '');
-    check('eine Datei ohne Verzeichnis bekommt KEINE leere Ordnerzeile',
-          bz.length === 2 && !bz[1].querySelector('.wi-fpath'));
+    // Seit der Tabelle (2026-09-27) gibt es die Ordner-ZELLE immer – sonst
+    // verrutschten die Spalten. Die Zusage bleibt: kein erfundener Ordner.
+    check('eine Datei ohne Verzeichnis hat eine LEERE Ordnerzelle',
+          bz.length === 2 && !!bz[1].querySelector('.wi-fpath')
+          && sichtbar(bz[1].querySelector('.wi-fpath')) === '');
 
     // ══ 4. Die Loesch-Rueckfrage ══════════════════════════════════════════
     abschnitt('4 – Die Rueckfrage nennt Ordner UND Namen');
@@ -259,7 +269,7 @@ function versteckterVorfahr(el) {
         { path: 'data/community/<img src=x onerror=alert(1)>/x.md', name: 'x.md',
           folder: 'community/<img src=x onerror=alert(1)>', groups: [GRUPPEN[0]] },
     ]);
-    const cz = c.doc.querySelector('#wi-files-list .wi-item');
+    const cz = c.doc.querySelector('#wi-files-list .wi-frow');
     check('Zeile gezeichnet', !!cz);
     check('kein <img> aus dem Ordnernamen im DOM',
           !!cz && cz.querySelectorAll('img').length === 0);
@@ -267,18 +277,20 @@ function versteckterVorfahr(el) {
           !!cz && sichtbar(cz).indexOf('onerror=alert(1)') !== -1, cz ? sichtbar(cz) : '');
 
     // ══ 6+7. Die CSS-Zusagen ══════════════════════════════════════════════
-    abschnitt('6 – .wi-fmeta: flex:1 UND min-width:0');
+    abschnitt('6 – Tabelle: lange Namen und Pfade sprengen die Zeile nicht');
 
     // Gemessen an der WIRKUNG (getComputedStyle gegen das echte Inline-CSS der
-    // Seite), nicht per Textsuche in der Datei.
-    const fmeta = a.doc.querySelector('#wi-files-list .wi-fmeta');
-    const stil = fmeta ? a.win.getComputedStyle(fmeta) : null;
-    check('.wi-fmeta existiert in der gerenderten Zeile', !!fmeta);
-    check('flex-grow ist 1 (der Textblock nimmt den Platz)',
-          !!stil && parseFloat(stil.flexGrow) === 1, stil ? stil.flexGrow : '');
-    check('min-width ist 0 (sonst fliegen Marken und Muelleimer aus der Zeile)',
-          !!stil && (stil.minWidth === '0px' || stil.minWidth === '0'),
-          stil ? stil.minWidth : '');
+    // Seite). Die Zusage von frueher (`.wi-fmeta` mit min-width:0) gehoerte zur
+    // Listenform; in der Tabelle leisten das overflow-wrap und der Rahmen.
+    const wrap = a.doc.querySelector('#wi-files-list .wi-ftable-wrap');
+    check('die Tabelle steht in einem eigenen Rahmen', !!wrap);
+    check('… der waagerecht scrollt statt die Seite zu verbreitern',
+          !!wrap && a.win.getComputedStyle(wrap).overflowX === 'auto',
+          wrap ? a.win.getComputedStyle(wrap).overflowX : '');
+    const nameZelle = a.doc.querySelector('#wi-files-list .wi-fname');
+    check('der Dateiname bricht bei Bedarf um (overflow-wrap: anywhere)',
+          !!nameZelle && a.win.getComputedStyle(nameZelle).overflowWrap === 'anywhere',
+          nameZelle ? a.win.getComputedStyle(nameZelle).overflowWrap : '');
     const fp = pfadEl[0] ? a.win.getComputedStyle(pfadEl[0]) : null;
     check('der Ordner bricht um statt zu ueberlaufen',
           !!fp && fp.wordBreak === 'break-all', fp ? fp.wordBreak : 'kein Element');
