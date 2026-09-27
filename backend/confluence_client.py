@@ -136,21 +136,34 @@ class ConfluenceClient:
             start += page
         return out
 
-    def pages_in_space(self, space: str, limit: int = 500) -> list[dict]:
-        """Alle Seiten eines Bereichs (Space) mit ID, Titel und Web-Link."""
+    def pages_in_space(self, space: str, limit: int = 500,
+                       with_parent: bool = False) -> list[dict]:
+        """Alle Seiten eines Bereichs (Space) mit ID, Titel und Web-Link.
+
+        with_parent=True haengt je Seite `parent` an (ID der direkten
+        Elternseite, "" fuer eine Wurzelseite) - Grundlage fuer die
+        Baumansicht. Opt-in, weil `expand=ancestors` die Antwort vergroessert
+        und die uebrigen Aufrufer nur die IDs brauchen.
+        """
         out: list[dict] = []
         start, page = 0, 50
         while len(out) < limit:
-            d = self._request("GET", "/rest/api/content",
-                              params={"spaceKey": space, "type": "page",
-                                      "start": start, "limit": page})
+            params = {"spaceKey": space, "type": "page", "start": start, "limit": page}
+            if with_parent:
+                params["expand"] = "ancestors"
+            d = self._request("GET", "/rest/api/content", params=params)
             results = d.get("results", [])
             for s in results:
-                out.append({
+                item = {
                     "id": s.get("id"),
                     "title": s.get("title"),
                     "link": self.link_for(d, s),
-                })
+                }
+                if with_parent:
+                    # ancestors ist von der Wurzel zur direkten Elternseite sortiert
+                    anc = s.get("ancestors") or []
+                    item["parent"] = str((anc[-1] or {}).get("id") or "") if anc else ""
+                out.append(item)
             if len(results) < page:
                 break
             start += page

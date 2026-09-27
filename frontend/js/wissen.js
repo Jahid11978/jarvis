@@ -1829,34 +1829,142 @@
         loadCfPages(key);
     }
 
+    // Seiten des Bereichs als aufklappbarer Baum (Vorgabe: Zweige eingeklappt).
+    // Grundlage ist `parent` je Seite vom Server; eine Seite, deren Eltern-
+    // seite nicht in der Liste steht (Kappung, fehlende Rechte), wird zur
+    // Wurzel - sie darf nicht still aus der Auswahl fallen.
+    var _cfPageCount = 0;
+
+    function cfBaum(pages) {
+        var byId = {}, roots = [];
+        pages.forEach(function (p) {
+            if (p && p.id != null) byId[String(p.id)] = { id: String(p.id), title: p.title || '', kids: [] };
+        });
+        pages.forEach(function (p) {
+            if (!p || p.id == null) return;
+            var n = byId[String(p.id)], par = p.parent ? String(p.parent) : '';
+            if (par && par !== n.id && byId[par]) byId[par].kids.push(n);
+            else roots.push(n);
+        });
+        return roots;
+    }
+
+    function cfZahl(n) {
+        var c = 0;
+        n.kids.forEach(function (k) { c += 1 + cfZahl(k); });
+        return c;
+    }
+
+    function cfKnotenHtml(n) {
+        var hatKids = n.kids.length > 0;
+        var tog = hatKids
+            ? '<button type="button" class="wi-cf-tog" aria-expanded="false" title="'
+              + esc(t('wissen.cf_toggle')) + '">▶</button>'
+            : '<span class="wi-cf-tog-leer"></span>';
+        return '<li role="treeitem"' + (hatKids ? ' aria-expanded="false"' : '') + '>'
+            + '<div class="wi-cf-node">' + tog
+            + '<label><input type="checkbox" class="wi-cf-cb" value="' + esc(n.id) + '">'
+            + '<span>' + esc(n.title) + '</span>'
+            + (hatKids ? ' <span class="wi-cf-cnt">(' + cfZahl(n) + ')</span>' : '')
+            + '</label></div>'
+            + (hatKids ? '<ul class="wi-cf-kids" role="group">' + n.kids.map(cfKnotenHtml).join('') + '</ul>' : '')
+            + '</li>';
+    }
+
+    // Direkte Kind-Liste eines <li>. ⚠ NICHT per li.querySelector('.wi-cf-kids …'):
+    // der Selektor wird gegen das ganze Dokument ausgewertet, und die
+    // .wi-cf-kids-Liste UEBER dem li erfuellt ihn ebenfalls (Register).
+    function cfKidsUl(li) {
+        for (var i = 0; i < li.children.length; i++) {
+            if (li.children[i].classList.contains('wi-cf-kids')) return li.children[i];
+        }
+        return null;
+    }
+
+    // Anzeige nachziehen: halber Haken an Eltern, die selbst NICHT gewaehlt
+    // sind, aber gewaehlte Unterseiten haben; "Alles" und Zaehler.
+    function cfMarken() {
+        var tree = $('wi-cf-tree');
+        if (!tree) return;
+        tree.querySelectorAll('li[role="treeitem"]').forEach(function (li) {
+            var ul = cfKidsUl(li);
+            if (!ul) return;
+            var cb = li.querySelector('.wi-cf-cb');   // erster Treffer = eigener Haken
+            cb.indeterminate = !cb.checked && !!ul.querySelector('.wi-cf-cb:checked');
+        });
+        var alle = tree.querySelectorAll('.wi-cf-cb').length;
+        var an = tree.querySelectorAll('.wi-cf-cb:checked').length;
+        var all = $('wi-cf-all');
+        if (all) { all.checked = alle > 0 && an === alle; all.indeterminate = an > 0 && an < alle; }
+        var cnt = $('wi-cf-sel-cnt');
+        if (cnt) cnt.textContent = t('wissen.cf_selected', { k: an, n: alle });
+    }
+
+    function cfBaumVerdrahten(tree) {
+        if (tree._wiCfBound) return;
+        tree._wiCfBound = true;
+        tree.addEventListener('click', function (ev) {
+            var tog = ev.target.closest && ev.target.closest('.wi-cf-tog');
+            if (!tog) return;
+            var li = tog.closest('li');
+            var ul = li && cfKidsUl(li);
+            if (!ul) return;
+            var auf = !ul.classList.contains('open');
+            ul.classList.toggle('open', auf);
+            tog.setAttribute('aria-expanded', auf ? 'true' : 'false');
+            li.setAttribute('aria-expanded', auf ? 'true' : 'false');
+        });
+        tree.addEventListener('change', function (ev) {
+            var cb = ev.target;
+            if (cb.id === 'wi-cf-all') {
+                tree.querySelectorAll('.wi-cf-cb').forEach(function (x) { x.checked = cb.checked; });
+            } else if (cb.classList && cb.classList.contains('wi-cf-cb')) {
+                // Uebergeordneter Haken setzt/entfernt alle Untergeordneten mit
+                var ul = cfKidsUl(cb.closest('li'));
+                if (ul) ul.querySelectorAll('.wi-cf-cb').forEach(function (x) { x.checked = cb.checked; });
+            } else return;
+            cfMarken();
+        });
+    }
+
     function loadCfPages(space) {
-        var wrap = $('wi-cf-page-wrap'), hint = $('wi-cf-hint'), pageSel = $('wi-cf-page'), st = $('wi-cf-status');
+        var wrap = $('wi-cf-page-wrap'), hint = $('wi-cf-hint'), tree = $('wi-cf-tree'), st = $('wi-cf-status');
         if (st) st.textContent = '';
         if (wrap) wrap.style.display = 'flex';
         if (hint) hint.style.display = 'none';
-        if (pageSel) { pageSel.disabled = true; pageSel.innerHTML = '<option>' + esc(t('common.loading')) + '</option>'; }
+        _cfPageCount = 0;
+        if (tree) { cfBaumVerdrahten(tree); tree.innerHTML = '<div class="wi-empty">' + esc(t('common.loading')) + '</div>'; }
         fetch('/api/wissen/confluence/pages?space=' + encodeURIComponent(space), { headers: authH() })
             .then(function (r) { return r.json(); })
             .then(function (d) {
-                if (!pageSel) return;
-                if (!d || !d.ok) { pageSel.innerHTML = '<option value="">' + esc((d && d.error) || t('common.error')) + '</option>'; return; }
+                if (!tree) return;
+                // Antwort zu einem inzwischen abgewaehlten Bereich verwerfen
+                if (_selectedSpaceKey !== space) return;
+                if (!d || !d.ok) { tree.innerHTML = '<div class="wi-empty">' + esc((d && d.error) || t('common.error')) + '</div>'; return; }
                 var pages = d.pages || [];
-                pageSel.disabled = false;
-                pageSel.innerHTML = '<option value="__ALL__">' + esc(t('wissen.cf_all', { n: pages.length })) + '</option>'
-                    + pages.map(function (p) { return '<option value="' + esc(p.id) + '">' + esc(p.title) + '</option>'; }).join('');
-                if (hint) hint.style.display = pages.length ? 'block' : 'none';
+                _cfPageCount = pages.length;
+                if (!pages.length) { tree.innerHTML = '<div class="wi-empty">' + esc(t('wissen.cf_no_pages')) + '</div>'; return; }
+                tree.innerHTML = '<div class="wi-cf-node wi-cf-all"><span class="wi-cf-tog-leer"></span>'
+                    + '<label><input type="checkbox" id="wi-cf-all">'
+                    + '<span>' + esc(t('wissen.cf_all', { n: pages.length })) + '</span></label>'
+                    + ' <span class="wi-cf-cnt" id="wi-cf-sel-cnt"></span></div>'
+                    + '<ul>' + cfBaum(pages).map(cfKnotenHtml).join('') + '</ul>';
+                cfMarken();
+                if (hint) hint.style.display = 'block';
             })
-            .catch(function () { if (pageSel) pageSel.innerHTML = '<option value="">' + esc(t('common.error')) + '</option>'; });
+            .catch(function () { if (tree) tree.innerHTML = '<div class="wi-empty">' + esc(t('common.error')) + '</div>'; });
     }
 
     function importCf() {
-        var sel = $('wi-cf-page');
-        var picked = sel ? Array.prototype.slice.call(sel.selectedOptions).map(function (o) { return o.value; }).filter(Boolean) : [];
+        var tree = $('wi-cf-tree');
+        var picked = tree ? Array.prototype.slice.call(tree.querySelectorAll('.wi-cf-cb:checked'))
+            .map(function (c) { return c.value; }).filter(Boolean) : [];
         var st = $('wi-cf-status');
         if (!picked.length) { if (st) { st.style.color = 'var(--danger)'; st.textContent = t('wissen.cf_pick'); } return; }
         var space = _selectedSpaceKey || '';
         var body, bulk;
-        if (picked.indexOf('__ALL__') !== -1) { body = { space: space }; bulk = true; }
+        // Alles angehakt = ganzer Bereich (wie frueher der Eintrag „Alles")
+        if (_cfPageCount && picked.length === _cfPageCount) { body = { space: space }; bulk = true; }
         else if (picked.length > 1) { body = { page_ids: picked }; bulk = true; }
         else { body = { page_id: picked[0] }; bulk = false; }
         // Der Haken „Fragen & Antworten generieren (KI)" gilt laut Oberflaeche fuer

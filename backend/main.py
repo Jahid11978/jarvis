@@ -18642,7 +18642,8 @@ async def wissen_confluence_pages(space: str = "", user: str = Depends(require_a
         visible_keys = {s.get("key") for s in await _wissen_visible_spaces(c)}
         if space not in visible_keys:
             return JSONResponse({"ok": False, "error": "Bereich nicht sichtbar/erlaubt."}, status_code=403)
-        pages = await asyncio.to_thread(c.pages_in_space, space, 500)
+        # with_parent: der /wissen-Extraktor zeigt die Seiten als Baum
+        pages = await asyncio.to_thread(c.pages_in_space, space, 500, True)
         pages.sort(key=lambda p: (p.get("title") or "").lower())
         return JSONResponse({"ok": True, "count": len(pages), "pages": pages})
     except ConfluenceError as e:
