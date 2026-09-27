@@ -916,6 +916,111 @@ body.light .sapcert-state.is-err { color: color-mix(in srgb, var(--danger) 78%, 
     .jv-pkg-tab .jv-pkg-s, .jv-pkg-tab th[data-sort="summary"] { display: none; }
 }
 
+/* ═══════════════════════════════════════════════════════════════════════
+   Systemauslastung hinter der CPU-Anzeige (frontend/js/sysload.js)
+
+   Rahmen, Kopf, Tabelle und Fusszeile kommen vom Paket-Fenster (`.jv-pkg-*`);
+   hier steht nur, was dazukommt: die vier Kacheln mit Verlauf und die
+   CPU-Spalte der Prozessliste. Nur Administratoren sehen den Klick.
+   ═══════════════════════════════════════════════════════════════════════ */
+.jv-cpu-bar.jv-cpu-klick { cursor: pointer; }
+.jv-cpu-bar.jv-cpu-klick:hover { border-color: var(--accent); }
+.jv-cpu-bar.jv-cpu-klick:focus-visible { outline: 2px solid rgba(var(--accent-rgb), .8); outline-offset: 2px; }
+
+.jv-load-box { width: min(1180px, 100%); }
+/* Der Koerper scrollt als Ganzes: vier Kacheln + 20 Zeilen passen auf einem
+   Laptop nicht untereinander. `min-height: 0` aus demselben Grund wie in
+   `.jv-pkg-box`. */
+.jv-load-body { display: flex; flex-direction: column; min-height: 0; overflow-y: auto; }
+.jv-load-body .jv-pkg-scroll { flex: 0 0 auto; overflow-x: auto; }
+.jv-load-live { font-size: .72rem; color: var(--success); margin-right: auto; }
+.jv-load-live::before { content: '●'; margin-right: 4px; }
+.jv-load-live:empty { display: none; }
+.jv-load-live.ist-fehler { color: var(--danger); }
+
+.jv-load-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+    gap: 10px;
+    margin-bottom: 12px;
+}
+.jv-load-tile {
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    padding: 9px 11px 8px;
+    background: rgba(var(--fg-rgb, 148,163,184), .04);
+    min-width: 0;
+}
+.jv-load-tile-h { display: flex; align-items: baseline; justify-content: space-between; gap: 8px; margin-bottom: 4px; }
+.jv-load-tile-h span { font-size: .8rem; color: var(--text-secondary); font-weight: 600; }
+.jv-load-tile-h b { font-size: 1.15rem; font-variant-numeric: tabular-nums; color: var(--text-primary); }
+.jv-load-sub { font-size: .72rem; color: var(--text-secondary); margin-top: 5px; font-variant-numeric: tabular-nums; }
+
+.jv-load-spark { display: block; width: 100%; height: 56px; }
+.jv-load-base { stroke: rgba(var(--fg-rgb, 148,163,184), .25); stroke-width: 1; vector-effect: non-scaling-stroke; }
+.jv-load-line { fill: none; stroke-width: 2; stroke-linejoin: round; stroke-linecap: round; vector-effect: non-scaling-stroke; }
+.jv-load-line.s1 { stroke: var(--accent); }
+.jv-load-line.s2 { stroke: var(--warning); stroke-dasharray: 4 3; }
+.jv-load-area.s1 { fill: rgba(var(--accent-rgb), .16); stroke: none; }
+.jv-load-hit { fill: transparent; }
+.jv-load-hit:hover { fill: rgba(var(--fg-rgb, 148,163,184), .12); }
+
+.jv-load-leg { display: flex; flex-wrap: wrap; gap: 4px 12px; font-size: .72rem; color: var(--text-secondary); margin-top: 4px; }
+.jv-load-leg b { color: var(--text-primary); font-weight: 600; font-variant-numeric: tabular-nums; }
+.jv-load-dot { display: inline-block; width: 10px; height: 3px; border-radius: 2px; margin-right: 5px; vertical-align: middle; }
+.jv-load-dot.s1 { background: var(--accent); }
+.jv-load-dot.s2 { background: var(--warning); }
+
+.jv-load-meter {
+    height: 8px;
+    border-radius: 999px;
+    background: rgba(var(--fg-rgb, 148,163,184), .14);
+    overflow: hidden;
+    margin-top: 6px;
+}
+.jv-load-meter.klein { height: 5px; margin-top: 3px; }
+.jv-load-meter-fill { height: 100%; border-radius: 999px; background: var(--accent); transition: width .5s ease; }
+.jv-load-meter-fill.hoch { background: var(--warning); }
+.jv-load-meter-fill.kritisch { background: var(--danger); }
+
+.jv-load-cores { display: flex; gap: 2px; height: 26px; align-items: flex-end; margin-top: 6px; }
+.jv-load-core {
+    flex: 1 1 0;
+    min-width: 3px;
+    height: 100%;
+    display: flex;
+    align-items: flex-end;
+    border-radius: 3px;
+    background: rgba(var(--fg-rgb, 148,163,184), .12);
+    overflow: hidden;
+}
+.jv-load-core > div { width: 100%; background: var(--accent); border-radius: 3px 3px 0 0; transition: height .5s ease; }
+
+.jv-load-part { margin-top: 6px; }
+.jv-load-part-h { display: flex; justify-content: space-between; gap: 8px; font-size: .72rem; color: var(--text-secondary); font-variant-numeric: tabular-nums; }
+.jv-load-mono { font-family: var(--font-mono, monospace); }
+
+.jv-load-top-h { font-size: .86rem; font-weight: 700; margin: 2px 0 6px; }
+.jv-load-tab td { vertical-align: middle; }
+.jv-load-rang { color: var(--text-secondary); width: 2em; }
+.jv-load-cmd {
+    font-family: var(--font-mono, monospace);
+    font-size: .72rem;
+    color: var(--text-secondary);
+    max-width: 520px;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+.jv-load-cpucell { min-width: 110px; }
+.jv-load-cpuwert { font-variant-numeric: tabular-nums; font-weight: 600; }
+
+@media (max-width: 720px) {
+    .jv-load-cmd { max-width: 180px; }
+    .jv-load-tab th:nth-child(4), .jv-load-tab td:nth-child(4),
+    .jv-load-tab th:nth-child(7), .jv-load-tab td:nth-child(7) { display: none; }
+}
+
 
 /* ─── Auge am Kennwortfeld (frontend/js/pwreveal.js) ─────────────────────────
    In theme.css und NICHT in style.css: Kennwortfelder gibt es auf jeder Seite

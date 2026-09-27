@@ -5601,6 +5601,27 @@ async def system_packages(request: Request, user: str = Depends(require_local_au
     return JSONResponse(bericht, headers=kopf)
 
 
+@app.get("/api/system/load")
+async def system_load(user: str = Depends(require_local_auth)):
+    """Systemauslastung + die 20 staerksten CPU-Verbraucher (Popup der CPU-Anzeige).
+
+    ADMIN-ONLY (`require_local_auth`): die Prozessliste nennt Kommandozeilen,
+    Benutzer und Pfade – das ist Aufklaerung ueber den Server.
+
+    ⚠ `asyncio.to_thread` ist PFLICHT: der Bericht misst ueber ein Fenster von
+    0,5 s (`time.sleep`) und liest /proc fuer jeden Prozess. Im Event-Loop
+    stuende der Dienst so lange fuer ALLE Benutzer.
+    """
+    from backend import system_load as _last
+    try:
+        bericht = await asyncio.to_thread(_last.bericht)
+    except Exception as e:
+        logger.error(f"[LAST] Bericht fehlgeschlagen: {e}")
+        return JSONResponse({"ok": False, "error": "Systemauslastung konnte nicht gemessen werden"},
+                            status_code=500)
+    return JSONResponse(bericht)
+
+
 def _check_vnc_available() -> bool:
     """Prüft ob x11vnc auf Port 5900 erreichbar ist (schneller TCP-Connect)."""
     import socket
