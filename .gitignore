@@ -153,10 +153,24 @@ CLAUDE.md
 CLAUDE.md.*
 CLAUDE-*.md
 CLAUDE_*.md
+# Punkt-getrennte Varianten: das Kompakt-Verfahren legt CLAUDE.<yyyymmdd>.md als
+# Archiv und CLAUDE.compact.md als Anleitung an. Die Muster darueber treffen die
+# NICHT (Bindestrich/Unterstrich), beides waere also verfolgbar geworden.
+CLAUDE.*.md
 claude.md
 claude.md.*
 *_CLAUDE.md
 .CLAUDE.md.sw?
+
+# Ausgelagerte Kapitel von CLAUDE.md (Verfahren: CLAUDE.compact.md). Sie sind
+# dasselbe Projektgedaechtnis und gehoeren genauso wenig ins oeffentliche Repo.
+# Der Rechner wird vollstaendig gesichert - Git ist hier nicht die Sicherung.
+#   .claude/rules/*.md und .claude/kompakt-split.py deckt bereits `.claude/*` ab.
+# ⚠ docs/historie/ BRAUCHT diesen Eintrag: die Chronik lag nur deshalb draussen,
+# weil ihr Dateiname zufaellig mit "CLAUDE-" beginnt und `CLAUDE-*.md` traf. Eine
+# anders benannte Chronik waere verfolgbar geworden - und `docs/` ist sonst
+# absichtlich IM Repo (landing-page, outlook-addin.md), also nur dieser Unterordner.
+docs/historie/
 # AUSDRUECKLICH NICHT erfasst und bewusst im Repo:
 #   .claude/rules/*.md              - ausgelagerte Bereichsregeln (geprueft sauber)
 #   deploy/.../claude-md-diaet.md   - eine ANLEITUNG, keine Kopie (0 Zitate)
