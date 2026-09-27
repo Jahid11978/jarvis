@@ -19010,6 +19010,43 @@ async def wissen_destillat_extract(request: Request, user: str = Depends(require
     if not dateien:
         return JSONResponse({"error": "Keine Dateien empfangen."}, status_code=400)
 
+    # `?stream=1`: je Datei eine Zeile `{"art":"datei","i":..,"n":..}` und am
+    # Ende `{"art":"fertig",...}` (NDJSON) – daraus zeigt die Seite "Datei i
+    # von n". Ohne Stream antwortete der Endpunkt erst nach der LETZTEN Datei;
+    # bei OCR-PDFs sind das Minuten ohne jedes Lebenszeichen.
+    if request.query_params.get("stream") == "1":
+        schlange: asyncio.Queue = asyncio.Queue()
+        schleife = asyncio.get_running_loop()
+
+        def _melde(i: int, n: int, name: str) -> None:
+            # Laeuft im Arbeits-THREAD – die Queue gehoert dem Event-Loop.
+            schleife.call_soon_threadsafe(
+                schlange.put_nowait, {"art": "datei", "i": i, "n": n, "name": name})
+
+        async def _strom():
+            # Extraktion ist blockierende Arbeit (pdfplumber, OCR, Tika) und
+            # gehoert NIE in den Event-Loop – sonst steht der Dienst fuer ALLE.
+            arbeit = asyncio.ensure_future(asyncio.to_thread(_wd.extrahiere, dateien, _melde))
+            while not arbeit.done() or not schlange.empty():
+                try:
+                    zeile = await asyncio.wait_for(schlange.get(), timeout=0.5)
+                except asyncio.TimeoutError:
+                    continue
+                yield json.dumps(zeile, ensure_ascii=False) + "\n"
+            try:
+                ergebnis = arbeit.result()
+            except _wd.DestillatFehler as e:
+                yield json.dumps({"art": "fehler", "error": str(e)}, ensure_ascii=False) + "\n"
+                return
+            except Exception as e:  # noqa: BLE001
+                yield json.dumps({"art": "fehler", "error": str(e)}, ensure_ascii=False) + "\n"
+                return
+            yield json.dumps({"art": "fertig", "ok": True, **ergebnis},
+                             ensure_ascii=False) + "\n"
+
+        return StreamingResponse(_strom(), media_type="application/x-ndjson",
+                                 headers={"Cache-Control": "no-cache"})
+
     try:
         # Extraktion ist blockierende Arbeit (pdfplumber, OCR, Tika) und gehoert
         # deshalb NIE in den Event-Loop – sonst steht der Dienst fuer ALLE.

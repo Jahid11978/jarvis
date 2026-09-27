@@ -78,12 +78,20 @@ function seite(gruppen, antworten) {
     const gesendet = [];
     w.fetch = function (url, opt) {
         const pfad = String(url).split('?')[0];
-        gesendet.push({ pfad: pfad, opt: opt || {} });
+        gesendet.push({ pfad: pfad, voll: String(url), opt: opt || {} });
         const a = (antworten || {})[pfad];
-        const d = typeof a === 'function' ? a() : (a || { ok: true });
+        const d = typeof a === 'function' ? a(url, opt) : (a || { ok: true });
+        // Eine ECHTE Response hat json() UND text() (Register: Attrappen bilden
+        // die echte Antwortform nach). `__zeilen` = NDJSON-Strom wie ihn
+        // /extract?stream=1 liefert; `__body` = selbst gesteuerter Strom.
+        if (d && d.__antwort) return Promise.resolve(d.__antwort);
+        const roh = d && d.__zeilen
+            ? d.__zeilen.map(function (z) { return JSON.stringify(z); }).join('\n') + '\n'
+            : JSON.stringify(d);
         return Promise.resolve({
             status: d.__status || 200,
-            json: function () { return Promise.resolve(d); }
+            json: function () { return Promise.resolve(JSON.parse(roh)); },
+            text: function () { return Promise.resolve(roh); }
         });
     };
     w.eval(ICONS);
@@ -343,8 +351,8 @@ abschnitt('9. Klapp-Registrierung und Einbindung');
           WJS.indexOf('window.WissenPortal') >= 0 && WJS.indexOf('reloadPending') >= 0);
 }
 
-ordnerProbe().then(abschluss, function (e) {
-    check('Abschnitt 10 lief ohne Wurf', false, String(e && e.stack || e));
+ordnerProbe().then(fortschrittProbe).then(abschluss, function (e) {
+    check('Abschnitt 10/11 lief ohne Wurf', false, String(e && e.stack || e));
     abschluss();
 });
 }
@@ -370,7 +378,10 @@ async function ordnerProbe() {
     // ⚠ HIER, nicht auf Dateiebene: Abschnitt 6 verlaesst die umschliessende
     // Funktion per `return` – ein `const` dahinter wird nie initialisiert
     // (nur Funktionsdeklarationen sind gehoben).
-    const EXTRAKT = { '/api/wissen/destillat/extract': { ok: ['a'], text: 'Inhalt', fehler: {} } };
+    const EXTRAKT = { '/api/wissen/destillat/extract': { __zeilen: [
+        { art: 'datei', i: 1, n: 1, name: 'a' },
+        { art: 'fertig', ok: ['a'], text: 'Inhalt', fehler: {},
+          protokoll: [{ name: 'a', art: 'ok', zeichen: 6 }] }] } };
     abschnitt('10. Ordner als Quelle');
     {
         const { doc } = seite(GRUPPEN, EXTRAKT);
@@ -469,6 +480,212 @@ async function ordnerProbe() {
         check('gezogene Einzeldatei geht unverändert durch',
               JSON.stringify(gesendeteNamen(gesendet)) === '["einzeln.pdf"]',
               JSON.stringify(gesendeteNamen(gesendet)));
+    }
+}
+
+// ════════════════════════════════════════════════════════════════════════════
+// 11. Lesefortschritt (Wunsch 2026-09-27: Drehkreis, Balken, "x von y",
+// Protokoll welcher Datei was fehlte). Der Strom wird STUECKWEISE geliefert –
+// eine Attrappe, die alles auf einmal liefert, kann einen Zwischenstand gar
+// nicht zeigen, und genau der ist die Zusage.
+function stromAttrappe(w) {
+    const enc = new TextEncoder();
+    const warten = [];           // offene read()-Zusagen
+    const vorrat = [];           // gelieferte, noch nicht gelesene Stuecke
+    let zu = false;
+    function bedienen() {
+        while (warten.length && (vorrat.length || zu)) {
+            const r = warten.shift();
+            if (vorrat.length) r({ done: false, value: vorrat.shift() });
+            else r({ done: true, value: undefined });
+        }
+    }
+    return {
+        antwort: { status: 200,
+            body: { getReader: function () { return { read: function () {
+                return new Promise(function (r) { warten.push(r); bedienen(); });
+            } }; } },
+            json: function () { throw new Error('json() auf einem Strom'); },
+            text: function () { throw new Error('text() auf einem Strom'); } },
+        schick: function (txt) { vorrat.push(enc.encode(txt)); bedienen(); },
+        ende: function () { zu = true; bedienen(); }
+    };
+}
+function ablegen(w, doc, namen) {
+    const inp = doc.getElementById('wi-dest-files');
+    Object.defineProperty(inp, 'files', { configurable: true,
+        value: namen.map(function (n) { return new w.File(['x'], n); }) });
+    inp.dispatchEvent(new w.Event('change'));
+}
+function tr(w, key, vars) {
+    // window.t kennt keine Platzhalter – ersetzt wird wie im Modul.
+    let s = w.t(key);
+    Object.keys(vars || {}).forEach(function (k) { s = s.split('{' + k + '}').join(vars[k]); });
+    return s;
+}
+async function fortschrittProbe() {
+    abschnitt('11. Lesefortschritt: Drehkreis, Balken, "x von y", Protokoll');
+    let strom = null;
+    const R = { '/api/wissen/destillat/extract': function () { return { __antwort: strom.antwort }; } };
+    {
+        const { w, doc, gesendet } = seite(GRUPPEN, R);
+        w.TextDecoder = TextDecoder;
+        strom = stromAttrappe(w);
+        const busy = doc.getElementById('wi-dest-exbusy');
+        const btxt = doc.getElementById('wi-dest-exbusy-text');
+        const bar = doc.getElementById('wi-dest-exbar');
+        const fill = doc.getElementById('wi-dest-exfill');
+        const drop = doc.getElementById('wi-dest-drop');
+        const lb = doc.getElementById('wi-dest-logbtn');
+        const log = doc.getElementById('wi-dest-log');
+        // Positivkontrolle: ohne diese Elemente ist jede Pruefung darunter leer.
+        if (!busy || !btxt || !bar || !fill || !lb || !log) {
+            console.log('\x1b[31mABBRUCH: Fortschritts-Elemente fehlen im Markup\x1b[0m');
+            process.exit(2);
+        }
+        check('vor dem Lesen: Fortschrittszeile und Protokoll-Knopf verborgen',
+              busy.hidden && bar.hidden && lb.hidden);
+
+        ablegen(w, doc, ['a.pdf', 'b.one', 'c.docx']);
+        await warte(10);
+        const ex = gesendet.filter(function (g) { return g.pfad === '/api/wissen/destillat/extract'; });
+        check('die Anfrage bittet um den Strom (?stream=1)',
+              ex.length === 1 && /[?&]stream=1(&|$)/.test(ex[0].voll),
+              JSON.stringify(ex.map(function (g) { return g.voll; })));
+        check('während der Übertragung: Drehkreis sichtbar',
+              !busy.hidden && !!busy.querySelector('.wi-busy-spin'));
+        check('… Text nennt die Übertragung mit Dateizahl (noch kein "0 von 3")',
+              btxt.textContent === tr(w, 'wissen.dest_uploading', { n: 3 }), btxt.textContent);
+        check('… Balken sichtbar', !bar.hidden);
+        check('… Ablage gesperrt', drop.classList.contains('disabled'));
+
+        // Zeile ueber ZWEI Stuecke verteilt – der Leser muss sie zusammensetzen.
+        const z1 = JSON.stringify({ art: 'datei', i: 1, n: 3, name: 'a.pdf' }) + '\n';
+        strom.schick(z1.slice(0, 11)); await warte(5);
+        check('halbe Zeile: noch keine Datei-Anzeige',
+              btxt.textContent === tr(w, 'wissen.dest_uploading', { n: 3 }), btxt.textContent);
+        strom.schick(z1.slice(11)); await warte(5);
+        check('ganze Zeile: "Lese Datei 1 von 3: a.pdf"',
+              btxt.textContent === tr(w, 'wissen.dest_reading_n', { i: 1, n: 3, name: 'a.pdf' }), btxt.textContent);
+        strom.schick(JSON.stringify({ art: 'datei', i: 2, n: 3, name: 'b.one' }) + '\n');
+        await warte(5);
+        check('"x von y" läuft mit: 2 von 3',
+              btxt.textContent === tr(w, 'wissen.dest_reading_n', { i: 2, n: 3, name: 'b.one' }), btxt.textContent);
+        // (i-1)/n: waehrend Datei 2 laeuft, ist EINE von drei fertig.
+        check('Balken misst fertige Dateien: 33 % bei Datei 2 von 3',
+              Math.abs(parseFloat(fill.style.width) - 100 / 3) < 0.5, fill.style.width);
+
+        // Ein zweites Ablegen WAEHREND des Lesens schickt nichts.
+        ablegen(w, doc, ['d.txt']);
+        await warte(5);
+        check('zweites Ablegen während des Lesens: KEINE zweite Anfrage',
+              gesendet.filter(function (g) { return g.pfad === '/api/wissen/destillat/extract'; }).length === 1);
+        check('… und der Grund steht da',
+              (doc.getElementById('wi-dest-exstatus').textContent || '').indexOf(w.t('wissen.dest_busy_wait')) >= 0);
+
+        strom.schick(JSON.stringify({ art: 'datei', i: 3, n: 3, name: 'c.docx' }) + '\n'
+            + JSON.stringify({ art: 'fertig', ok: ['a.pdf', 'c.docx'], text: '--- a.pdf ---\nA',
+                fehler: { 'b.one': 'OneNote braucht den Tika-Dienst.' }, gekappt: false,
+                protokoll: [{ name: 'a.pdf', art: 'ok', zeichen: 1234 },
+                            { name: 'b.one', art: 'fehler', grund: 'OneNote braucht den Tika-Dienst.' },
+                            { name: 'c.docx', art: 'ok', zeichen: 50, bilder: 2 }] }) + '\n');
+        strom.ende();
+        await warte(10);
+        check('nach dem Ende: Drehkreis weg', busy.hidden);
+        check('… Balken auf 100 %', parseFloat(fill.style.width) === 100, fill.style.width);
+        check('… Ablage wieder frei', !drop.classList.contains('disabled'));
+        const st = doc.getElementById('wi-dest-exstatus').textContent || '';
+        check('Status: "2 gelesen · 1 nicht lesbar"',
+              st.indexOf(tr(w, 'wissen.dest_extracted', { n: 2 })) >= 0
+              && st.indexOf(tr(w, 'wissen.dest_failed_n', { n: 1 })) >= 0, st);
+        check('Protokoll-Knopf erscheint, Protokoll noch zu', !lb.hidden && log.hidden);
+        check('… Knopf übersetzbar (data-i18n)', lb.getAttribute('data-i18n') === 'wissen.dest_log_show');
+
+        lb.click();
+        const zeilen = log.querySelectorAll('.wi-dest-logzeile');
+        check('Klick öffnet das Protokoll mit JEDER Datei', !log.hidden && zeilen.length === 3,
+              String(zeilen.length));
+        const fz = log.querySelector('.wi-dest-logzeile.fehler');
+        check('… die fehlerhafte Datei steht MIT Grund',
+              !!fz && fz.textContent.indexOf('b.one') >= 0
+              && fz.textContent.indexOf('OneNote braucht den Tika-Dienst.') >= 0, fz && fz.textContent);
+        check('… erfolgreiche Dateien als Erfolg markiert',
+              log.querySelectorAll('.wi-dest-logzeile.ok').length === 2);
+        check('… mit Zeichen- und Bildzahl',
+              log.textContent.indexOf(tr(w, 'wissen.dest_log_images', { n: 2 })) >= 0
+              && log.textContent.indexOf(tr(w, 'wissen.dest_chars', { n: (1234).toLocaleString() })) >= 0,
+              log.textContent);
+        check('… Knopf heißt jetzt "ausblenden" (auch für den Sprachwechsel)',
+              lb.getAttribute('data-i18n') === 'wissen.dest_log_hide'
+              && lb.textContent === w.t('wissen.dest_log_hide')
+              && lb.getAttribute('aria-expanded') === 'true');
+        lb.click();
+        check('zweiter Klick schließt es wieder', log.hidden
+              && lb.getAttribute('data-i18n') === 'wissen.dest_log_show');
+        check('der Text der gelesenen Datei steht im Textfeld',
+              doc.getElementById('wi-dest-text').value.indexOf('--- a.pdf ---') >= 0);
+        check('die Zeile der nicht lesbaren Datei ist markiert',
+              (doc.getElementById('wi-dest-filelist').textContent || '').indexOf(w.t('wissen.dest_unreadable')) >= 0);
+
+        // Protokoll-Inhalt kommt vom Server (Dateinamen des Benutzers) – kein Markup.
+        const { w: w2, doc: d2 } = seite(GRUPPEN, { '/api/wissen/destillat/extract': { __zeilen: [
+            { art: 'fertig', ok: [], text: '', fehler: { '<img src=x onerror=alert(1)>': 'x' },
+              protokoll: [{ name: '<img src=x onerror=alert(1)>', art: 'fehler', grund: '<b>g</b>' }] }] } });
+        ablegen(w2, d2, ['q.txt']);
+        await warte(15);
+        d2.getElementById('wi-dest-logbtn').click();
+        check('Protokoll maskiert Namen und Grund (kein fremdes Markup)',
+              !d2.getElementById('wi-dest-log').querySelector('img, b'));
+    }
+    {
+        // Abgerissener Strom: Zeilen kamen, "fertig" nie. Das darf NICHT wie ein
+        // Erfolg mit 0 Dateien aussehen.
+        const { w, doc } = seite(GRUPPEN, R);
+        w.TextDecoder = TextDecoder;
+        strom = stromAttrappe(w);
+        ablegen(w, doc, ['a.pdf', 'b.pdf']);
+        await warte(5);
+        strom.schick(JSON.stringify({ art: 'datei', i: 1, n: 2, name: 'a.pdf' }) + '\n');
+        strom.ende();
+        await warte(10);
+        const st = doc.getElementById('wi-dest-exstatus');
+        check('abgerissener Strom: Fehlermeldung statt Erfolg',
+              st.textContent.indexOf(w.t('wissen.dest_stream_broken')) >= 0
+              && !!st.querySelector('.wi-err'), st.textContent);
+        check('… Drehkreis und Balken weg', doc.getElementById('wi-dest-exbusy').hidden
+              && doc.getElementById('wi-dest-exbar').hidden);
+        check('… kein Protokoll-Knopf (es gibt kein Protokoll)', doc.getElementById('wi-dest-logbtn').hidden);
+    }
+    {
+        // Fehler-Zeile des Servers (z. B. zu viele Dateien) und Antwort VOR dem
+        // Strom (403 als gewoehnliches JSON) – beide zeigen den Servertext.
+        const a = seite(GRUPPEN, { '/api/wissen/destillat/extract': { __zeilen: [
+            { art: 'fehler', error: 'Zu viele Dateien (300).' }] } });
+        ablegen(a.w, a.doc, ['a.txt']);
+        await warte(10);
+        check('Fehler-Zeile: Servertext steht da',
+              a.doc.getElementById('wi-dest-exstatus').textContent.indexOf('Zu viele Dateien (300).') >= 0);
+        const b = seite(GRUPPEN, { '/api/wissen/destillat/extract': {
+            __status: 403, error: 'Dir ist kein Wissensbereich zugewiesen.' } });
+        ablegen(b.w, b.doc, ['a.txt']);
+        await warte(10);
+        check('403 vor dem Strom: Servertext steht da',
+              b.doc.getElementById('wi-dest-exstatus').textContent.indexOf('kein Wissensbereich') >= 0);
+        check('… und die Ablage ist wieder frei',
+              !b.doc.getElementById('wi-dest-drop').classList.contains('disabled'));
+    }
+    {
+        // i18n: jeder neue Schluessel in DE UND EN.
+        const neu = ['dest_uploading', 'dest_reading_n', 'dest_busy_wait', 'dest_stream_broken',
+                     'dest_skipped_n', 'dest_log_show', 'dest_log_hide', 'dest_log_images',
+                     'dest_log_skipped'];
+        const fehlt = neu.filter(function (k) {
+            const n = I18N.split("'wissen." + k + "':").length - 1;
+            return n !== 2;
+        });
+        check('neue Texte stehen in DE und EN', fehlt.length === 0, fehlt.join(', '));
+        check('kein Sanduhr-Emoji mehr in "Lese Dateien" (der Drehkreis ersetzt es)',
+              !/'wissen\.dest_extracting':\s*'⏳/.test(I18N));
     }
 }
 

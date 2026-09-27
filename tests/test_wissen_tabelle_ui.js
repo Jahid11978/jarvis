@@ -21,7 +21,7 @@
  *   6. eine Tabellenzeile ist eine Tabellenzeile (nicht `.wi-item` = flex)
  *   7. Maximieren sitzt hinter "Angemeldet als" ganz oben (weder in der
  *      Titelleiste noch in "Mein Wissen", Vorgabe 2026-09-27), hebt die
- *      900-px-Deckelung fuer ALLE Abschnitte auf, nicht gemerkt
+ *      900-px-Deckelung fuer ALLE Abschnitte auf, je Browser gemerkt
  *   8. alle neuen Texte in DE und EN
  */
 'use strict';
@@ -305,12 +305,34 @@ function i18nZahl(key) {
         b.click();
         check('zweiter Klick verkleinert wieder', mw() === '900px'
               && b.getAttribute('aria-label') === 'Maximieren', mw());
+        // Der Zustand wird JE BROWSER GEMERKT (Vorgabe 2026-09-27, dritte
+        // Fassung). ⚠ Jede jsdom-Seite hat ihren EIGENEN localStorage – ein
+        // "neue Seite startet nicht maximiert" war darum immer wahr, gleich was
+        // der Code tat. Gemessen wird deshalb (a) was der Klick SCHREIBT und
+        // (b) wie eine Seite MIT diesem Wert startet.
+        check('Verkleinern merkt "0"', s.win.localStorage.getItem('jarvis_wissen_breit') === '0',
+              s.win.localStorage.getItem('jarvis_wissen_breit'));
         b.click();
-        // Der Zustand wird wie in /feedback NICHT gemerkt.
-        const s2 = await seite(bestand());
-        check('neue Seite startet NICHT maximiert (Zustand nicht gemerkt)',
-              !s2.doc.body.classList.contains('wi-breit'));
+        check('Maximieren merkt "1"', s.win.localStorage.getItem('jarvis_wissen_breit') === '1',
+              s.win.localStorage.getItem('jarvis_wissen_breit'));
+        const gemerkt = s.win.localStorage.getItem('jarvis_wissen_breit');
+        const s2 = await seite(bestand(), { jarvis_wissen_breit: gemerkt });
+        const b2 = s2.doc.getElementById('wi-max');
+        check('neue Seite mit gemerktem "1" startet MAXIMIERT',
+              s2.doc.body.classList.contains('wi-breit')
+              && s2.win.getComputedStyle(s2.doc.querySelector('.wi-wrap')).maxWidth === 'none');
+        check('… und der Knopf zeigt "Verkleinern" (Zustand und Knopf stimmen ueberein)',
+              !!b2 && b2.getAttribute('aria-pressed') === 'true'
+              && b2.getAttribute('aria-label') === 'Verkleinern');
         try { s2.win.close(); } catch (e) {}
+        const s3 = await seite(bestand(), { jarvis_wissen_breit: '0' });
+        check('neue Seite mit gemerktem "0" startet normal',
+              !s3.doc.body.classList.contains('wi-breit'));
+        try { s3.win.close(); } catch (e) {}
+        const s4 = await seite(bestand());
+        check('ohne gemerkten Wert: normal (Vorgabe bleibt 900 px)',
+              !s4.doc.body.classList.contains('wi-breit'));
+        try { s4.win.close(); } catch (e) {}
     }
 
     abschnitt('8 – Texte in DE und EN');

@@ -441,7 +441,7 @@ def _text_aus_datei(name: str, inhalt: bytes) -> tuple[str | None, str]:
         return text, ""
 
 
-def extrahiere(dateien: list[tuple[str, bytes]]) -> dict:
+def extrahiere(dateien: list[tuple[str, bytes]], melde=None) -> dict:
     """Text und Bilder aus hochgeladenen Dateien.
 
     Baut denselben Textaufbau wie das Original: je Datei eine Kopfzeile
@@ -453,6 +453,14 @@ def extrahiere(dateien: list[tuple[str, bytes]]) -> dict:
     (``docx_text_mit_bildern``); nur im Rueckfall haengen sie am Ende des
     Datei-Abschnitts. ``N`` ist der Index im gemeinsamen ``bilder``-Array (1-basiert, ueber alle
     Dateien durchlaufend).
+
+    ``melde(i, n, name)`` wird VOR jeder Datei gerufen (``i`` 1-basiert) – der
+    Endpunkt streamt daraus "Datei i von n". Ein Fehler im Rueckruf bricht die
+    Extraktion NICHT ab: die Anzeige ist Beiwerk, der Text ist das Ergebnis.
+
+    ``protokoll`` nennt JEDE Datei mit Ausgang (``ok`` / ``fehler`` /
+    ``uebersprungen``). Letzteres sind die Dateien hinter der Textgrenze – sie
+    stehen weder in ``ok`` noch in ``fehler`` und waeren sonst spurlos weg.
     """
     if len(dateien) > MAX_DATEIEN:
         raise DestillatFehler(
@@ -463,8 +471,19 @@ def extrahiere(dateien: list[tuple[str, bytes]]) -> dict:
     ok: list[str] = []
     fehler: dict[str, str] = {}
     gekappt = False
+    protokoll: list[dict] = []
+    n = len(dateien)
 
-    for name, inhalt in dateien:
+    for i, (name, inhalt) in enumerate(dateien, 1):
+        if gekappt:
+            protokoll.append({"name": name, "art": "uebersprungen",
+                              "grund": "Nicht mehr gelesen – Textgrenze erreicht."})
+            continue
+        if melde is not None:
+            try:
+                melde(i, n, name)
+            except Exception:  # noqa: BLE001
+                pass
         # DOCX zuerst ueber den eigenen Leser: nur er kennt die Fundstelle der
         # Bilder (und die Tabellen). Liefert er nichts, gilt der alte Weg.
         eigen = None
@@ -477,14 +496,18 @@ def extrahiere(dateien: list[tuple[str, bytes]]) -> dict:
             bilder.extend(eigen[1])
             teile.append(f"--- {name} ---\n{eigen[0].strip()}")
             ok.append(name)
+            protokoll.append({"name": name, "art": "ok", "zeichen": len(eigen[0].strip()),
+                              "bilder": len(eigen[1])})
+            # Kein `break` mehr: die restlichen Dateien laufen als
+            # "uebersprungen" ins Protokoll (Kopf der Schleife).
             if sum(len(t) for t in teile) > MAX_TEXT:
                 gekappt = True
-                break
             continue
 
         text, grund = _text_aus_datei(name, inhalt)
         if text is None:
             fehler[name] = grund
+            protokoll.append({"name": name, "art": "fehler", "grund": grund})
             continue
 
         eigene: list[str] = []
@@ -492,6 +515,7 @@ def extrahiere(dateien: list[tuple[str, bytes]]) -> dict:
             eigene = bilder_aus_docx_bytes(inhalt)
 
         block = f"--- {name} ---\n{text.strip()}"
+        vorher = len(bilder)
         for _ in eigene:
             if len(bilder) >= MAX_BILDER:
                 break
@@ -500,10 +524,11 @@ def extrahiere(dateien: list[tuple[str, bytes]]) -> dict:
 
         teile.append(block)
         ok.append(name)
+        protokoll.append({"name": name, "art": "ok", "zeichen": len(text.strip()),
+                          "bilder": len(bilder) - vorher})
 
         if sum(len(t) for t in teile) > MAX_TEXT:
             gekappt = True
-            break
 
     text = "\n\n".join(teile)
     if len(text) > MAX_TEXT:
@@ -511,7 +536,7 @@ def extrahiere(dateien: list[tuple[str, bytes]]) -> dict:
         gekappt = True
 
     return {"text": text, "bilder": bilder, "ok": ok, "fehler": fehler,
-            "gekappt": gekappt, "zeichen": len(text)}
+            "gekappt": gekappt, "zeichen": len(text), "protokoll": protokoll}
 
 
 def bilder_aus_docx_bytes(inhalt: bytes) -> list[str]:

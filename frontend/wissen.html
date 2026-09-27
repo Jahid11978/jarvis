@@ -293,6 +293,41 @@
         .wi-dest-fill { height: 100%; width: 0; background: var(--accent);
                         transition: width .35s ease; }
 
+        /* Lesefortschritt der Dateien: Drehkreis (`.wi-busy-spin`, derselbe
+           wie beim Upload oben) + Text. Schlanker als `.wi-busy` – hier steht
+           er unter einer Dateiliste, nicht allein im Container. `min-width: 0`
+           + Ellipse: ein langer Ordnerpfad darf die Zeile nicht sprengen. */
+        .wi-dest-exbusy { display: flex; align-items: center; gap: 10px; margin-top: 12px;
+                          font-size: 0.9rem; color: var(--text-primary); }
+        .wi-dest-exbusy[hidden] { display: none; }
+        .wi-dest-exbusy > span:last-child { min-width: 0; overflow: hidden;
+                          text-overflow: ellipsis; white-space: nowrap; }
+        .wi-dest-exbusy .wi-busy-spin { width: 16px; height: 16px; flex: 0 0 16px; border-width: 2px; }
+        .wi-dest-exzeile { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+        .wi-dest-exzeile .sec-btn { margin-top: 8px; padding: 4px 12px; font-size: 0.8rem; }
+        /* `.sec-btn` setzt `display` und schlaegt damit das hidden-Attribut –
+           der Knopf stand sonst schon WAEHREND des Lesens da (im Screenshot
+           gesehen; jsdom meldete `hidden === true`). */
+        .wi-dest-exzeile .sec-btn[hidden] { display: none; }
+        .wi-dest-log { margin-top: 8px; border: 1px solid var(--border); border-radius: 10px;
+                       padding: 6px 10px; max-height: 260px; overflow: auto;
+                       background: rgba(var(--fg-rgb), 0.03); font-size: 0.82rem; }
+        .wi-dest-logzeile { display: grid; grid-template-columns: 1.2em minmax(0, 1fr) minmax(0, 1.4fr);
+                            gap: 8px; padding: 4px 0; border-bottom: 1px solid var(--border); }
+        .wi-dest-logzeile:last-child { border-bottom: 0; }
+        .wi-dest-logzeile .nm { overflow-wrap: anywhere; color: var(--text-primary); }
+        .wi-dest-logzeile .gr { overflow-wrap: anywhere; color: var(--text-secondary); }
+        /* Farbig nur das ZEICHEN, der Grund bleibt `--text-secondary`: --danger
+           liegt als Textfarbe in beiden Themen unter 4,5:1 (siehe oben). */
+        .wi-dest-logzeile .zei { font-weight: 700; text-align: center; }
+        .wi-dest-logzeile.ok .zei { color: var(--success); }
+        .wi-dest-logzeile.fehler .zei { color: var(--danger); }
+        .wi-dest-logzeile.uebersprungen .zei { color: var(--warning); }
+        @media (max-width: 560px) {
+            .wi-dest-logzeile { grid-template-columns: 1.2em minmax(0, 1fr); }
+            .wi-dest-logzeile .gr { grid-column: 2; }
+        }
+
         .wi-dest-out { margin-top: 16px; border: 1px solid var(--border);
                        border-radius: 12px; padding: 14px 16px;
                        background: rgba(var(--fg-rgb), 0.03); }
@@ -582,7 +617,20 @@
                 <input type="file" id="wi-dest-dir" webkitdirectory directory multiple style="display:none;">
             </div>
             <div class="wi-list" id="wi-dest-filelist"></div>
-            <div class="wi-status" id="wi-dest-exstatus"></div>
+            <!-- Lesefortschritt: der Server meldet je Datei "i von n" (NDJSON).
+                 Drehkreis + Balken wie beim Destillieren – ein OCR-PDF liest
+                 Minuten, ohne Anzeige ist das von "hängt" nicht zu trennen. -->
+            <div class="wi-dest-exbusy" id="wi-dest-exbusy" hidden>
+                <span class="wi-busy-spin"></span><span id="wi-dest-exbusy-text"></span>
+            </div>
+            <div class="wi-dest-bar" id="wi-dest-exbar" hidden><div class="wi-dest-fill" id="wi-dest-exfill"></div></div>
+            <div class="wi-dest-exzeile">
+                <div class="wi-status" id="wi-dest-exstatus"></div>
+                <button type="button" class="sec-btn" id="wi-dest-logbtn" hidden
+                        aria-expanded="false" aria-controls="wi-dest-log"
+                        data-i18n="wissen.dest_log_show">Protokoll anzeigen</button>
+            </div>
+            <div class="wi-dest-log" id="wi-dest-log" hidden></div>
 
             <!-- 2. Text: gefüllt aus der Extraktion ODER frei eingegeben.
                  Das Feld ist bewusst bearbeitbar – der Benutzer soll vor dem
@@ -740,7 +788,7 @@
     <script src="/static/js/dlkey.js?v=2"></script>
     <script src="/static/js/cpubar.js?v=1"></script>
     <script src="/static/js/syspackages.js?v=2"></script>
-    <script src="/static/js/i18n.js?v=287"></script>
+    <script src="/static/js/i18n.js?v=288"></script>
     <script src="/static/js/theme.js?v=3"></script>
     <script src="/static/js/profile_switcher.js?v=5"></script>
     <script src="/static/js/issues.js?v=12"></script>
@@ -750,8 +798,8 @@
     <script src="/static/js/knowledge.js?v=121"></script>
     <script src="/static/js/sessions.js?v=8"></script>
     <script src="/static/js/logo_home.js?v=1"></script>
-    <script src="/static/js/wissen_destillat.js?v=2"></script>
-    <script src="/static/js/wissen.js?v=54"></script>
+    <script src="/static/js/wissen_destillat.js?v=3"></script>
+    <script src="/static/js/wissen.js?v=55"></script>
 <script src="/static/js/settings_btn.js?v=4"></script>
     <script src="/static/js/branding.js?v=26"></script>
 <!-- Avatar-Assistent (nur aktiv, wenn der Avatar-Skill eingeschaltet ist) -->

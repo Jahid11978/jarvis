@@ -14,7 +14,8 @@ Gemessen wird die EIGENSCHAFT:
   * Kontrast der Kopfzeile >= 4.5:1 in BEIDEN Themen
   * der Knopf ⛶ sitzt hinter "Angemeldet als" ganz oben in der Seite (weder
     in der Titelleiste noch in "Mein Wissen"), ein ECHTER Mausklick macht
-    ALLE Abschnitte fensterbreit, ein zweiter deckelt wieder auf 900 px
+    ALLE Abschnitte fensterbreit, ein zweiter deckelt wieder auf 900 px;
+    beide Zustaende ueberleben ein Neuladen (je Browser gemerkt)
   * ein ECHTER Klick auf einen Spaltenkopf sortiert
 
 Probeseite in einem WEGWERF-Ordner unter HOME (Register: nicht unter
@@ -369,11 +370,23 @@ try:
             p = BILDER / f"{thema}-maximiert.png"
             p.write_bytes(base64.b64decode(r["data"]))
             bilder.append(p)
+            # Der Zustand ueberlebt das NEULADEN (je Browser gemerkt, Vorgabe
+            # 2026-09-27) – im ECHTEN Browser gemessen: jsdom hat je Seite
+            # einen eigenen Speicher und sieht ein Neuladen nie.
+            laden(sock, thema)
+            neu = js(sock, breiten)
+            check("nach Neuladen: weiterhin maximiert",
+                  bool(neu["r"]) and all(x["w"] > 900 for x in neu["r"]), str(neu))
+            check("… und der Knopf sagt 'Verkleinern'",
+                  js(sock, "document.getElementById('wi-max').getAttribute('aria-pressed')") == "true")
             m = mitte(sock, "#wi-max")
             mausklick(sock, m["x"], m["y"])
             time.sleep(0.2)
             zur = js(sock, breiten)
             check("zweiter Klick: wieder auf 900 px gedeckelt", all(x["w"] <= 900 for x in zur["r"]), str(zur))
+            laden(sock, thema)
+            zur2 = js(sock, breiten)
+            check("nach Neuladen: bleibt verkleinert", bool(zur2["r"]) and all(x["w"] <= 900 for x in zur2["r"]), str(zur2))
 
             # ── schmales Fenster ───────────────────────────────────────────
             laden(sock, thema, breite=520)

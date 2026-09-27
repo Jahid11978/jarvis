@@ -24,6 +24,8 @@
     var quellen = [];        // Namen der erfolgreich gelesenen Dateien
     var destillat = '';      // rohes Markdown der letzten Antwort
     var laeuft = false;
+    var liest = false;       // Extraktion laeuft (Fortschrittszeile belegt)
+    var protokoll = null;    // [{name, art: ok|fehler|uebersprungen, grund, zeichen, bilder}]
 
     function $(id) { return document.getElementById(id); }
     function t(k, vars) {
@@ -209,6 +211,9 @@
     // Meldung davor ueberschriebe die Extraktion sofort wieder.
     function dateienNehmen(liste, weg) {
         if (!liste || !liste.length) return;
+        // Ein zweiter Lauf parallel zeichnete in DIESELBE Fortschrittszeile –
+        // "Datei 3 von 8" und "Datei 1 von 2" wechselten sich ab.
+        if (liest) { status('wi-dest-exstatus', t('wissen.dest_busy_wait'), 'err'); return; }
         var fd = new FormData();
         var neu = [];
         Array.prototype.forEach.call(liste, function (x) {
@@ -218,46 +223,178 @@
         });
         dateien = dateien.concat(neu);
         dateilisteZeichnen();
-        status('wi-dest-exstatus', t('wissen.dest_extracting'));
+        status('wi-dest-exstatus', '');
+        protokollSetzen(null);
+        leseStart(neu.length);
 
-        fetch('/api/wissen/destillat/extract', {
+        var fertig = null, fehlerText = '';
+        fetch('/api/wissen/destillat/extract?stream=1', {
             method: 'POST', headers: authH(), body: fd
         })
-            .then(function (r) { return r.json().then(function (d) { return { s: r.status, d: d }; }); })
-            .then(function (res) {
-                if (res.s !== 200 || !res.d.ok) {
-                    status('wi-dest-exstatus', res.d.error || t('wissen.dest_extract_failed'), 'err');
+            .then(function (r) {
+                return zeilenLesen(r, function (z) {
+                    if (z.art === 'datei') leseSchritt(z.i, z.n, z.name);
+                    else if (z.art === 'fertig') fertig = z;
+                    // Ohne `art`: Antwort VOR dem Strom (403/400/413) – ein
+                    // gewoehnliches JSON-Objekt mit `error`.
+                    else if (z.art === 'fehler' || z.error) fehlerText = z.error || '';
+                }).then(function () { return r.status; });
+            })
+            .then(function (code) {
+                leseEnde(!!fertig);
+                if (!fertig) {
+                    status('wi-dest-exstatus', fehlerText
+                        || (code === 200 ? t('wissen.dest_stream_broken')
+                                         : t('wissen.dest_extract_failed')), 'err');
                     return;
                 }
-                var d = res.d;
-                // Fehler je Datei an der ZEILE vermerken, nicht nur als Summe:
-                // "3 Fehler" sagt nicht, WELCHE Datei nicht lesbar war.
-                dateien.forEach(function (x) {
-                    if (d.fehler && d.fehler[x.name]) x.fehler = d.fehler[x.name];
-                });
-                dateilisteZeichnen();
-                bilder = d.bilder || [];
-                quellen = d.ok || [];
-
-                var ta = $('wi-dest-text');
-                if (ta) {
-                    // ANHAENGEN, nicht ersetzen: wer schon Text eingegeben oder
-                    // eine erste Datei gelesen hat, verliert ihn sonst.
-                    ta.value = ta.value.trim()
-                        ? ta.value.replace(/\s*$/, '') + '\n\n' + d.text : d.text;
-                    zaehlerZeichnen();
-                }
-                var teile = [t('wissen.dest_extracted', { n: (d.ok || []).length })];
-                var fehlZahl = Object.keys(d.fehler || {}).length;
-                if (fehlZahl) teile.push(t('wissen.dest_failed_n', { n: fehlZahl }));
-                // Eine Kuerzung wird BEZIFFERT, nie stillschweigend gemacht.
-                if (d.gekappt) teile.push(t('wissen.dest_capped'));
-                if (weg) teile.push(t('wissen.dest_dir_skipped', { n: weg }));
-                status('wi-dest-exstatus', teile.join(' · '), fehlZahl ? 'err' : 'ok');
+                extraktUebernehmen(fertig, weg);
             })
             .catch(function (e) {
+                leseEnde(false);
                 status('wi-dest-exstatus', String(e && e.message || e), 'err');
             });
+    }
+
+    // Antwort ZEILENWEISE (NDJSON) lesen, solange sie noch laeuft – erst das
+    // macht "Datei i von n" moeglich. Ohne lesbaren Strom (sehr alter Browser)
+    // kommt alles am Ende auf einmal: der Balken springt, das Ergebnis stimmt.
+    function zeilenLesen(r, jeZeile) {
+        var rest = '';
+        function zerlegen(schluss) {
+            var teile = rest.split('\n');
+            rest = schluss ? '' : teile.pop();
+            teile.forEach(function (z) {
+                if (!z.trim()) return;
+                var o = null;
+                try { o = JSON.parse(z); } catch (e) { return; }
+                if (o && typeof o === 'object') jeZeile(o);
+            });
+        }
+        if (r.body && r.body.getReader && window.TextDecoder) {
+            var leser = r.body.getReader(), dec = new window.TextDecoder();
+            return (function weiter() {
+                return leser.read().then(function (st) {
+                    if (st.done) { rest += dec.decode(); zerlegen(true); return; }
+                    rest += dec.decode(st.value, { stream: true });
+                    zerlegen(false);
+                    return weiter();
+                });
+            })();
+        }
+        return r.text().then(function (txt) { rest = String(txt || ''); zerlegen(true); });
+    }
+
+    function extraktUebernehmen(d, weg) {
+        // Fehler je Datei an der ZEILE vermerken, nicht nur als Summe:
+        // "3 Fehler" sagt nicht, WELCHE Datei nicht lesbar war.
+        dateien.forEach(function (x) {
+            if (d.fehler && d.fehler[x.name]) x.fehler = d.fehler[x.name];
+        });
+        dateilisteZeichnen();
+        bilder = d.bilder || [];
+        quellen = d.ok || [];
+
+        var ta = $('wi-dest-text');
+        if (ta && d.text) {
+            // ANHAENGEN, nicht ersetzen: wer schon Text eingegeben oder
+            // eine erste Datei gelesen hat, verliert ihn sonst.
+            ta.value = ta.value.trim()
+                ? ta.value.replace(/\s*$/, '') + '\n\n' + d.text : d.text;
+            zaehlerZeichnen();
+        }
+        var prot = d.protokoll || [];
+        var teile = [t('wissen.dest_extracted', { n: (d.ok || []).length })];
+        var fehlZahl = Object.keys(d.fehler || {}).length;
+        var wegZahl = prot.filter(function (p) { return p.art === 'uebersprungen'; }).length;
+        if (fehlZahl) teile.push(t('wissen.dest_failed_n', { n: fehlZahl }));
+        if (wegZahl) teile.push(t('wissen.dest_skipped_n', { n: wegZahl }));
+        // Eine Kuerzung wird BEZIFFERT, nie stillschweigend gemacht.
+        if (d.gekappt) teile.push(t('wissen.dest_capped'));
+        if (weg) teile.push(t('wissen.dest_dir_skipped', { n: weg }));
+        status('wi-dest-exstatus', teile.join(' · '), (fehlZahl || wegZahl) ? 'err' : 'ok');
+        protokollSetzen(prot);
+    }
+
+    // ── Lesefortschritt ────────────────────────────────────────────────
+    // Der Balken ist hier – anders als beim Destillieren – eine MESSUNG: der
+    // Server meldet jede Datei, BEVOR er sie liest. Waehrend Datei i laeuft,
+    // steht er deshalb auf (i-1)/n, nicht auf i/n – sonst stuende er bei der
+    // letzten, langsamsten Datei schon auf 100 %.
+    function leseFuellung(pct) {
+        var bar = $('wi-dest-exbar'), fill = $('wi-dest-exfill');
+        if (!bar || !fill) return;
+        if (pct == null) { bar.hidden = true; fill.style.width = '0%'; return; }
+        bar.hidden = false;
+        fill.style.width = Math.max(0, Math.min(100, pct)) + '%';
+    }
+    function leseText(txt) {
+        var box = $('wi-dest-exbusy'), el = $('wi-dest-exbusy-text');
+        if (!box || !el) return;
+        box.hidden = txt == null;
+        el.textContent = txt == null ? '' : txt;
+        el.title = txt == null ? '' : txt;
+    }
+    function leseStart(n) {
+        liest = true;
+        var drop = $('wi-dest-drop'); if (drop) drop.classList.add('disabled');
+        // Vor der ersten Zeile laeuft noch die UEBERTRAGUNG – bei grossen
+        // Ordnern die eigentliche Wartezeit. "0 von n" waere hier falsch.
+        leseText(t('wissen.dest_uploading', { n: n }));
+        leseFuellung(2);
+    }
+    function leseSchritt(i, n, name) {
+        leseText(t('wissen.dest_reading_n', { i: i, n: n, name: name || '' }));
+        leseFuellung(n ? (i - 1) / n * 100 : 0);
+    }
+    function leseEnde(erfolg) {
+        liest = false;
+        var drop = $('wi-dest-drop'); if (drop) drop.classList.remove('disabled');
+        leseText(null);
+        if (!erfolg) { leseFuellung(null); return; }
+        leseFuellung(100);
+        setTimeout(function () { if (!liest) leseFuellung(null); }, 1200);
+    }
+
+    // ── Protokoll ──────────────────────────────────────────────────────
+    // Welche Datei gelesen wurde und WARUM eine nicht – die Summe in der
+    // Statuszeile allein laesst den Benutzer raten.
+    function protokollSetzen(prot) {
+        protokoll = prot && prot.length ? prot : null;
+        var btn = $('wi-dest-logbtn'), box = $('wi-dest-log');
+        if (btn) btn.hidden = !protokoll;
+        if (!protokoll && box) box.hidden = true;
+        protokollZeichnen();
+    }
+    function protokollZeichnen() {
+        var btn = $('wi-dest-logbtn'), box = $('wi-dest-log');
+        if (!btn || !box) return;
+        var offen = !box.hidden;
+        var key = offen ? 'wissen.dest_log_hide' : 'wissen.dest_log_show';
+        // data-i18n MITZIEHEN: sonst setzt der naechste Sprachwechsel den
+        // Knopf auf "anzeigen", obwohl das Protokoll offen ist.
+        btn.setAttribute('data-i18n', key);
+        btn.textContent = t(key);
+        btn.setAttribute('aria-expanded', offen ? 'true' : 'false');
+        if (!protokoll) { box.innerHTML = ''; return; }
+        box.innerHTML = protokoll.map(function (p) {
+            var zei = p.art === 'ok' ? '✓' : p.art === 'fehler' ? '✗' : '–';
+            var gr = '';
+            if (p.art === 'ok') {
+                gr = t('wissen.dest_chars', { n: Number(p.zeichen || 0).toLocaleString() });
+                if (p.bilder) gr += ' · ' + t('wissen.dest_log_images', { n: p.bilder });
+            } else if (p.art === 'uebersprungen') {
+                gr = t('wissen.dest_log_skipped');
+            } else {
+                gr = p.grund || t('wissen.dest_unreadable');
+            }
+            var art = { ok: 1, fehler: 1, uebersprungen: 1 }[p.art] ? p.art : 'fehler';
+            return '<div class="wi-dest-logzeile ' + art + '">'
+                + '<span class="zei" aria-hidden="true">' + zei + '</span>'
+                + '<span class="nm">' + esc(p.name) + '</span>'
+                + '<span class="gr">' + esc(gr) + '</span>'
+                + '</div>';
+        }).join('');
     }
 
     // ── Ordner ──────────────────────────────────────────────────────────
@@ -565,6 +702,13 @@
             });
         }
 
+        var lb = $('wi-dest-logbtn');
+        if (lb) lb.addEventListener('click', function () {
+            var box = $('wi-dest-log'); if (!box) return;
+            box.hidden = !box.hidden;
+            protokollZeichnen();
+        });
+
         var ta = $('wi-dest-text');
         if (ta) ta.addEventListener('input', zaehlerZeichnen);
 
@@ -591,6 +735,7 @@
             if (p && !p.dataset.beruehrt) p.value = t('wissen.dest_prompt_default');
             if (g && !g.dataset.beruehrt) g.value = t('wissen.dest_gruppen_default');
             zaehlerZeichnen();
+            protokollZeichnen();
         });
         ['wi-dest-prompt', 'wi-dest-gruppen'].forEach(function (id) {
             var e = $(id);

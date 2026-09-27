@@ -891,8 +891,11 @@
     // 900-px-Deckelung von `.wi-wrap` faellt weg). Kein Vollbild eines
     // einzelnen Abschnitts mehr.
     //
-    // ⚠ DER ZUSTAND WIRD BEWUSST NICHT GEMERKT (wie /feedback): eine Seite,
-    // die beim naechsten Oeffnen noch breit ist, sieht wie ein Fehler aus.
+    // Der Zustand wird JE BROWSER GEMERKT (Vorgabe 2026-09-27, dritte Fassung
+    // – vorher bewusst nicht, wie /feedback). Gleicher Weg wie die Klapp-
+    // Zustaende der Abschnitte: localStorage, jeder Zugriff im try (privates
+    // Fenster / gesperrter Speicher = einfach nicht gemerkt, kein Fehler).
+    var _MAX_LS = 'jarvis_wissen_breit';
 
     function maxSetzen(an) {
         document.body.classList.toggle('wi-breit', !!an);
@@ -917,9 +920,14 @@
         var b = $('wi-max');
         if (!b || b._gebunden) return;
         b._gebunden = true;
+        var gemerkt = null;
+        try { gemerkt = localStorage.getItem(_MAX_LS); } catch (e) {}
+        if (gemerkt === '1') maxSetzen(true);
         b.addEventListener('click', function (ev) {
             ev.preventDefault();
-            maxSetzen(!document.body.classList.contains('wi-breit'));
+            var an = !document.body.classList.contains('wi-breit');
+            maxSetzen(an);
+            try { localStorage.setItem(_MAX_LS, an ? '1' : '0'); } catch (e) {}
         });
         // KEIN Escape-Kuerzel mehr: die Seite ist kein Overlay, und Escape
         // schliesst hier Dialoge – das verkleinerte sonst nebenbei die Seite.

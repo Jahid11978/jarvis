@@ -666,8 +666,20 @@ check("Uebernehmen: Benutzer kommt aus der ANMELDUNG, nicht aus dem Rumpf",
 _ext = ast.get_source_segment(MAIN, _fn["wissen_destillat_extract"]) if "wissen_destillat_extract" in _fn else ""
 # ⚠ Blockierende Arbeit (pdfplumber, OCR, Tika) gehoert NIE in den Event-Loop –
 # sonst steht der Dienst fuer ALLE (20-Sekunden-Freeze, Register).
-check("Extract: Extraktion laeuft ueber asyncio.to_thread",
-      "asyncio.to_thread" in _ext)
+# ⚠ AM AST, NICHT AM VORKOMMEN: seit dem Strom-Zweig (2026-09-27) steht
+# `asyncio.to_thread` zweimal im Endpunkt – eine Vorkommens-Pruefung blieb
+# gruen, als der Nicht-Strom-Pfad wieder direkt im Event-Loop lief (die
+# Gegenprobe war stumm). Regel: KEIN direkter Aufruf von `_wd.extrahiere`,
+# und jeder Verweis darauf ist erstes Argument eines `to_thread`.
+_ext_k = _fn.get("wissen_destillat_extract")
+_direkt = [c for c in ast.walk(_ext_k) if isinstance(c, ast.Call)
+           and ast.unparse(c.func) == "_wd.extrahiere"] if _ext_k else []
+_im_thread = [c for c in ast.walk(_ext_k) if isinstance(c, ast.Call)
+              and ast.unparse(c.func) == "asyncio.to_thread" and c.args
+              and ast.unparse(c.args[0]) == "_wd.extrahiere"] if _ext_k else []
+check("Extract: Extraktion laeuft ueber asyncio.to_thread (kein direkter Aufruf)",
+      bool(_ext_k) and not _direkt and len(_im_thread) >= 2,
+      f"direkt: {len(_direkt)}, im Thread: {len(_im_thread)}")
 check("Extract: Upload ist gedeckelt", "413" in _ext)
 
 
@@ -695,6 +707,106 @@ check("Frontend holt den Scope NICHT selbst (eine Quelle)",
       not re.search(r"fetch\(\s*['\"][^'\"]*wissen/scope", JS))
 check("… und bekommt ihn ueber die init-Schnittstelle",
       "function init(" in JS and "opt.scope" in JS)
+
+
+# ════════════════════════════════════════════════════════════════════════════
+section("13. Lesefortschritt und Protokoll (Wunsch 2026-09-27: 'x von y', welche Datei, welcher Fehler)")
+# Der Leser `_text_aus_datei` braucht die ganze Jarvis-Extraktion; hier steht
+# eine Attrappe mit der ECHTEN Signatur `(name, inhalt) -> (text|None, grund)`.
+_leser_echt = wd._text_aus_datei
+_max_echt = wd.MAX_TEXT
+
+
+def _leser_attrappe(name, inhalt):
+    if name.endswith(".kaputt"):
+        return None, "Format .kaputt wird nicht unterstützt."
+    return inhalt.decode("utf-8"), ""
+
+
+wd._text_aus_datei = _leser_attrappe
+try:
+    _rufe = []
+    _r = sicher(wd.extrahiere,
+                [("a.txt", b"Alpha"), ("b.kaputt", b"x"), ("c.txt", b"Gamma")],
+                lambda i, n, name: _rufe.append((i, n, name)))
+    # Positivkontrolle: ohne Ergebnis-dict ist jede Pruefung darunter sinnlos.
+    if not isinstance(_r, dict):
+        print(f"  \033[31m✗\033[0m extrahiere() lieferte kein dict: {_r!r} – Abbruch")
+        sys.exit(2)
+    check("melde() kommt je Datei, 1-basiert, mit Gesamtzahl und Namen",
+          _rufe == [(1, 3, "a.txt"), (2, 3, "b.kaputt"), (3, 3, "c.txt")], repr(_rufe))
+    _prot = _r.get("protokoll") or []
+    check("protokoll nennt JEDE Datei in Reihenfolge",
+          [p.get("name") for p in _prot] == ["a.txt", "b.kaputt", "c.txt"], repr(_prot))
+    check("… mit Ausgang ok / fehler",
+          [p.get("art") for p in _prot] == ["ok", "fehler", "ok"], repr(_prot))
+    _f = [p for p in _prot if p.get("art") == "fehler"]
+    check("… und beim Fehler steht der GRUND (nicht nur 'nicht lesbar')",
+          bool(_f) and "nicht unterstützt" in (_f[0].get("grund") or ""), repr(_f))
+    _o = [p for p in _prot if p.get("art") == "ok"]
+    check("… und beim Erfolg die Zeichenzahl der Datei",
+          bool(_o) and _o[0].get("zeichen") == 5, repr(_o))
+    check("ok/fehler bleiben wie bisher (Rueckwaerts)",
+          _r.get("ok") == ["a.txt", "c.txt"] and list((_r.get("fehler") or {})) == ["b.kaputt"])
+
+    # Ein Fehler im Rueckruf darf die Extraktion NICHT abbrechen.
+    def _wirft(i, n, name):
+        raise RuntimeError("Anzeige kaputt")
+    _r2 = sicher(wd.extrahiere, [("a.txt", b"Alpha")], _wirft)
+    check("ein werfender Rueckruf bricht die Extraktion nicht ab",
+          isinstance(_r2, dict) and _r2.get("ok") == ["a.txt"], repr(_r2))
+    check("ohne Rueckruf laeuft es wie bisher",
+          isinstance(sicher(wd.extrahiere, [("a.txt", b"Alpha")]), dict))
+
+    # Textgrenze: die Dateien DAHINTER stehen als 'uebersprungen' im Protokoll –
+    # vorher waren sie weder in ok noch in fehler, also spurlos.
+    wd.MAX_TEXT = 30
+    _rufe = []
+    _r3 = sicher(wd.extrahiere,
+                 [("a.txt", b"A" * 40), ("b.txt", b"B"), ("c.txt", b"C")],
+                 lambda i, n, name: _rufe.append(i))
+    _p3 = (_r3.get("protokoll") or []) if isinstance(_r3, dict) else []
+    check("Textgrenze: gekappt gemeldet", isinstance(_r3, dict) and _r3.get("gekappt") is True)
+    check("… die Dateien dahinter stehen als 'uebersprungen' im Protokoll",
+          [p.get("art") for p in _p3] == ["ok", "uebersprungen", "uebersprungen"], repr(_p3))
+    check("… und werden NICHT mehr gelesen (kein melde() fuer sie)", _rufe == [1], repr(_rufe))
+finally:
+    wd._text_aus_datei = _leser_echt
+    wd.MAX_TEXT = _max_echt
+
+# Der Strom-Zweig des Endpunkts – als REGELN ueber den AST.
+_ext_fn = _fn.get("wissen_destillat_extract")
+_strom = None
+if _ext_fn:
+    for _k in ast.walk(_ext_fn):
+        if isinstance(_k, ast.AsyncFunctionDef) and _k.name == "_strom":
+            _strom = _k
+check("Extract: es gibt einen Strom-Zweig (_strom)", _strom is not None)
+_strom_src = ast.get_source_segment(MAIN, _strom) if _strom else ""
+# ⚠ AM AUFRUF gemessen, nicht am Vorkommen: `asyncio.to_thread(_wd.extrahiere, …, _melde)`.
+_tt = [c for c in ast.walk(_strom) if isinstance(c, ast.Call)
+       and isinstance(c.func, ast.Attribute) and c.func.attr == "to_thread"] if _strom else []
+check("… die Extraktion im Strom laeuft ueber asyncio.to_thread (nie im Event-Loop)",
+      any(len(c.args) >= 3 and ast.unparse(c.args[0]) == "_wd.extrahiere"
+          and ast.unparse(c.args[2]) == "_melde" for c in _tt),
+      [ast.unparse(c) for c in _tt])
+_meld = None
+if _ext_fn:
+    for _k in ast.walk(_ext_fn):
+        if isinstance(_k, ast.FunctionDef) and _k.name == "_melde":
+            _meld = _k
+# Der Rueckruf laeuft im THREAD – eine asyncio.Queue direkt zu fuellen waere
+# nicht threadsicher.
+check("… der Rueckruf uebergibt per call_soon_threadsafe",
+      bool(_meld) and any(isinstance(c, ast.Call) and isinstance(c.func, ast.Attribute)
+                          and c.func.attr == "call_soon_threadsafe" for c in ast.walk(_meld)))
+check("… Fehler im Strom kommen als Zeile art=fehler (nicht als Abbruch ohne Ende)",
+      '"art": "fehler"' in _strom_src and '"art": "fertig"' in _strom_src)
+_ext_src = ast.get_source_segment(MAIN, _ext_fn) if _ext_fn else ""
+_iStrom = _ext_src.find("_strom()")
+_iDeckel = _ext_src.find("413")
+check("… der Upload-Deckel greift VOR dem Strom", 0 <= _iDeckel < _iStrom, f"{_iDeckel} / {_iStrom}")
+check("… Antworttyp application/x-ndjson", "application/x-ndjson" in _ext_src)
 
 
 print(f"\n\033[1mErgebnis: {OK}/{OK + FAIL}\033[0m")

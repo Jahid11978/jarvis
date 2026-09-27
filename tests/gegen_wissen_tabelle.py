@@ -147,6 +147,13 @@ PROBEN = [
      "        var k = 'wissen.maximize';", JS_W),
     ("Zeichen wechselt nicht", JS,
      "        b.innerHTML = an ? '&#128471;' : '&#9974;';", "        b.innerHTML = '&#9974;';", JS_W),
+    ("gemerkter Zustand wird beim Laden nicht angewandt", JS,
+     "        if (gemerkt === '1') maxSetzen(true);\n", "", JS_W),
+    ("Klick merkt den Zustand nicht", JS,
+     "            try { localStorage.setItem(_MAX_LS, an ? '1' : '0'); } catch (e) {}\n", "", JS_W),
+    ("gemerkt wird nur die Klasse, der Knopf bleibt auf 'Maximieren'", JS,
+     "        if (gemerkt === '1') maxSetzen(true);\n",
+     "        if (gemerkt === '1') document.body.classList.add('wi-breit');\n", JS_W),
 
     # ── Oeffnen von Freigabe-Dateien (GET /api/wissen/file) ─────────────────
     ("⚠ Altstand: Schluessel wieder gegen PROJECT_ROOT aufgeloest (89/89 404 auf ECHT)", MAIN,
