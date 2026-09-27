@@ -119,6 +119,13 @@ skills_from_openclaw/
 .claude/*
 !.claude/skills/
 !.claude/hooks/
+# ⚠ EINE AUSNAHME VON DER AUSNAHME: `code-delegate` ist KEINE Arbeitsanweisung
+# des Projekts, sondern eine pro INSTALLATION erzeugte Kopie – der Server stellt
+# sie unter /claude/skill.md aus, bereits auf seine Adresse ausgestellt. Genau
+# deshalb hatte sie am 2026-08-30 die DEV-Adresse VIERMAL fest eingesetzt (steht
+# als Leck-Befund in CLAUDE.md). Sie gehoert neben den Schluessel: ausserhalb des
+# Repos. Wer sie braucht, laedt sie im Bereich /claude herunter.
+.claude/skills/code-delegate/
 
 # ─── Temp & Entwicklungsdateien ─────────────────────────────────────────────
 patch_main.py
