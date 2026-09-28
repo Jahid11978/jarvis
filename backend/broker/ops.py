@@ -40,7 +40,8 @@ def _norm_cmd(cmd: str) -> str:
     return re.sub(r"\s+", " ", (cmd or "").strip())[:200]
 
 
-def _run(cmd, timeout=30, input_text=None, neutrale_sprache=False):
+def _run(cmd, timeout=30, input_text=None, neutrale_sprache=False,
+         umgebung_zusatz=None):
     """Befehl ausfuehren.
 
     ``neutrale_sprache=True`` erzwingt LC_ALL=C. Noetig ueberall dort, wo eine
@@ -48,14 +49,21 @@ def _run(cmd, timeout=30, input_text=None, neutrale_sprache=False):
     ``mount`` "Die Operation ist jetzt in Bearbeitung." statt "Operation now in
     progress" – live auf DEV gemessen (2026-09-04), und jedes Muster, das auf
     den englischen Wortlaut zielt, greift dort ins Leere.
+
+    ``umgebung_zusatz``: zusaetzliche Umgebungsvariablen nur fuer DIESEN
+    Aufruf (z.B. ``PASSWD`` fuer mount.cifs – ein Kennwort gehoert nicht in
+    die Argumentliste).
     """
     import os as _os
     umgebung = None
-    if neutrale_sprache:
+    if neutrale_sprache or umgebung_zusatz:
         umgebung = dict(_os.environ)
+    if neutrale_sprache:
         umgebung["LC_ALL"] = "C"
         umgebung.pop("LANG", None)
         umgebung.pop("LANGUAGE", None)
+    if umgebung_zusatz:
+        umgebung.update(umgebung_zusatz)
     try:
         r = subprocess.run(cmd, capture_output=True, text=True,
                            timeout=timeout, input=input_text, env=umgebung)
@@ -536,6 +544,50 @@ def _mp_freimachen(mp: str) -> str:
             "nicht loesen laesst - der neue Versuch kann daran scheitern. ")
 
 
+def _cifs_anmeldung(username: str, password: str):
+    """(mount-Optionen, Zusatz-Umgebung, Fehlertext) fuer eine SMB-Anmeldung.
+
+    ⚠ ZWEI GEMESSENE FEHLER (ECHT/DEV, 2026-09-28, mount.cifs 7.4):
+
+    1. ``username=NEXUS/benutzer`` und ``username=NEXUS\\benutzer`` werden
+       NICHT in Domaene und Benutzer zerlegt – der ganze String geht als
+       Benutzername zum Server, der lehnt ab (``Send error in SessSetup =
+       -13``), obwohl dieselben Daten mit smbclient und unter Windows
+       funktionieren. Erst ``username=benutzer,domain=NEXUS`` meldet an.
+       Die Oberflaeche empfiehlt "DOMAENE\\benutzer" – also wird hier zerlegt.
+    2. Das Kennwort stand als ``password=...`` in der Optionsliste. Ein Komma
+       darin beendet die Option, der Rest wird als eigene Option gelesen.
+       Es geht deshalb ueber ``PASSWD`` in der Umgebung (liest mount.cifs
+       selbst, beliebige Zeichen) – und steht nebenbei nicht mehr in der
+       Prozessliste.
+
+    ``benutzer@domain.tld`` bleibt unveraendert, das nimmt der Server so an.
+    """
+    user = (username or "").strip()
+    if not user:
+        return "ro,guest", None, ""
+    domain = ""
+    for trenner in ("\\", "/"):
+        if trenner in user:
+            domain, _, user = user.partition(trenner)
+            domain, user = domain.strip(), user.strip()
+            break
+    if not user:
+        return "", None, ("Der Benutzername fehlt – eingetragen ist nur die "
+                          "Domaene. Beispiel: DOMAENE\\benutzer")
+    if "," in user or "," in domain:
+        return "", None, ("Benutzername und Domaene duerfen kein Komma "
+                          "enthalten.")
+    opts = f"ro,username={user}"
+    if domain:
+        opts += f",domain={domain}"
+    if not password:
+        # Leeres PASSWD liesse mount.cifs nach einem Kennwort fragen (ohne
+        # Terminal: Abbruch). Ein leeres password= enthaelt kein Komma.
+        return opts + ",password=", None, ""
+    return opts, {"PASSWD": password}, ""
+
+
 def _op_mount_share(args, stream):
     """Netzwerk-Freigabe (SMB/NFS/WebDAV) read-only mounten – nur unter /mnt/."""
     from pathlib import Path
@@ -569,12 +621,11 @@ def _op_mount_share(args, stream):
             f"{vorlauf}Der Einhaengepunkt {mp} ist nicht benutzbar "
             f"({e.strerror or e}). Haengt dort noch ein alter Mount? "
             f"'umount -l {mp}' loest ihn.")}
+    umgebung_zusatz = None
     if mount_type == "smb":
-        opts = "ro"
-        if username:
-            opts += f",username={username},password={password}"
-        else:
-            opts += ",guest"
+        opts, umgebung_zusatz, fehler = _cifs_anmeldung(username, password)
+        if fehler:
+            return {"ok": False, "rc": -1, "stdout": "", "stderr": fehler}
         cmd = ["mount", "-t", "cifs", source, mp, "-o", opts]
     elif mount_type == "nfs":
         cmd = ["mount", "-t", "nfs", "-o", "ro", source, mp]
@@ -595,7 +646,8 @@ def _op_mount_share(args, stream):
         return {"ok": False, "rc": -1, "stdout": "", "stderr": f"Unbekannter Typ: {mount_type}"}
     # Sprachneutral, weil main.py::_mount_fehler_deuten die Ausgabe deutet.
     _t0 = time.time()
-    erg = _run(cmd, timeout=20, neutrale_sprache=True)
+    erg = _run(cmd, timeout=20, neutrale_sprache=True,
+               umgebung_zusatz=umgebung_zusatz)
     if not erg.get("ok"):
         # Der Kernel weiss den Grund – mount reicht ihn nicht durch.
         grund = _kernel_grund(_t0, source)
