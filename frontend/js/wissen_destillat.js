@@ -669,7 +669,10 @@
 
     function gruppenBoxen() {
         if (!SCOPE || !SCOPE.groups) return '';
-        return SCOPE.groups.map(function (g) {
+        // "Alle"/"Keine" aus wissen.js (dort auch der Klick-Hoerer).
+        var wahl = window.WissenGruppenWahl;
+        var leiste = wahl ? wahl.leiste('wi-grp-dest', SCOPE.groups.length) : '';
+        return leiste + SCOPE.groups.map(function (g) {
             // Bei genau EINER Gruppe gibt es nichts zu waehlen – vorbelegen.
             var an = SCOPE.groups.length === 1;
             return '<label class="wi-grpbox" style="border-color:' + esc(g.color) + ';">'

@@ -306,11 +306,47 @@
             .catch(function () { folderStatus(t('wissen.conn_error'), true); });
     }
 
+    // "Alle" / "Keine" vor einer Reihe Gruppen-Kaestchen. Nur ab ZWEI Gruppen -
+    // bei einer gibt es nichts zu waehlen. Die Knoepfe stehen AUSSERHALB der
+    // <label>; der Klick setzt die Kaestchen und feuert je geaendertem Kaestchen
+    // ein bubbelndes `change` - alle vorhandenen Hoerer (Ablage-Sperre,
+    // Filter-Cookie, CF-Knopf) laufen so ohne eigenen Sonderweg.
+    // Auch von wissen_destillat.js genutzt (window.WissenGruppenWahl).
+    function groupBulkBar(cls, anzahl) {
+        if (!(anzahl > 1)) return '';
+        return '<span class="wi-grp-bulk">'
+            + '<button type="button" class="sec-btn small wi-grp-bulkbtn" data-grp-cls="' + esc(cls) + '" data-grp-an="1"'
+            + ' data-i18n="wissen.grp_all" data-i18n-title="wissen.grp_all_title" title="' + esc(t('wissen.grp_all_title')) + '">'
+            + esc(t('wissen.grp_all')) + '</button>'
+            + '<button type="button" class="sec-btn small wi-grp-bulkbtn" data-grp-cls="' + esc(cls) + '" data-grp-an="0"'
+            + ' data-i18n="wissen.grp_none" data-i18n-title="wissen.grp_none_title" title="' + esc(t('wissen.grp_none_title')) + '">'
+            + esc(t('wissen.grp_none')) + '</button>'
+            + '</span>';
+    }
+    // Delegiert am Dokument: die Kaestchen-Reihen entstehen erst beim Zeichnen.
+    // Gesucht wird nur im Container der Leiste - dieselbe Klasse kann (z.B. 'rev')
+    // an anderer Stelle nicht mitgeschaltet werden.
+    document.addEventListener('click', function (ev) {
+        var btn = ev.target && ev.target.closest ? ev.target.closest('.wi-grp-bulkbtn') : null;
+        if (!btn) return;
+        var bar = btn.closest('.wi-grp-bulk');
+        var box = bar && bar.parentNode;
+        var cls = btn.getAttribute('data-grp-cls') || '';
+        if (!box || !/^wi-grp-[a-z]+$/.test(cls)) return;
+        var an = btn.getAttribute('data-grp-an') === '1';
+        box.querySelectorAll('input[type="checkbox"].' + cls).forEach(function (cb) {
+            if (cb.disabled || cb.checked === an) return;
+            cb.checked = an;
+            cb.dispatchEvent(new Event('change', { bubbles: true }));
+        });
+    });
+    window.WissenGruppenWahl = { leiste: groupBulkBar };
+
     function groupBoxes(prefix, preselect) {
         // Im Review ('rev') werden standardmaessig die im Extraktor ('up') gewaehlten
         // Wissensgruppen vorbelegt, damit die Auswahl nach „Prüfen" erhalten bleibt.
         var pre = preselect || (prefix === 'rev' ? checkedGroups('up') : []);
-        return SCOPE.groups.map(function (g) {
+        return groupBulkBar('wi-grp-' + prefix, SCOPE.groups.length) + SCOPE.groups.map(function (g) {
             var checked = (SCOPE.groups.length === 1) || (pre.indexOf(g.id) !== -1);
             return '<label class="wi-grpbox" style="border-color:' + esc(g.color) + ';">'
                 + '<input type="checkbox" class="wi-grp-' + prefix + '" value="' + esc(g.id) + '"'
@@ -698,7 +734,7 @@
         if (!groups.length) { wrap.style.display = 'none'; return; }
         wrap.style.display = '';
         var off = hiddenGroups();
-        boxes.innerHTML = groups.map(function (g) {
+        boxes.innerHTML = groupBulkBar('wi-grp-flt', groups.length) + groups.map(function (g) {
             var on = off.indexOf(g.id) === -1;   // Vorgabe: gewaehlt
             return '<label class="wi-grpbox" style="border-color:' + esc(g.color) + ';">'
                 + '<input type="checkbox" class="wi-grp-flt" value="' + esc(g.id) + '"'
