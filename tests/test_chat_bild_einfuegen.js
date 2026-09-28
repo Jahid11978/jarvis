@@ -86,7 +86,10 @@ function schneide(name) {
 const _iMag = CHATJS.indexOf('const _BILD_MAGIE');
 const KONST = CHATJS.slice(CHATJS.indexOf('const _EXEC_EXT'),
                            CHATJS.indexOf('const _MAX_FILE_BYTES') + 60)
-            + '\n' + (_iMag > 0 ? CHATJS.slice(_iMag, CHATJS.indexOf('];', _iMag) + 2) : '');
+            + '\n' + (_iMag > 0 ? CHATJS.slice(_iMag, CHATJS.indexOf('];', _iMag) + 2) : '')
+            // Office-Erkennung (2026-09-28): zwei Einzeiler-Konstanten.
+            + '\n' + (CHATJS.match(/const _OFFICE_HTML = [^\n]*/) || [''])[0]
+            + '\n' + (CHATJS.match(/const _TABELLE_INLINE_MAX = [^\n]*/) || [''])[0];
 // Der Bindeblock des Eingabefeldes (paste + drop) – ueber den Anker in seinem
 // Rumpf gefunden, damit eine Umbenennung nicht still am Schnitt vorbeilaeuft.
 const ANKER = CHATJS.indexOf("const dt = e.clipboardData");
@@ -94,9 +97,11 @@ const BIND  = ANKER > 0 ? klammern(CHATJS, CHATJS.lastIndexOf('if (msgInput) {',
 
 const TEILE = ['_bildMimeAusBytes', 'renderPreviews', 'addFiles', '_renderAttachments',
                '_renderFileChip', '_dataUrl', 'escapeHtml', 'openLightbox', '_lbUpdate',
-               'showCtxMenu', 'addLongPress'].map(schneide);
+               'showCtxMenu', 'addLongPress', '_mdZelle', '_rasterAusHtml', '_rasterAusTsv',
+               '_rasterZuMarkdown', '_officeEinfuegen'].map(schneide);
 // Positivkontrolle des Schnitts: ein leerer Schnitt macht jede Aussage wertlos.
-if (TEILE.some(t => !t) || !BIND || !/_BILD_MAGIE\s*=\s*\[/.test(KONST)) {
+if (TEILE.some(t => !t) || !BIND || !/_BILD_MAGIE\s*=\s*\[/.test(KONST)
+    || !/_OFFICE_HTML = \//.test(KONST) || !/_TABELLE_INLINE_MAX = \d/.test(KONST)) {
     console.log('ABBRUCH: Schnitt leer – die Messung haette keine Aussage'); process.exit(2);
 }
 
@@ -146,9 +151,10 @@ const datei = (w, name, mime, bytes) =>
 /* Ein `paste`-Ereignis wie im Browser: jsdom kennt keine ClipboardEvent-Daten,
  * deshalb wird `clipboardData` am Ereignis gestellt. Der ZUHOERER ist der
  * echte – gemessen wird, was er daraus macht. */
-function einfuegen(w, eintraege) {
+function einfuegen(w, eintraege, fassungen) {
     const ev = new w.Event('paste', { bubbles: true, cancelable: true });
-    ev.clipboardData = { items: eintraege };
+    // getData() wie im Browser: eine fehlende Fassung liefert '' (kein Wurf).
+    ev.clipboardData = { items: eintraege, getData: (t) => (fassungen || {})[t] || '' };
     w.document.getElementById('msg-input').dispatchEvent(ev);
     return ev;
 }
@@ -264,6 +270,103 @@ abschnitt('5. Regel: es gibt nur EINEN Weg zum Anhang');
     pruefe(!/_pendingAttachments\.push/.test(BIND), 'er baut den Anhang NICHT selbst');
     pruefe(BIND.indexOf('dateien.length === 0') < BIND.indexOf('preventDefault'),
         'preventDefault() steht HINTER der Pruefung auf Dateien');
+}
+
+abschnitt('6. Aus Excel/Word kopiert: der INHALT, nicht das Bild (2026-09-28)');
+{
+    // Die Fassungen so, wie Excel sie liefert: HTML mit ProgId-Kennung,
+    // Tabulator-Text UND ein PNG der Auswahl.
+    const EXCEL_HTML = '<html xmlns:o="urn:schemas-microsoft-com:office:office"><head>'
+        + '<meta name=ProgId content=Excel.Sheet></head><body><!--StartFragment-->'
+        + '<table><tr><td>Name</td><td>Betrag</td><td></td></tr>'
+        + '<tr><td>M&uuml;ller | GmbH</td><td>1.234,50</td><td></td></tr>'
+        + '<tr><td colspan=2>Summe</td><td>9</td></tr>'
+        + '<tr><td></td><td></td><td></td></tr></table><!--EndFragment--></body></html>';
+    const EXCEL_TSV = 'Name\tBetrag\t\r\nMüller | GmbH\t1.234,50\t\r\nSumme\t\t9\r\n';
+    const png = w => ({ kind: 'file', getAsFile: () => datei(w, '', 'image/png', PNG) });
+
+    const { w } = fenster();
+    const el = w.document.getElementById('msg-input');
+    el.value = 'Bitte summieren:'; el.selectionStart = el.selectionEnd = el.value.length;
+    let eingabe = 0; el.addEventListener('input', () => eingabe++);
+    const ev = einfuegen(w, [png(w)], { 'text/html': EXCEL_HTML, 'text/plain': EXCEL_TSV });
+    await new Promise(r => setTimeout(r, 30));
+    pruefe(w.__anh().length === 0, 'Excel-Auswahl: KEIN Bild-Anhang', 'Anhaenge: ' + w.__anh().length);
+    pruefe(ev.defaultPrevented, 'der Vorgang wird abgefangen (sonst kaeme der Tabulator-Text doppelt)');
+    const soll = 'Bitte summieren:\n| Name | Betrag |  |\n| --- | --- | --- |\n'
+               + '| Müller \\| GmbH | 1.234,50 |  |\n| Summe |  | 9 |\n';
+    pruefe(el.value === soll, 'die Tabelle steht als Markdown im Eingabefeld, auf eigener Zeile',
+        JSON.stringify(el.value));
+    pruefe(eingabe === 1, 'das input-Ereignis feuert (Senden-Knopf, Hoehe)', 'ist: ' + eingabe);
+    pruefe(el.selectionStart === el.value.length, 'die Einfuegemarke steht hinter der Tabelle');
+
+    // Rueckfall: Office-HTML ohne <table> -> die Tabulator-Fassung.
+    const { w: w2 } = fenster();
+    einfuegen(w2, [png(w2)], { 'text/html': '<meta name=ProgId content=Excel.Sheet><p>x</p>',
+                               'text/plain': 'a\t"b\nc"\td\r\n1\t2\t3\r\n' });
+    await new Promise(r => setTimeout(r, 30));
+    pruefe(w2.document.getElementById('msg-input').value === '| a | b c | d |\n| --- | --- | --- |\n| 1 | 2 | 3 |\n',
+        'ohne HTML-Tabelle: Tabulator-Text (mit Umbruch in "…") wird zur Markdown-Tabelle',
+        JSON.stringify(w2.document.getElementById('msg-input').value));
+
+    // Eine einzelne Zelle ist keine Tabelle.
+    const { w: w3 } = fenster();
+    einfuegen(w3, [png(w3)], { 'text/html': '<meta name=ProgId content=Excel.Sheet><table><tr><td>42</td></tr></table>',
+                               'text/plain': '42\r\n' });
+    await new Promise(r => setTimeout(r, 30));
+    pruefe(w3.document.getElementById('msg-input').value === '42\n' && w3.__anh().length === 0,
+        'eine einzelne Excel-Zelle kommt als ihr Wert, nicht als Tabelle',
+        JSON.stringify(w3.document.getElementById('msg-input').value));
+
+    // Grosse Tabelle -> Textanhang ueber addFiles(), NICHT das Bild.
+    const { w: w4 } = fenster();
+    let gross = '<meta name=ProgId content=Excel.Sheet><table>';
+    for (let i = 0; i < 400; i++) gross += `<tr><td>Zeile ${i}</td><td>Wert ${i * 7}</td></tr>`;
+    einfuegen(w4, [png(w4)], { 'text/html': gross + '</table>', 'text/plain': 'x' });
+    await new Promise(r => setTimeout(r, 60));
+    const g = (w4.__anh() || [])[0] || {};
+    pruefe(w4.__anh().length === 1 && /\.md$/.test(g.name || '') && g.type === 'document',
+        'eine grosse Tabelle wird als .md-Textanhang angehaengt, nicht als Bild',
+        `name=${g.name} type=${g.type}`);
+    pruefe(w4.document.getElementById('msg-input').value === '', 'das Eingabefeld bleibt dabei leer');
+    let gtext = '';
+    try { gtext = Buffer.from(g.data || '', 'base64').toString('utf8'); } catch (e) { /* bleibt leer */ }
+    pruefe(gtext.startsWith('| Zeile 0 | Wert 0 |') && gtext.includes('| Zeile 399 | Wert 2793 |'),
+        'der Anhang enthaelt die ganze Tabelle');
+
+    // Word-Text: Bild daneben, aber kein <img> im HTML -> Browser fuegt Text ein.
+    const { w: w5 } = fenster();
+    const ev5 = einfuegen(w5, [png(w5)], { 'text/html': '<html xmlns:w="urn:schemas-microsoft-com:office:word"><meta name=ProgId content=Word.Document><p>Hallo</p>',
+                                           'text/plain': 'Hallo' });
+    await new Promise(r => setTimeout(r, 30));
+    pruefe(!ev5.defaultPrevented && w5.__anh().length === 0,
+        'Word-Text: nicht abgefangen, kein Bild – der Browser fuegt den Text ein');
+
+    // Kopierte Grafik aus Word, MIT Beschriftung: text/plain ist dann nicht
+    // leer – entscheiden muss das <img> im HTML, das Bild IST gemeint.
+    const { w: w6 } = fenster();
+    einfuegen(w6, [png(w6)], { 'text/html': '<meta name=ProgId content=Word.Document><p><img src="file:///x.png"></p><p>Abbildung 1: Umsatz</p>',
+                               'text/plain': 'Abbildung 1: Umsatz' });
+    await new Promise(r => setTimeout(r, 30));
+    pruefe(w6.__anh().length === 1 && w6.__anh()[0].type === 'image',
+        'kopierte Grafik aus Word (mit Beschriftung) bleibt ein Bild');
+
+    // GEGENPROBE: Bild aus einer Webseite (HTML daneben, aber keine Office-Kennung).
+    const { w: w7 } = fenster();
+    einfuegen(w7, [png(w7)], { 'text/html': '<table><tr><td><img src="https://x/y.png"></td><td>a</td></tr></table>',
+                               'text/plain': 'a\tb' });
+    await new Promise(r => setTimeout(r, 30));
+    pruefe(w7.__anh().length === 1 && w7.__anh()[0].type === 'image'
+           && w7.document.getElementById('msg-input').value === '',
+        'Bild aus einer Webseite (auch in einer Tabelle): bleibt der Bild-Anhang');
+
+    // LibreOffice Calc
+    const { w: w8 } = fenster();
+    einfuegen(w8, [png(w8)], { 'text/html': '<meta name="generator" content="LibreOffice 24.2"><table><tr><td>a</td><td>b</td></tr></table>',
+                               'text/plain': 'a\tb' });
+    await new Promise(r => setTimeout(r, 30));
+    pruefe(w8.document.getElementById('msg-input').value === '| a | b |\n| --- | --- |\n' && w8.__anh().length === 0,
+        'LibreOffice Calc wird wie Excel behandelt');
 }
 
 console.log(`\nErgebnis: ${ok} OK, ${fail} FAIL`);

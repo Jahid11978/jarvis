@@ -741,6 +741,117 @@
         return '';
     }
 
+    /* ⚠ EXCEL LEGT BEIM KOPIEREN AUCH EIN BILD IN DIE ZWISCHENABLAGE.
+     *
+     * Eine kopierte Zellauswahl traegt drei Fassungen gleichzeitig: text/html
+     * (eine <table>), text/plain (Tabulator-getrennt) und ein image/png der
+     * Auswahl. Der Einfuege-Zuhoerer nahm bis hier stets die Datei – aus einer
+     * Tabelle wurde ein Bildschirmfoto, das das Modell erst per Bilderkennung
+     * zuruecklesen muss (gemeldet 2026-09-28). Word, LibreOffice und
+     * PowerPoint tun dasselbe mit markiertem Text.
+     *
+     * ERKANNT WIRD DIE QUELLE, NICHT DIE FORM: ein Bild aus einer Webseite
+     * traegt ebenfalls text/html daneben. Deshalb entscheidet die Kennung, die
+     * Office/LibreOffice in ihr HTML schreiben – eine Webseite hat sie nicht,
+     * und dort bleibt das Bild der Anhang. */
+    const _OFFICE_HTML = /urn:schemas-microsoft-com:office|name=["']?ProgId|content=["']?LibreOffice|google-sheets-html-origin/i;
+    const _TABELLE_INLINE_MAX = 6000;   // Zeichen – darueber als Datei-Anhang
+
+    function _mdZelle(s) {
+        // Markdown-Tabellen kennen keinen Zeilenumbruch in der Zelle, und ein
+        // '|' wuerde die Spalte teilen.
+        return String(s || '').replace(/ /g, ' ').replace(/\s+/g, ' ').trim().replace(/\|/g, '\\|');
+    }
+
+    /* Raster aus der HTML-Fassung. colspan/rowspan werden als leere Zellen
+     * aufgefuellt – sonst rutschen die Werte darunter eine Spalte nach links. */
+    function _rasterAusHtml(html) {
+        let doc;
+        try { doc = new DOMParser().parseFromString(html, 'text/html'); } catch (e) { return []; }
+        const tab = doc.querySelector('table');
+        if (!tab) return [];
+        const raster = [], belegt = [];
+        Array.from(tab.rows || []).forEach((tr, r) => {
+            const zeile = raster[r] = raster[r] || [];
+            let c = 0;
+            for (const td of Array.from(tr.cells || [])) {
+                while (belegt[r] && belegt[r][c]) c++;
+                const breit = Math.max(1, parseInt(td.getAttribute('colspan'), 10) || 1);
+                const hoch = Math.max(1, parseInt(td.getAttribute('rowspan'), 10) || 1);
+                for (let i = 0; i < hoch; i++) {
+                    for (let j = 0; j < breit; j++) {
+                        const rr = r + i;
+                        (belegt[rr] = belegt[rr] || [])[c + j] = true;
+                        const z = raster[rr] = raster[rr] || [];
+                        z[c + j] = (i === 0 && j === 0) ? _mdZelle(td.textContent) : '';
+                    }
+                }
+                c += breit;
+            }
+            for (let j = 0; j < zeile.length; j++) if (zeile[j] === undefined) zeile[j] = '';
+        });
+        return raster;
+    }
+
+    /* Raster aus der Tabulator-Fassung (Rueckfall, wenn das HTML keine
+     * Tabelle liefert). Excel setzt Zellen mit Umbruch oder Anfuehrungszeichen
+     * in "…" und verdoppelt innere Anfuehrungszeichen. */
+    function _rasterAusTsv(text) {
+        const raster = [];
+        let zeile = [], zelle = '', inQ = false;
+        const s = String(text || '').replace(/\r\n?/g, '\n');
+        for (let i = 0; i < s.length; i++) {
+            const ch = s[i];
+            if (inQ) {
+                if (ch === '"' && s[i + 1] === '"') { zelle += '"'; i++; }
+                else if (ch === '"') inQ = false;
+                else zelle += ch;
+            } else if (ch === '"' && zelle === '') inQ = true;
+            else if (ch === '\t') { zeile.push(_mdZelle(zelle)); zelle = ''; }
+            else if (ch === '\n') { zeile.push(_mdZelle(zelle)); raster.push(zeile); zeile = []; zelle = ''; }
+            else zelle += ch;
+        }
+        if (zelle !== '' || zeile.length) { zeile.push(_mdZelle(zelle)); raster.push(zeile); }
+        return raster;
+    }
+
+    /* Raster -> Markdown. Leere Zeilen und leere Randspalten fallen weg (eine
+     * Excel-Auswahl ist oft breiter als die Daten). Eine einzelne Zelle ist
+     * keine Tabelle: dann kommt nur ihr Text zurueck. */
+    function _rasterZuMarkdown(raster) {
+        let z = raster.filter(r => r.some(c => c !== ''));
+        if (!z.length) return '';
+        const breite = Math.max(...z.map(r => r.length));
+        z = z.map(r => r.concat(Array(breite - r.length).fill('')));
+        const voll = j => z.some(r => r[j] !== '');
+        let von = 0, bis = breite - 1;
+        while (von <= bis && !voll(von)) von++;
+        while (bis >= von && !voll(bis)) bis--;
+        z = z.map(r => r.slice(von, bis + 1));
+        if (z.length === 1 && z[0].length === 1) return z[0][0];
+        const zeile = r => '| ' + r.join(' | ') + ' |';
+        return [zeile(z[0]), zeile(z[0].map(() => '---')), ...z.slice(1).map(zeile)].join('\n');
+    }
+
+    /* Entscheidung fuer eine Zwischenablage MIT Datei:
+     *   {art:'tabelle', text}  – Office-Tabelle, als Markdown einfuegen
+     *   {art:'text'}           – Office-Text ohne Bild, der Browser fuegt ihn ein
+     *   null                   – kein Office: wie bisher die Datei anhaengen */
+    function _officeEinfuegen(dt) {
+        let html = '', plain = '';
+        try { html = dt.getData('text/html') || ''; plain = dt.getData('text/plain') || ''; }
+        catch (e) { return null; }
+        if (!_OFFICE_HTML.test(html)) return null;
+        let raster = /<table[\s>]/i.test(html) ? _rasterAusHtml(html) : [];
+        if (!raster.length && /\t/.test(plain)) raster = _rasterAusTsv(plain);
+        const md = _rasterZuMarkdown(raster);
+        if (md) return { art: 'tabelle', text: md };
+        // Ein eingebettetes Bild ist ein Bild-Wunsch (kopierte Grafik aus
+        // Word/PowerPoint) – dann bleibt es beim Anhang.
+        if (plain.trim() && !/<img[\s>]|v:imagedata/i.test(html)) return { art: 'text' };
+        return null;
+    }
+
     async function addFiles(files) {
         const unsupported = [];
         for (const file of Array.from(files)) {
@@ -834,7 +945,28 @@
                 catch (err) { dateien.push(f); }   // File-Konstruktor fehlt: lieber namenlos als gar nicht
             }
             if (dateien.length === 0) return;   // reiner Text: der Browser macht es selbst
+            // Aus Excel/Word kopiert: das Bild daneben ist nur eine Ansicht
+            // der Auswahl – gemeint ist der Inhalt (siehe _officeEinfuegen).
+            const office = _officeEinfuegen(dt);
+            if (office && office.art === 'text') return;   // Browser fuegt text/plain ein
             e.preventDefault();
+            if (office && office.art === 'tabelle') {
+                if (office.text.length <= _TABELLE_INLINE_MAX) {
+                    const a = msgInput.selectionStart ?? msgInput.value.length;
+                    const b = msgInput.selectionEnd ?? a;
+                    // Eine Tabelle braucht eine eigene Zeile, sonst haengt ihre
+                    // erste Zeile am getippten Satz.
+                    const vor = a > 0 && !/\n$/.test(msgInput.value.slice(0, a)) ? '\n' : '';
+                    msgInput.setRangeText(vor + office.text + '\n', a, b, 'end');
+                    msgInput.dispatchEvent(new Event('input', { bubbles: true }));
+                    return;
+                }
+                // Grosse Tabelle: als Textdatei anhaengen – der Server bettet
+                // .md bis 200 KB als Text ein, und das Eingabefeld bleibt bedienbar.
+                const tabName = dateien[0].name.replace(/\.[^.]+$/, '') + '.md';
+                try { dateien.splice(0, dateien.length, new File([office.text], tabName, { type: 'text/markdown' })); }
+                catch (err) { /* File-Konstruktor fehlt: dann eben das Bild */ }
+            }
             await addFiles(dateien);
         });
         /* Ablegen DIREKT auf dem Eingabefeld. Ohne diesen Zuhoerer greift die

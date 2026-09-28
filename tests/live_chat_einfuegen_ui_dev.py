@@ -189,6 +189,33 @@ check("Text erzeugt keinen Anhang", isinstance(r3, dict) and not r3.get("da"), s
 check("Text wird NICHT abgefangen (gewoehnliches Einfuegen bleibt heil)",
       js("window.__verhindert2") is False)
 
+print("\n=== 3b. Aus Excel kopiert: Tabelle als Text, NICHT als Bild (2026-09-28) ===")
+# Im echten Browser, weil jsdom weder ein echtes DataTransfer noch einen echten
+# DOMParser/setRangeText-Pfad gegen die ausgelieferte chat.js prueft.
+js("window.__leeren()")
+time.sleep(0.5)
+js("""(function(){
+    const el = document.getElementById('msg-input');
+    el.value = ''; el.dispatchEvent(new Event('input', { bubbles: true }));
+    const dt = new DataTransfer();
+    dt.setData('text/html', '<html xmlns:o="urn:schemas-microsoft-com:office:office"><head><meta name=ProgId content=Excel.Sheet></head>'
+        + '<body><!--StartFragment--><table><tr><td>Name</td><td>Betrag</td></tr><tr><td>Anna</td><td>12,50</td></tr></table><!--EndFragment--></body></html>');
+    dt.setData('text/plain', 'Name\\tBetrag\\r\\nAnna\\t12,50\\r\\n');
+    dt.items.add(window.__datei('%s', '', 'image/png'));
+    const ev = new ClipboardEvent('paste', { clipboardData: dt, bubbles: true, cancelable: true });
+    el.dispatchEvent(ev);
+    window.__verhindert3 = ev.defaultPrevented;
+})()""" % PNG)
+time.sleep(1.2)
+r4 = js("window.__chip()")
+wert = js("document.getElementById('msg-input').value")
+check("Excel-Auswahl erzeugt KEINEN Bild-Anhang", isinstance(r4, dict) and not r4.get("da"), str(r4))
+check("die Tabelle steht als Markdown im Eingabefeld",
+      wert == "| Name | Betrag |\n| --- | --- |\n| Anna | 12,50 |\n", repr(wert))
+check("der Senden-Knopf ist bereit", js("!document.getElementById('btn-send').disabled") is True)
+check("der Vorgang wurde abgefangen (kein doppelter Tabulator-Text)", js("window.__verhindert3") is True)
+js("(function(){const el=document.getElementById('msg-input'); el.value=''; el.dispatchEvent(new Event('input',{bubbles:true}));})()")
+
 print("\n=== 4. Keine Fehler in der Konsole ===")
 fehler = js("(window.__cdpErr||[]).length")
 check("die Seite hat keinen JS-Fehler geworfen", fehler in (0, None), str(fehler))
