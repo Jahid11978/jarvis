@@ -37,6 +37,15 @@
     var _laeuft = false;
     var _letzter = null;
     var _verlauf = null;
+    // Sortierung der Prozesstabelle. Sie lebt im MODUL, nicht im DOM: die
+    // Tabelle wird bei jedem Takt neu gezeichnet und muesste sonst alle 3 s
+    // auf die Vorgabe zurueckspringen. Vorgabe = Reihenfolge des Servers
+    // (CPU absteigend), und die bleibt ueber '#' jederzeit erreichbar.
+    var _sortSpalte = 'cpu';
+    var _sortAb = true;
+    // Zahlenspalten fangen absteigend an – "wer zieht am meisten" ist die
+    // Frage, die man dort stellt; Textspalten alphabetisch.
+    var ZAHL_SPALTEN = { rang: 1, pid: 1, cpu: 1, rss: 1, threads: 1 };
 
     function T(key, fallback) {
         try { if (window.t) { var v = window.t(key); if (v && v !== key) return v; } } catch (e) {}
@@ -155,7 +164,18 @@
         _kasten.setAttribute('role', 'dialog');
         _kasten.setAttribute('aria-modal', 'true');
         _kasten.addEventListener('click', function (e) {
-            if (e.target === _kasten) schliessen();
+            if (e.target === _kasten) { schliessen(); return; }
+            var h = e.target.closest && e.target.closest('th[data-sort]');
+            if (h) umsortieren(h.getAttribute('data-sort'));
+        });
+        // Delegation am Kasten statt je Kopfzelle: die Zellen entstehen bei
+        // jedem Takt neu, ein Zuhoerer daran waere nach 3 s weg.
+        _kasten.addEventListener('keydown', function (e) {
+            if (e.key !== 'Enter' && e.key !== ' ') return;
+            var h = e.target.closest && e.target.closest('th[data-sort]');
+            if (!h) return;
+            e.preventDefault();
+            umsortieren(h.getAttribute('data-sort'));
         });
         document.body.appendChild(_kasten);
         return _kasten;
@@ -391,11 +411,11 @@
             + parts);
 
         var kerneN = Math.max(1, cpu.kerne || 1);
-        var zeilen = (d.prozesse || []).map(function (p, i) {
+        var zeilen = sortiert(d.prozesse || []).map(function (p) {
             // Balken relativ zur ganzen Maschine: ein voller Balken = alle Kerne.
             var anteil = Math.max(0, Math.min(100, (Number(p.cpu) || 0) / kerneN));
             return '<tr title="' + esc(p.cmd || p.name) + '">'
-                + '<td class="jv-pkg-r jv-load-rang">' + (i + 1) + '</td>'
+                + '<td class="jv-pkg-r jv-load-rang">' + p._rang + '</td>'
                 + '<td><div class="jv-pkg-n">' + esc(p.name) + '</div>'
                 + (p.cmd ? '<div class="jv-load-cmd">' + esc(p.cmd) + '</div>' : '') + '</td>'
                 + '<td class="jv-pkg-r jv-load-mono">' + esc(p.pid) + '</td>'
@@ -409,24 +429,81 @@
         var meta = esc(d.host || '') + ' · ' + esc(zeitpunkt(d.erzeugt_am))
             + ' · ' + esc(T('load.procs_total', '{n} Prozesse').replace('{n}', String(d.prozesse_gesamt || 0)));
 
+        // Kopfzellen nach dem Muster des Paket-Fensters (syspackages.js):
+        // Pfeil an der aktiven Spalte, aria-sort fuer Vorleseprogramme.
+        var th = function (sp, txt, klasse) {
+            var aktiv = _sortSpalte === sp;
+            return '<th class="jv-load-sort ' + (klasse || '') + '" data-sort="' + sp
+                + '" tabindex="0" role="button" title="' + esc(T('load.sort', 'Nach dieser Spalte sortieren'))
+                + '" aria-sort="' + (aktiv ? (_sortAb ? 'descending' : 'ascending') : 'none') + '">'
+                + esc(txt) + (aktiv ? (_sortAb ? ' ▾' : ' ▴') : '') + '</th>';
+        };
+
+        // Das Neuzeichnen ersetzt die Tabelle: Fokus und Rollstand der
+        // Prozessliste merken, sonst verliert die Tastatur alle 3 s ihren
+        // Platz und die Liste springt nach oben.
+        var fokus = document.activeElement && _kasten.contains(document.activeElement)
+            && document.activeElement.getAttribute('data-sort');
+        var rolle = body.querySelector('.jv-pkg-scroll');
+        var rollOben = rolle ? rolle.scrollTop : 0;
+        var bodyOben = body.scrollTop;
+
         body.innerHTML = '<div class="jv-pkg-meta">' + meta + '</div>'
             + '<div class="jv-load-grid">' + tCpu + tMem + tNet + tDisk + '</div>'
             + '<div class="jv-load-top-h">' + esc(T('load.top', 'Die {n} Prozesse mit der höchsten CPU-Last')
                 .replace('{n}', String((d.prozesse || []).length))) + '</div>'
             + '<div class="jv-pkg-scroll"><table class="jv-pkg-tab jv-load-tab"><thead><tr>'
-            + '<th class="jv-pkg-r">#</th>'
-            + '<th>' + esc(T('load.col_proc', 'Prozess')) + '</th>'
-            + '<th class="jv-pkg-r">PID</th>'
-            + '<th>' + esc(T('load.col_user', 'Benutzer')) + '</th>'
-            + '<th>' + esc(T('load.col_cpu', 'CPU')) + '</th>'
-            + '<th class="jv-pkg-r">' + esc(T('load.col_mem', 'Speicher')) + '</th>'
-            + '<th class="jv-pkg-r">' + esc(T('load.col_threads', 'Threads')) + '</th>'
+            + th('rang', '#', 'jv-pkg-r')
+            + th('name', T('load.col_proc', 'Prozess'))
+            + th('pid', 'PID', 'jv-pkg-r')
+            + th('user', T('load.col_user', 'Benutzer'))
+            + th('cpu', T('load.col_cpu', 'CPU'))
+            + th('rss', T('load.col_mem', 'Speicher'), 'jv-pkg-r')
+            + th('threads', T('load.col_threads', 'Threads'), 'jv-pkg-r')
             + '</tr></thead><tbody>' + zeilen + '</tbody></table></div>'
             + '<div class="jv-pkg-fuss">' + esc(T('load.hint',
                 'CPU je Prozess wie bei „top“: 100 % = ein voll ausgelasteter Kern. Der Balken zeigt den Anteil an der ganzen Maschine. Gemessen über {s} s, aktualisiert alle {t} s, solange dieses Fenster offen ist.')
                 .replace('{s}', String(d.fenster_s || '')).replace('{t}', String(TAKT_MS / 1000)))
             + '</div>';
         setzeLive(T('load.live', 'live'), false);
+        var rolle2 = body.querySelector('.jv-pkg-scroll');
+        if (rolle2) rolle2.scrollTop = rollOben;
+        body.scrollTop = bodyOben;
+        if (fokus) {
+            var h = body.querySelector('th[data-sort="' + fokus + '"]');
+            if (h) h.focus();
+        }
+    }
+
+    function umsortieren(sp) {
+        if (!sp) return;
+        if (_sortSpalte === sp) _sortAb = !_sortAb;
+        else { _sortSpalte = sp; _sortAb = sp !== 'rang' && !!ZAHL_SPALTEN[sp]; }
+        zeichnen();
+    }
+
+    /** Sortiert eine Kopie der Serverliste. Jeder Eintrag behaelt seinen
+     *  CPU-Rang (`_rang`) – '#' bedeutet damit immer "Platz nach CPU",
+     *  gleich wonach gerade sortiert ist. */
+    function sortiert(liste) {
+        var s = _sortSpalte, ab = _sortAb;
+        var kopie = liste.map(function (p, i) {
+            var q = {}; for (var k in p) q[k] = p[k];
+            q._rang = i + 1;
+            return q;
+        });
+        kopie.sort(function (a, b) {
+            var r;
+            if (s === 'rang') r = a._rang - b._rang;
+            else if (ZAHL_SPALTEN[s]) r = (Number(a[s]) || 0) - (Number(b[s]) || 0);
+            else r = String(a[s] || '').localeCompare(String(b[s] || ''), undefined,
+                                                      { numeric: true, sensitivity: 'base' });
+            // Gleichstand braucht keinen eigenen Brecher: `sort` ist stabil
+            // (ES2019), und die Kopie steht in Serverfolge – gleich grosse
+            // Zeilen bleiben damit in CPU-Rang-Folge und springen nicht.
+            return ab ? -r : r;
+        });
+        return kopie;
     }
 
     function zeitpunkt(iso) {

@@ -164,6 +164,13 @@ try:
         kerne = js("document.querySelectorAll('.jv-load-core').length")
         check("[%s] je Kern ein Balken" % thema, (kerne or 0) >= 1, kerne)
 
+        # Sortieren (2026-09-28): Klick auf "PID" – und die Folge muss die
+        # ECHTEN Takte ueberstehen (die Tabelle wird alle 3 s neu gebaut).
+        js("document.querySelector('.jv-load-tab th[data-sort=\"pid\"]').click()")
+        time.sleep(0.3)
+        pids0 = js("Array.from(document.querySelectorAll('.jv-load-tab tbody tr')).map(function(tr){return parseInt(tr.children[2].textContent,10);})")
+        check("[%s] Klick auf PID sortiert absteigend" % thema,
+              bool(pids0) and pids0 == sorted(pids0, reverse=True), pids0)
         pkt0 = js("(document.querySelector('.jv-load-line').getAttribute('points')||'')"
                   ".trim().split(' ').length")
         time.sleep(7)
@@ -171,6 +178,11 @@ try:
                   ".trim().split(' ').length")
         check("[%s] der Verlauf waechst, solange das Fenster offen ist" % thema,
               (pkt1 or 0) > (pkt0 or 0), (pkt0, pkt1))
+        pids1 = js("Array.from(document.querySelectorAll('.jv-load-tab tbody tr')).map(function(tr){return parseInt(tr.children[2].textContent,10);})")
+        pfeil = js("document.querySelector('.jv-load-tab th[data-sort=\"pid\"]').getAttribute('aria-sort')")
+        check("[%s] ⚠ nach zwei echten Takten ist die Tabelle noch nach PID sortiert" % thema,
+              bool(pids1) and pids1 == sorted(pids1, reverse=True) and pfeil == "descending",
+              (pfeil, pids1))
 
         deck = js("getComputedStyle(document.querySelector('.jv-load-box')).backgroundColor")
         check("[%s] deckende Flaeche" % thema, bool(deck) and "rgba" not in deck, deck)
