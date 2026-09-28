@@ -492,6 +492,9 @@ def _inline_vector_index(vs, indexed, folders, max_bytes) -> bool:
     ``force_reindex`` arbeitet unter ``_reindex_lock`` denselben Bestand ab.
     Laeuft er, ist ein Inline-Lauf daneben reine Doppelarbeit an denselben
     Dateien – und teuer, weil OCR und Einbettung dabei zweimal passieren.
+
+    Die umgekehrte Richtung (Inline-Lauf laeuft schon, dann kommt der
+    Neuaufbau) deckt ``force_reindex`` ab: es wartet auf ``_inline_index_lock``.
     """
     if _reindex_lock.locked():
         _log.debug("Neu-Indizieren laeuft – Inline-Lauf entfaellt fuer diese Suche")
@@ -2790,6 +2793,21 @@ def force_reindex(resume_count: int = 0, incremental: bool = False,
         _log.info("force_reindex: laeuft bereits – Rerun vorgemerkt")
         return {"skipped": True, "reason": "reindex already running, rerun scheduled"}
     try:
+        # ⚠ AUF EINEN LAUFENDEN INLINE-LAUF WARTEN (Review 2026-09-28 #10).
+        # ``_inline_vector_index`` prueft ``_reindex_lock`` nur (locked()), haelt
+        # ihn aber nicht. Begann ein Inline-Lauf kurz VOR diesem Aufruf, liefen
+        # beide ueber dieselben Dateien: doppelte OCR/Einbettung, und die
+        # gemeinsamen Fortschrittszaehler ergaben > 100 %. Hier WARTEN statt
+        # ueberspringen: der Inline-Lauf ist auf INLINE_LIMIT Dateien gedeckelt,
+        # und ein uebersprungener Neuaufbau waere ein verlorener Klick. Keine
+        # Verklemmung moeglich: der Suchpfad nimmt ``_inline_index_lock`` zuerst
+        # und wartet nie auf ``_reindex_lock``. Solange diese Sperre hier
+        # gehalten wird, ueberspringt jede Suche ihren Inline-Lauf.
+        _inline_index_lock.acquire()
+    except BaseException:
+        _reindex_lock.release()
+        raise
+    try:
         _reindex_cancel.clear()
         result = _run_with_retries(resume_count, incremental, resume_baseline)
         # Waehrenddessen weitere Anfragen? -> genau einmal nachholen (coalesced).
@@ -2804,6 +2822,7 @@ def force_reindex(resume_count: int = 0, incremental: bool = False,
         # Flag zuruecksetzen, sonst wuerde die naechste inline-Indizierung
         # (Suchpfad) den alten Abbruchwunsch erben und sofort abbrechen.
         _reindex_cancel.clear()
+        _inline_index_lock.release()
         _reindex_lock.release()
 
 

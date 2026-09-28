@@ -91,6 +91,15 @@
      *  Verschiebung gerufen (speichern bzw. Arbeitsstand uebernehmen).
      */
     function ziehenBinden(box, klasse, beiAenderung) {
+        // ⚠ NUR KARTEN DIESER LISTE (Review 2026-09-28 #15). Der Editor sitzt
+        // IN einer Formular-Karte; ein Ablegen einer Spalte blubberte zum
+        // Drop-Handler der Karte, der `_zieht` (eine Spalte!) in die
+        // Formular-Liste einsortierte und einen Sortier-POST abschickte – der
+        // Neuaufbau danach setzte Titel und Beschreibung im Editor zurueck.
+        function gehoertHierher(ziel) {
+            return !!_zieht && ziel !== _zieht && _zieht.classList.contains(klasse)
+                && _zieht.parentNode === ziel.parentNode;
+        }
         box.querySelectorAll('.fb-griff[draggable="true"]').forEach(function (g) {
             var karte = g.closest('.' + klasse);
             if (!karte) { return; }
@@ -137,7 +146,7 @@
 
         box.querySelectorAll('.' + klasse).forEach(function (ziel) {
             ziel.addEventListener('dragover', function (ev) {
-                if (!_zieht || ziel === _zieht) { return; }
+                if (!gehoertHierher(ziel)) { return; }
                 if (!ziel.classList.contains(klasse)) { return; }
                 ev.preventDefault();          // erst das erlaubt das Ablegen
                 ziel.classList.add('is-ziel');
@@ -147,8 +156,11 @@
             });
             ziel.addEventListener('drop', function (ev) {
                 ziel.classList.remove('is-ziel');
-                if (!_zieht || ziel === _zieht) { return; }
+                if (!gehoertHierher(ziel)) { return; }
                 ev.preventDefault();
+                // Die Spalten-Liste liegt IN einer Formular-Karte – ohne das
+                // kaeme dasselbe Ereignis danach auch dort an.
+                ev.stopPropagation();
                 // Ober- oder untere Haelfte entscheidet, ob davor oder dahinter
                 // eingefuegt wird – sonst laesst sich der letzte Platz nicht
                 // erreichen.
@@ -264,6 +276,12 @@
         zeichnen: function () {
             var box = $('fbadm-liste');
             if (!box) { return; }
+            // ⚠ DER EDITOR SITZT IN EINER KARTE – das Neuzeichnen der Liste
+            // zerstoert ihn samt Eingaben. Titel und Beschreibung deshalb
+            // HIER sichern; `editor(…, true)` setzt sie danach wieder ein.
+            var ti = $('fbadm-f-titel'), de = $('fbadm-f-desc');
+            this._editFelder = (this._offen !== null && (ti || de))
+                ? { titel: ti ? ti.value : null, desc: de ? de.value : null } : null;
             var fs = this._formulare || [];
             if (!fs.length) {
                 box.innerHTML = '<p class="kb-hint">'
@@ -361,8 +379,11 @@
             // Sendet den GANZEN Datensatz, weil der Endpunkt ein Formular
             // vollstaendig setzt – die Spalten kommen unveraendert aus dem
             // bereits geladenen Stand, nicht aus einem Formularfeld.
+            // ⚠ DEN EDITOR OFFEN LASSEN (Review 2026-09-28 #15): der Haken an
+            // Formular A darf die ungespeicherte Arbeit im Editor von B nicht
+            // verwerfen. `senden` schloss ihn bisher bei jedem Erfolg.
             this.senden({ id: f.id, titel: f.titel, beschreibung: f.beschreibung || '',
-                          spalten: f.spalten || [], aktiv: !!an });
+                          spalten: f.spalten || [], aktiv: !!an }, null, true);
         },
 
         // ── Editor ────────────────────────────────────────────────────────
@@ -375,6 +396,16 @@
                 this.editorSchliessen();
                 return;
             }
+            // Beim NEUAUFBAU (`wieder`) die Eingaben mitnehmen: Spalten und
+            // Zeilen liegen im Arbeitsstand, Titel und Beschreibung nur im
+            // Feld – ohne das setzte jedes Neuzeichnen der Liste sie auf den
+            // gespeicherten Stand zurueck (gesichert in `zeichnen`).
+            var altTitel = null, altDesc = null;
+            if (wieder && this._editFelder) {
+                altTitel = this._editFelder.titel;
+                altDesc = this._editFelder.desc;
+            }
+            this._editFelder = null;
             if (alt) { alt.remove(); }
             this._offen = fid || '';
             var f = (this._formulare || []).find(function (x) { return x.id === fid; }) || {};
@@ -433,8 +464,8 @@
             // ⚠ Werte per .value setzen, NICHT ins Markup interpolieren: ein
             // Anfuehrungszeichen im Titel sprengt sonst das Attribut.
             var ti = $('fbadm-f-titel'), de = $('fbadm-f-desc');
-            if (ti) { ti.value = f.titel || ''; }
-            if (de) { de.value = f.beschreibung || ''; }
+            if (ti) { ti.value = altTitel !== null ? altTitel : (f.titel || ''); }
+            if (de) { de.value = altDesc !== null ? altDesc : (f.beschreibung || ''); }
             this.spaltenZeichnen();
             this.zeilenZeichnen();
 
@@ -672,7 +703,7 @@
             }, 'fbadm-f-status');
         },
 
-        senden: function (daten, statusId) {
+        senden: function (daten, statusId, editorOffen) {
             var self = this;
             setStatus(statusId || 'fbadm-status', t('common.saving', 'Speichere…'));
             return fetch('/api/feedback/admin/formulare', {
@@ -680,7 +711,7 @@
                 headers: authHeaders({ 'Content-Type': 'application/json' }),
                 body: JSON.stringify(daten)
             }).then(json).then(function () {
-                self.editorSchliessen();
+                if (!editorOffen) { self.editorSchliessen(); }
                 setStatus(statusId || 'fbadm-status',
                           t('fbadm.saved', '✓ Gespeichert.'), 'ok');
                 return self.laden();

@@ -1131,10 +1131,23 @@ internal sealed class TrayApplicationContext : ApplicationContext
             using var cts = new CancellationTokenSource(TimeSpan.FromMinutes(12));
             string serverVersion = await _client.ServerVersionAsync(cts.Token)
                 .ConfigureAwait(false);
+            string netzVorher = Aktualisierung.NetzVersion;
             await Aktualisierung.PruefenUndHolenAsync(
                 serverVersion,
                 t => _client.PaketAsync(t),
                 cts.Token).ConfigureAwait(false);
+
+            // ⚠ DAS MENUE NEU BAUEN, WENN SICH DER HINWEIS GEAENDERT HAT
+            //    (Review 2026-09-28 #14). `BuildPromptMenu` lief in
+            //    `FragenNachladenAsync` VOR dieser Pruefung – `NetzVersion`
+            //    wurde erst danach gesetzt, und der Hinweis "neue Version"
+            //    erschien beim Start von einer Netzfreigabe praktisch nie.
+            //    Nach `ConfigureAwait(false)` ist das hier nicht der
+            //    UI-Thread, deshalb ueber den Besitzer.
+            if (!string.Equals(netzVorher, Aktualisierung.NetzVersion, StringComparison.Ordinal))
+            {
+                BeginInvokeOnOwner(BuildPromptMenu);
+            }
         }
         catch (Exception)
         {

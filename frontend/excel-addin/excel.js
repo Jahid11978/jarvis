@@ -1539,6 +1539,35 @@
         }
     }
 
+    /* Sucht ein angelegtes Objekt, OHNE zu werfen (Review 2026-09-28 #11).
+
+       ⚠ `getItem` WIRFT NICHT SOFORT: Office.js meldet ItemNotFound erst beim
+       naechsten `ctx.sync()` – ein `try` um `objektLoeschen` faengt deshalb
+       nichts. Hatte der Benutzer ein angelegtes Diagramm von Hand geloescht,
+       scheiterte der GEMEINSAME Sync, und die ganze Ruecknahme blieb stehen.
+       Darum erst suchen (NullObject bzw. Anzahl), synchronisieren, dann nur
+       loeschen, was es noch gibt. Rueckgabe wird nach dem Sync mit
+       `objektVorhanden` gelesen. */
+    function objektSuchen(s, a) {
+        var n = a._objName || a.name;
+        var h = null;
+        if (a.typ === 'pivot') h = s.pivotTables.getItemOrNullObject(n);
+        else if (a.typ === 'diagramm') h = s.charts.getItemOrNullObject(n);
+        else if (a.typ === 'tabelle') h = s.tables.getItemOrNullObject(n);
+        if (h) { h.load('isNullObject'); return { nullObj: h }; }
+        if (a.typ === 'bedingt') {
+            return { anzahl: s.getRange(a.adresse).conditionalFormats.getCount() };
+        }
+        return null;
+    }
+
+    function objektVorhanden(h) {
+        if (!h) return false;
+        if (h.nullObj) return !h.nullObj.isNullObject;
+        if (h.anzahl) return h.anzahl.value > 0;
+        return false;
+    }
+
     function uebernehmenJetzt(auto) {
         var vorschlag = _vorschlag;
         var alle = vorschlag.aenderungen.slice();
@@ -1820,49 +1849,82 @@
             if (!ja) return;
             _laeuft = true; setzeLaeuft(true);
             melde('xl-status', T('xl.undoing', 'Nehme zurück …'));
+            var uebrig = 0;
             Excel.run(function (ctx) {
-                wieder.forEach(function (a) {
-                    try {
-                        var s = a.blatt ? ctx.workbook.worksheets.getItem(a.blatt)
-                            : ctx.workbook.worksheets.getActiveWorksheet();
-                        var r = s.getRange(a.adresse);
-                        // FORMELN zurueckschreiben, nicht Werte: `formulas`
-                        // traegt bei einer Formelzelle die Formel und bei einer
-                        // Wertzelle den Wert. Wer `values` nimmt, macht aus
-                        // jeder zurueckgenommenen Formel eine feste Zahl.
-                        r.formulas = a._altF;
-                        if (a.format && a._altFmt) r.numberFormat = a._altFmt;
-                        if (markAn()) {
-                            // Die vorherige Fuellfarbe wiederherstellen, wenn
-                            // sie bekannt ist. Bei einem Bereich mit
-                            // GEMISCHTEN Farben gibt Office.js keinen Wert
-                            // heraus – dann wird geleert, und der Hinweis sagt
-                            // es. Eine geratene Farbe waere schlechter.
+                // ⚠ ERST PRUEFEN, DANN AENDERN (Review 2026-09-28 #11). Fehler
+                // meldet Office.js erst beim Sync – ein von Hand geloeschtes
+                // Blatt oder Diagramm liess sonst den GEMEINSAMEN Sync
+                // scheitern, und von der Ruecknahme blieb nichts. Stufe 1:
+                // welche Blaetter gibt es noch? Stufe 2: welche Objekte?
+                var blaetter = {};
+                wieder.concat(objekte).forEach(function (a) {
+                    if (!a.blatt || blaetter[a.blatt]) return;
+                    blaetter[a.blatt] = ctx.workbook.worksheets.getItemOrNullObject(a.blatt);
+                    blaetter[a.blatt].load('isNullObject');
+                });
+                function fehlt(a) {
+                    return !!(a.blatt && blaetter[a.blatt].isNullObject);
+                }
+                return ctx.sync().then(function () {
+                    var gesucht = [];
+                    objekte.forEach(function (a) {
+                        if (fehlt(a)) { gesucht.push({ a: a, h: null }); return; }
+                        try { gesucht.push({ a: a, h: objektSuchen(blattVon(ctx, a.blatt), a) }); }
+                        catch (e) { gesucht.push({ a: a, h: null }); }
+                    });
+                    return ctx.sync().then(function () {
+                        wieder.forEach(function (a) {
+                            if (fehlt(a)) { uebrig++; return; }
                             try {
-                                if (a._altFuell) r.format.fill.color = a._altFuell;
-                                else r.format.fill.clear();
-                            } catch (e) { }
-                        }
-                    } catch (e) { protokoll('zuruecknehmen', fehlerDetails(e)); }
+                                var s = blattVon(ctx, a.blatt);
+                                var r = s.getRange(a.adresse);
+                                // FORMELN zurueckschreiben, nicht Werte: `formulas`
+                                // traegt bei einer Formelzelle die Formel und bei einer
+                                // Wertzelle den Wert. Wer `values` nimmt, macht aus
+                                // jeder zurueckgenommenen Formel eine feste Zahl.
+                                r.formulas = a._altF;
+                                if (a.format && a._altFmt) r.numberFormat = a._altFmt;
+                                if (markAn()) {
+                                    // Die vorherige Fuellfarbe wiederherstellen, wenn
+                                    // sie bekannt ist. Bei einem Bereich mit
+                                    // GEMISCHTEN Farben gibt Office.js keinen Wert
+                                    // heraus – dann wird geleert, und der Hinweis sagt
+                                    // es. Eine geratene Farbe waere schlechter.
+                                    try {
+                                        if (a._altFuell) r.format.fill.color = a._altFuell;
+                                        else r.format.fill.clear();
+                                    } catch (e) { }
+                                }
+                            } catch (e) { protokoll('zuruecknehmen', fehlerDetails(e)); }
+                        });
+                        // Objekte im SELBEN Lauf entfernen: sie beruehren
+                        // andere Strukturen als die Zellen daneben. Nur was
+                        // es noch gibt – der Rest wird gezaehlt und gemeldet.
+                        gesucht.forEach(function (g) {
+                            if (!objektVorhanden(g.h)) {
+                                uebrig++;
+                                protokoll('zuruecknehmen', 'Objekt nicht mehr da: ' +
+                                    eintragKurz(g.a));
+                                return;
+                            }
+                            try { objektLoeschen(ctx, g.a); }
+                            catch (e) { protokoll('zuruecknehmen', 'Objekt ' +
+                                eintragKurz(g.a) + '\n    ' + fehlerDetails(e)); }
+                        });
+                        return ctx.sync();
+                    });
                 });
-                // Objekte im SELBEN Lauf entfernen: sie beruehren andere
-                // Strukturen als die Zellen daneben, ein Konflikt ist nicht
-                // moeglich. Je Objekt ein `try` – ein von Hand geloeschtes
-                // Diagramm darf die Ruecknahme der uebrigen nicht verhindern.
-                objekte.forEach(function (a) {
-                    try { objektLoeschen(ctx, a); }
-                    catch (e) { protokoll('zuruecknehmen', 'Objekt ' +
-                        eintragKurz(a) + '\n    ' + fehlerDetails(e)); }
-                });
-                return ctx.sync();
             }).then(function () {
                 _rueckweg = null;
                 if (_erledigt === v) _erledigt = null;
-                _verlauf.push({
-                    rolle: 'bot',
-                    text: T('xl.undone', 'Die Änderung wurde zurückgenommen.')
-                });
-                melde('xl-status', T('xl.undone', 'Die Änderung wurde zurückgenommen.'), 'ok');
+                var text = T('xl.undone', 'Die Änderung wurde zurückgenommen.');
+                if (uebrig) {
+                    text += ' ' + T('xl.undo_gone',
+                        '{n} Teil(e) gab es nicht mehr – sie wurden inzwischen von Hand entfernt.')
+                        .replace('{n}', uebrig);
+                }
+                _verlauf.push({ rolle: 'bot', text: text });
+                melde('xl-status', text, 'ok');
                 zeichneVerlauf();
             }).catch(function (e) {
                 melde('xl-status', T('xl.undo_failed', 'Zurücknehmen fehlgeschlagen:') +

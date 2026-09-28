@@ -252,8 +252,8 @@ PROBEN: list[tuple[str, str, str, str]] = [
      "    os.chmod(KONFIG_DATEI, KONFIG_MODUS)"),
     ("PFX laesst den Eigentuemer bei root",
      "backend/ai_mouse_signatur.py",
-     "        os.chmod(PFX_DATEI, PFX_MODUS)\n        _eigentuemer_erhalten(PFX_DATEI)",
-     "        os.chmod(PFX_DATEI, PFX_MODUS)"),
+     "            os.chmod(PFX_DATEI, PFX_MODUS)\n            _eigentuemer_erhalten(PFX_DATEI)",
+     "            os.chmod(PFX_DATEI, PFX_MODUS)"),
     ("Schluesseldatei laesst den Eigentuemer bei root",
      "backend/ai_mouse_signatur.py",
      "        os.chmod(SCHLUESSEL_DATEI, SCHLUESSEL_MODUS)\n"

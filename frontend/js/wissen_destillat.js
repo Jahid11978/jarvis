@@ -406,15 +406,37 @@
             if (d.fehler && d.fehler[x.name]) x.fehler = d.fehler[x.name];
         });
         dateilisteZeichnen();
-        bilder = d.bilder || [];
-        quellen = d.ok || [];
 
         var ta = $('wi-dest-text');
         if (ta && d.text) {
             // ANHAENGEN, nicht ersetzen: wer schon Text eingegeben oder
             // eine erste Datei gelesen hat, verliert ihn sonst.
-            ta.value = ta.value.trim()
-                ? ta.value.replace(/\s*$/, '') + '\n\n' + d.text : d.text;
+            // ⚠ DANN AUCH BILDER UND QUELLEN ANHAENGEN (Review 2026-09-28 #12).
+            // Der Server nummeriert [BILD-n] je Anfrage ab 1. Wurden die
+            // Bilder ersetzt, der Text aber angehaengt, zeigten ab der zweiten
+            // Datei alle Marken auf falsche Bilder, und die Uebernahme nannte
+            // nur die letzte Quelle. Darum die neuen Marken um die Zahl der
+            // vorhandenen Bilder verschieben.
+            var text = d.text, neu = d.bilder || [];
+            if (ta.value.trim()) {
+                var versatz = bilder.length;
+                if (versatz) {
+                    text = text.replace(/\[BILD-(\d+)\]/g, function (m, n) {
+                        return '[BILD-' + (parseInt(n, 10) + versatz) + ']';
+                    });
+                }
+                bilder = bilder.concat(neu);
+                (d.ok || []).forEach(function (q) {
+                    if (quellen.indexOf(q) < 0) quellen.push(q);
+                });
+                ta.value = ta.value.replace(/\s*$/, '') + '\n\n' + text;
+            } else {
+                // Leeres Feld = neuer Anfang: alte Bilder gehoeren zu keinem
+                // Text mehr.
+                bilder = neu.slice();
+                quellen = (d.ok || []).slice();
+                ta.value = text;
+            }
             zaehlerZeichnen();
         }
         // Die vom Dateifilter ausgelassenen Dateien kennt nur der Browser -

@@ -311,17 +311,11 @@ def zertifikat_setzen(daten: bytes, kennwort: str, tsa: str = "") -> dict:
     meta = _pkcs12_lesen(daten, kennwort)
 
     with _sperre:
-        _DATA.mkdir(parents=True, exist_ok=True)
-        # Wieder: erst mit 0600 anlegen, dann schreiben.
-        tmp = PFX_DATEI.with_suffix(".tmp")
-        fd = os.open(str(tmp), os.O_WRONLY | os.O_CREAT | os.O_TRUNC, PFX_MODUS)
-        with os.fdopen(fd, "wb") as f:
-            f.write(daten)
-        os.chmod(tmp, PFX_MODUS)
-        os.replace(tmp, PFX_DATEI)
-        os.chmod(PFX_DATEI, PFX_MODUS)
-        _eigentuemer_erhalten(PFX_DATEI)
-
+        # ⚠ ERST DEN GANZEN NEUEN ZUSTAND BAUEN, DANN DAS PFX EINSETZEN
+        # (Review 2026-09-28 #13). Bisher stand `os.replace` VOR
+        # `_tsa_normieren`/`_verschluesseln`: eine vertippte TSA-Adresse warf
+        # erst, als das neue PFX schon lag – mit altem Kennwort und alten
+        # Metadaten daneben, und jeder spaetere Bau scheiterte.
         d = _laden()
         d.update(meta)
         d["pw_enc"] = _verschluesseln(kennwort)
@@ -330,8 +324,47 @@ def zertifikat_setzen(daten: bytes, kennwort: str, tsa: str = "") -> dict:
         # Ein frisch hinterlegtes Zertifikat hat noch nichts signiert – ein
         # stehengebliebener Fehler von vorher waere eine Falschaussage.
         d["letzter_fehler"] = ""
-        _speichern(d)
+
+        _DATA.mkdir(parents=True, exist_ok=True)
+        # Das bisherige PFX merken: scheitert das Speichern der Konfiguration
+        # NACH dem Einsetzen, kommt es zurueck – PFX und Kennwort gehoeren
+        # zusammen, ein halber Wechsel ist schlechter als keiner.
+        try:
+            alt = PFX_DATEI.read_bytes()
+        except FileNotFoundError:
+            alt = None
+        # Wieder: erst mit 0600 anlegen, dann schreiben.
+        tmp = PFX_DATEI.with_suffix(".tmp")
+        fd = os.open(str(tmp), os.O_WRONLY | os.O_CREAT | os.O_TRUNC, PFX_MODUS)
+        with os.fdopen(fd, "wb") as f:
+            f.write(daten)
+        os.chmod(tmp, PFX_MODUS)
+        os.replace(tmp, PFX_DATEI)
+        try:
+            os.chmod(PFX_DATEI, PFX_MODUS)
+            _eigentuemer_erhalten(PFX_DATEI)
+            _speichern(d)
+        except BaseException:
+            _pfx_zurueck(alt)
+            raise
     return zustand()
+
+
+def _pfx_zurueck(alt: bytes | None) -> None:
+    """Das vorherige PFX wiederherstellen (oder entfernen, wenn es keines gab)."""
+    try:
+        if alt is None:
+            PFX_DATEI.unlink(missing_ok=True)
+            return
+        tmp = PFX_DATEI.with_suffix(".tmp")
+        fd = os.open(str(tmp), os.O_WRONLY | os.O_CREAT | os.O_TRUNC, PFX_MODUS)
+        with os.fdopen(fd, "wb") as f:
+            f.write(alt)
+        os.chmod(tmp, PFX_MODUS)
+        os.replace(tmp, PFX_DATEI)
+        _eigentuemer_erhalten(PFX_DATEI)
+    except Exception:  # noqa: BLE001
+        pass
 
 
 def zertifikat_entfernen() -> dict:

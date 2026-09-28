@@ -4612,6 +4612,41 @@ check("…und die Anzeige haengt an NetzVersion.Length",
       re.search(r"if\s*\([^)]*NetzVersion\.Length\s*>\s*0\s*\)",
                 cs_tray34()) is not None)
 
+
+def _ohne_cs_kommentare(q: str) -> str:
+    return "\n".join(z for z in q.split("\n")
+                     if not z.lstrip().startswith("//")
+                     and not z.lstrip().startswith("*")
+                     and not z.lstrip().startswith("/*"))
+
+
+# ⚠ Review 2026-09-28 #14, Teil 1: sinkt die Serverversion (oder ist die
+#   Freigabe erneuert), muss der Hinweis verschwinden. Gemessen im Zweig
+#   `if (!IstNeuer(...))` selbst, VOR dessen return - ein Leeren weiter unten
+#   (Normalfall) erreicht dieser Zweig nie.
+_hol34_u = _ohne_cs_kommentare(_hol34)
+_nicht_neuer = cs_block(_hol34_u, "if (!IstNeuer(")
+check("Positivkontrolle: Zweig `if (!IstNeuer(...))` geschnitten",
+      "return" in _nicht_neuer)
+_iLeer = _nicht_neuer.find("NetzVersion = string.Empty")
+_iRet = _nicht_neuer.find("return")
+check("…der Zweig ohne neuere Fassung leert NetzVersion VOR dem return "
+      "(Leeren@%d, return@%d)" % (_iLeer, _iRet), 0 <= _iLeer < _iRet)
+
+# Teil 2: `BuildPromptMenu` lief vor der Pruefung, die NetzVersion setzt -
+#   das Menue muss danach neu gebaut werden, und zwar auf dem UI-Thread
+#   (nach ConfigureAwait(false) ist es keiner).
+_ap34 = _ohne_cs_kommentare(cs_block(cs_tray34(), "private async Task AktualisierungPruefenAsync"))
+check("Positivkontrolle: AktualisierungPruefenAsync geschnitten",
+      "PruefenUndHolenAsync" in _ap34)
+_iPruef = _ap34.find("PruefenUndHolenAsync(")
+_iBau = _ap34.find("BeginInvokeOnOwner(BuildPromptMenu)")
+check("…das Menue wird NACH der Pruefung neu gebaut, ueber den Besitzer "
+      "(Pruefung@%d, Neubau@%d)" % (_iPruef, _iBau), 0 <= _iPruef < _iBau)
+check("…nur wenn sich NetzVersion geaendert hat (kein Neubau bei jeder Anmeldung)",
+      re.search(r"if\s*\(\s*!\s*string\.Equals\(\s*\w+\s*,\s*Aktualisierung\.NetzVersion",
+                _ap34) is not None)
+
 # ⚠ DIE KLASSE BLEIBT TEXTFREI – wie `Ui/LinkZiel`. Sonst haengt eine
 #   Infrastruktur-Klasse an der Lokalisierung und die Regel waere nicht mehr
 #   ohne UI pruefbar (genau daran ist der erste Bau gescheitert: CS0103).

@@ -370,6 +370,11 @@ internal static class Aktualisierung
         {
             if (!IstNeuer(serverVersion, Eigene))
             {
+                // ⚠ AUCH HIER LEEREN (Review 2026-09-28 #14): sinkt die
+                // Serverversion (Rueckbau) oder hat der Administrator die
+                // Freigabe inzwischen erneuert, stuende sonst der Hinweis
+                // "neue Version" bis zum naechsten Programmstart weiter da.
+                NetzVersion = string.Empty;
                 return string.Empty;
             }
 

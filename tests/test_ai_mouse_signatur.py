@@ -209,6 +209,41 @@ check("die Meldung nennt die Grenze",
 check("die vorhandene PFX ist auch danach unveraendert",
       sig.PFX_DATEI.read_bytes() == vorher_pfx)
 
+# ⚠ Review 2026-09-28 #13: ein GUELTIGES neues PFX mit vertippter TSA-Adresse.
+# Vorher lag das neue PFX schon, als `_tsa_normieren` warf – mit altem
+# Kennwort daneben, und jeder spaetere Bau scheiterte.
+NEU_KW = "neu-kennwort"
+NEU_PFX = pfx_bauen(NEU_KW)
+check("Positivkontrolle: das neue PFX ist fuer sich gueltig",
+      isinstance(sicher(sig._pkcs12_lesen, NEU_PFX, NEU_KW), dict))
+r = sicher(sig.zertifikat_setzen, NEU_PFX, NEU_KW, "timestamp.example")
+check("eine vertippte TSA-Adresse wird abgewiesen", isinstance(r, sig.SignaturFehler))
+check("⚠ die vorhandene PFX ist danach UNVERAENDERT",
+      sig.PFX_DATEI.read_bytes() == vorher_pfx)
+check("⚠ die Metadaten sind danach UNVERAENDERT",
+      sig.KONFIG_DATEI.read_text(encoding="utf-8") == vorher_meta)
+
+# Scheitert das Speichern der Konfiguration NACH dem Einsetzen, kommt das alte
+# PFX zurueck - PFX und Kennwort gehoeren zusammen.
+_echt_speichern = sig._speichern
+
+
+def _speichern_scheitert(d):
+    raise OSError("Platte voll (Test)")
+
+
+sig._speichern = _speichern_scheitert
+try:
+    r = sicher(sig.zertifikat_setzen, NEU_PFX, NEU_KW, "")
+finally:
+    sig._speichern = _echt_speichern
+check("Positivkontrolle: das Speichern ist wirklich gescheitert", isinstance(r, OSError))
+check("⚠ nach gescheitertem Speichern liegt wieder die ALTE PFX",
+      sig.PFX_DATEI.read_bytes() == vorher_pfx)
+check("und die Metadaten sind unveraendert",
+      sig.KONFIG_DATEI.read_text(encoding="utf-8") == vorher_meta)
+check("keine .tmp-Leiche", not sig.PFX_DATEI.with_suffix(".tmp").exists())
+
 print("\n=== 5. Zeitstempel-Adresse ===")
 check("eine http-Adresse wird angenommen",
       sig._tsa_normieren(" http://ts.example/x ") == "http://ts.example/x")
