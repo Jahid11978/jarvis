@@ -1870,7 +1870,14 @@ def _extract_text_rest(filepath: Path, max_bytes: int) -> str | None:
 
         text, grund = text_aus_datei(filepath, melde=_fortschritt)
         # Der Grund muss den Aufrufer erreichen - siehe _merke_extrakt_grund.
-        _merke_extrakt_grund(filepath, grund)
+        # NUR ein Fehlschlag wird gemerkt; ein Erfolg LOESCHT den alten Eintrag.
+        # Sonst gab `_unlesbar_grund` nach einem gelungenen Lauf "ok" als
+        # Fehlergrund heraus (test_onenote_import, rot seit 7264656).
+        if not text:
+            _merke_extrakt_grund(filepath, grund)
+        else:
+            with _extrakt_grund_lock:
+                _extrakt_gruende.pop(str(filepath), None)
         if text is None:
             _log.info(f"OneNote nicht gelesen: {filepath.name} – {grund}")
         else:

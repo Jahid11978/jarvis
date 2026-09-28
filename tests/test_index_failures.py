@@ -19,9 +19,32 @@ Lauf:  python3 tests/test_index_failures.py
 import shutil
 import sys
 import tempfile
+import types
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+
+# ⚠ `backend.config` als STUB (2026-09-28): der echte Import migriert Profile und
+# schreibt die LIVE-settings.json zurueck (Register) – und scheiterte hier ohne
+# `dotenv` mit einem Traceback und Exit 1, also wie ein ROTER Befund statt wie
+# "konnte nicht laufen". Gleiches Muster wie tests/test_unlesbar_cache.py.
+if "dotenv" not in sys.modules:
+    _dv = types.ModuleType("dotenv")
+    _dv.load_dotenv = lambda *a, **k: None
+    sys.modules["dotenv"] = _dv
+if "backend.config" not in sys.modules:
+    _cfgmod = types.ModuleType("backend.config")
+
+    class _Cfg:
+        KNOWLEDGE_DIR = "/tmp/kb-test"
+        MAX_FILE_SIZE_MB = 50
+
+        def __getattr__(self, n):        # jedes weitere Feld: harmloser Wert
+            return ""
+
+    _cfgmod.config = _Cfg()
+    _cfgmod.STUB_FUER_TESTS = True
+    sys.modules["backend.config"] = _cfgmod
 
 ergebnis = []
 
@@ -40,7 +63,15 @@ def main():
     print("Indizierung: welche Dateien sind gescheitert und warum")
     print("=" * 70)
 
-    from backend.tools import knowledge as K
+    try:
+        from backend.tools import knowledge as K
+    except Exception as e:  # noqa: BLE001
+        print(f"ABBRUCH: backend.tools.knowledge nicht importierbar: {type(e).__name__}: {e}")
+        sys.exit(2)
+    # Positivkontrolle: WIRKLICH der Stub – sonst liefe der Test gegen Live-Zustand
+    if not getattr(sys.modules.get("backend.config"), "STUB_FUER_TESTS", False):
+        print("ABBRUCH: backend.config ist nicht der Test-Stub")
+        sys.exit(2)
 
     tmp = Path(tempfile.mkdtemp(prefix="jarvis_fail_"))
     try:
@@ -154,9 +185,25 @@ def main():
                '"httpx"' in hauptdatei and "setLevel(logging.WARNING)" in hauptdatei)
         # Der Indizierungs-Zweig darf nicht mehr auf INFO stehen: genau dort
         # gingen die vier Meldungen verloren.
-        kq = inspect.getsource(K._rebuild_vector_index)
+        # REGEL ueber das ganze Modul, am Syntaxbaum (2026-09-28): die Meldung
+        # wanderte aus _rebuild_vector_index in einen Helfer, und die Pruefung
+        # ueber genau diese eine Funktion meldete einen Fehler, den es nicht gab.
+        import ast
+        baum = ast.parse(inspect.getsource(K))
+        stufen = []
+        for k in ast.walk(baum):
+            if (isinstance(k, ast.Call) and isinstance(k.func, ast.Attribute)
+                    and isinstance(k.func.value, ast.Name) and k.func.value.id == "_log"
+                    and k.args):
+                a0 = k.args[0]
+                text = a0.value if isinstance(a0, ast.Constant) and isinstance(a0.value, str) else (
+                    "".join(v.value for v in a0.values if isinstance(v, ast.Constant))
+                    if isinstance(a0, ast.JoinedStr) else "")
+                if text.startswith("Nicht lesbar"):
+                    stufen.append(k.func.attr)
+        pruefe("(Positivkontrolle) Nicht-lesbar-Meldungen gefunden", bool(stufen), str(stufen))
         pruefe("Nicht-lesbar-Meldung protokolliert als WARNING, nicht INFO",
-               'Nicht lesbar' in kq and '_log.info("Nicht lesbar' not in kq)
+               bool(stufen) and all(st == "warning" for st in stufen), str(stufen))
 
     finally:
         shutil.rmtree(tmp, ignore_errors=True)

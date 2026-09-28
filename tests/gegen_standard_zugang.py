@@ -53,6 +53,13 @@ PROBEN = [
      "    r'\\.secret_key\\b|\\.erstkennwort\\b|'\n", ""),
     ("Sandbox: Dateiwerkzeug sieht .erstkennwort nicht als sensibel", "backend/sandbox.py",
      '    ".secret_key", ".erstkennwort",\n', '    ".secret_key",\n'),
+    ("SSH: Drop-in erlaubt Kennwort weiter", "docs/install.sh",
+     "'    PasswordAuthentication no'", "'    PasswordAuthentication yes'"),
+    ("SSH: Match fehlt -> gilt fuer ALLE Benutzer", "docs/install.sh",
+     "'Match User jarvis' ", ""),
+    ("SSH: Bestandskonto ohne Schluessel wird trotzdem umgestellt", "docs/install.sh",
+     'if [[ "${JARVIS_NEU_ANGELEGT:-0}" == 1 ]] || $SUDO test -s ~jarvis/.ssh/authorized_keys; then\n',
+     'if true; then\n'),
 ]
 DATEIEN = sorted({p[1] for p in PROBEN})
 ORIG = {f: (W / f).read_bytes() for f in DATEIEN}

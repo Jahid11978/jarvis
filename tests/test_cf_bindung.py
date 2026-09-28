@@ -610,12 +610,34 @@ check("⚠ die Gruppen werden NICHT bei jedem Render neu gezeichnet",
 rb = js_fn("cfbRenderBaum")
 check("⚠ der Baum wird NICHT bei jedem Render neu gezeichnet (Haken leben im DOM)",
       "_cfbBaumFuer === _cfSpaces" in rb)
-rl = js_fn("cfbRenderList")
+def js_zeilenbau(liste):
+    """Der ZEILENBAU der Liste samt der Helfer, die er selbst aufruft.
+
+    Frueher stand alles in cfbRenderList; seit 3633ab5/4b99ce5 baut
+    cfbRenderEintraege die Zeilen und cfbAktionen die Knoepfe – der Waechter
+    schnitt nur noch 8 Zeilen und meldete 3 Fehler, die es nicht gab. Gesucht
+    wird deshalb die EIGENSCHAFT "baut wi-item-Zeilen", nicht ein Name; und nur
+    EINE Ebene tiefer, damit nicht das halbe Modul im Fenster liegt."""
+    rumpf = js_fn(liste)
+    bauer = [n for n in re.findall(r"\b(cfb\w+)\(", rumpf)
+             if n != liste and 'class="wi-item"' in js_fn(n)]
+    if not bauer:
+        return rumpf, []
+    zeilen = js_fn(bauer[0])
+    helfer = sorted({n for n in re.findall(r"\b(cfb\w+)\(", zeilen)} - {bauer[0], liste})
+    return "\n".join([rumpf, zeilen] + [js_fn(n) for n in helfer]), [bauer[0]] + helfer
+
+rl, _rl_teile = js_zeilenbau("cfbRenderList")
+# Die Enge kommt aus der Bauart (EINE Ebene), nicht aus einer Zeilenzahl –
+# eine feste Grenze waere die naechste Zeitbombe.
+check("(Positivkontrolle) der Zeilenbau ist erfasst (wi-item + Loeschknopf)",
+      'class="wi-item"' in rl and "wi-cfb-del" in rl, str(_rl_teile))
 check("jede Zeile hat Bearbeiten (Text) und Muelleimer (Loeschen, kein ×)",
       "wi-cfb-edit" in rl and "JarvisIcons.trash()" in rl and "JarvisIcons.close" not in rl)
 check("die Liste zeigt das Abgleichsergebnis", "cfbSyncZeile(b)" in rl and "b.abgleich" in js_fn("cfbSyncZeile"))
 check("⚠ ein Eintrag OHNE Zuordnung wird BENANNT (Altbestand)",
-      "wissen.cfb_nogroup" in rl and "wi-cfb-nogrp" in rl and "wissen.cfb_grp_gone" in rl)
+      # exakter Aufruf: "wissen.cfb_nogroup" steckt auch in "..._nogroup_hint"
+      "t('wissen.cfb_nogroup')" in rl and "wi-cfb-nogrp" in rl and "t('wissen.cfb_grp_gone'" in rl)
 check("die Marke dafuer ist gestaltet", ".wi-cfb-nogrp" in HTML)
 check("EINE Quelle fuer die Bereichsliste (der Container fragt nicht selbst ab)",
       JS.count("/api/wissen/confluence/spaces") == 1)

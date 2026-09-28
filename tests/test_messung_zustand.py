@@ -454,14 +454,46 @@ print("\n\033[1m4. Die Regel steht im Projektgedaechtnis\033[0m")
 # 24.08.), und der Waechter meldete dort einen Fehler, den es nicht gibt.
 # Erkannt an der Zeit: ist die Datei AELTER als dieser Waechter, gehoert sie
 # nicht zu diesem Stand.
-claude = ROOT / "CLAUDE.md"
-selbst = Path(__file__)
-if claude.is_file() and claude.stat().st_mtime >= selbst.stat().st_mtime - 86400:
-    txt = claude.read_text(encoding="utf-8", errors="replace")
-    check("CLAUDE.md nennt die Regel zum VORGEFUNDENEN Zustand",
-          "vorgefundenen Zustand" in txt or "VORGEFUNDENEN Zustand" in txt)
+# ⚠ SEIT 2026-09-27 STEHT DIE REGEL IN .claude/rules/fallstricke.md: CLAUDE.md
+# wurde verdichtet, die Lehre zog ins Register um – der Waechter suchte nur in
+# CLAUDE.md und meldete einen Fehler, den es nicht gab. Gemessen wird jetzt die
+# EIGENSCHAFT "die Regel LAEDT, sobald jemand eine Probe unter tests/ schreibt":
+# CLAUDE.md laedt immer, eine Regeldatei nur, wenn ein `paths:`-Muster eine neue
+# Probe trifft. Gesucht wird der SATZ der Regel, nicht die Wendung allein –
+# "vorgefundenen Zustand" steht auch beilaeufig in wissen-rag.md.
+import fnmatch
+
+NEUE_PROBE = "tests/live_neue_probe.py"   # beliebige neue Probe, KEINE bestehende
+REGEL = re.compile(r"vorgefundenen\s+zustand\W+(?:\w+\W+){0,3}?(?:wieder|und\s+stelle)",
+                   re.IGNORECASE)
+
+
+def _paths_muster(txt):
+    m = re.match(r"---\n(.*?)\n---", txt, re.S)
+    if not m:
+        return []
+    return re.findall(r'^\s*-\s*"?([^"\n]+?)"?\s*$', m.group(1).split("paths:", 1)[-1], re.M)
+
+
+# ARBEITSBAUM oder Server? Frueher am Datei-ALTER entschieden (CLAUDE.md
+# juenger als dieser Waechter minus 24 h) – das kippte, sobald jemand den
+# Waechter bearbeitete: CLAUDE.md galt dann als veraltet, keine Quelle blieb,
+# und der immer gruene Uebersprung-Zweig griff (Gegenprobe 2026-09-28: 0 FAIL).
+# .claude/rules/ ist gitignored und wird nie deployt – das ist das Merkmal.
+arbeitsbaum = (ROOT / ".claude" / "rules").is_dir()
+quellen = []   # (Name, Text) – nur Dateien, die beim Schreiben einer Probe LADEN
+for f in ([ROOT / "CLAUDE.md"] + sorted((ROOT / ".claude" / "rules").glob("*.md"))) if arbeitsbaum else []:
+    if not f.is_file():
+        continue
+    txt = f.read_text(encoding="utf-8", errors="replace")
+    if f.name == "CLAUDE.md" or any(fnmatch.fnmatch(NEUE_PROBE, g) for g in _paths_muster(txt)):
+        quellen.append((str(f.relative_to(ROOT)), txt))
+if arbeitsbaum:
+    fund = [n for n, t in quellen if REGEL.search(t)]
+    check("die Regel zum VORGEFUNDENEN Zustand laedt beim Schreiben einer Probe",
+          bool(fund), "gesucht in: " + ", ".join(n for n, _ in quellen))
 else:
-    check("Projektgedaechtnis: uebersprungen (nicht der Stand dieses Waechters)", True)
+    check("Projektgedaechtnis: uebersprungen (kein Arbeitsbaum – .claude/rules fehlt)", True)
 
 
 print("\n\033[1mErgebnis: %d/%d\033[0m" % (ok, ok + fail))

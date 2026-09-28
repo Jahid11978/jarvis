@@ -986,24 +986,60 @@ check("_is_admin_user" not in mayfn, "die Berechtigung kennt KEINEN Admin-Bypass
 
 # Jeder Benutzer-Endpunkt haengt an require_email_access, der Admin-Teil an
 # require_local_auth. Ein GET darf nicht schwaecher geschuetzt sein als ein POST.
+#
+# Gemessen am SYNTAXBAUM (seit 2026-09-28): frueher galt jedes TEXTvorkommen von
+# "/api/email/rules" als Endpunkt, und in den 900 Zeichen danach genuegte
+# irgendeine Berechtigung – auch die des NAECHSTEN Endpunkts. Seit e4bdf14 steht
+# der Pfad zusaetzlich in der Beschriftungstabelle der Sitzungsuebersicht, und
+# der Waechter meldete dort einen Fehler, den es nicht gab.
+import ast as _ast
+_baum = _ast.parse(main_src)
+
+
+def _routen(pfad):
+    """Alle Endpunkte, deren Dekorator-Pfad == pfad ist oder darunter liegt."""
+    aus = []
+    for f in _ast.walk(_baum):
+        if not isinstance(f, (_ast.FunctionDef, _ast.AsyncFunctionDef)):
+            continue
+        for d in f.decorator_list:
+            if (isinstance(d, _ast.Call) and isinstance(d.func, _ast.Attribute)
+                    and d.func.attr in ("get", "post", "put", "delete", "patch")
+                    and d.args and isinstance(d.args[0], _ast.Constant)
+                    and isinstance(d.args[0].value, str)
+                    and (d.args[0].value == pfad or d.args[0].value.startswith(pfad + "/"))):
+                aus.append((f, d.func.attr.upper(), d.args[0].value))
+    return aus
+
+
+def _schranken(f):
+    """Namen der Berechtigungen, die dieser Endpunkt WIRKLICH verlangt:
+    als Depends(X) (Parameter oder dependencies=[...]) oder als Aufruf X(...)."""
+    namen = set()
+    for k in _ast.walk(f):
+        if isinstance(k, _ast.Call) and isinstance(k.func, _ast.Name):
+            if k.func.id == "Depends" and k.args and isinstance(k.args[0], _ast.Name):
+                namen.add(k.args[0].id)
+            elif k.func.id.startswith("require_"):
+                namen.add(k.func.id)
+    return namen
+
+
 for route in ("/api/email/status", "/api/email/account", "/api/email/test",
               "/api/email/folders", "/api/email/messages", "/api/email/rules",
               "/api/email/log", "/api/email/stop"):
-    stellen = [m.start() for m in re.finditer(re.escape('"%s"' % route), main_src)]
-    check(bool(stellen), f"{route} ist registriert")
-    for pos in stellen:
-        block = main_src[pos:pos + 900]
-        if "require_email_access" not in block and "require_local_auth" not in block:
-            check(False, f"{route} haengt an einer Berechtigung", block[:120])
-            break
-    else:
-        check(True, f"{route} haengt an einer Berechtigung")
+    treffer = _routen(route)
+    check(bool(treffer), f"{route} ist registriert")
+    ohne = [f"{m} {pf} ({f.name})" for f, m, pf in treffer
+            if not _schranken(f) & {"require_email_access", "require_local_auth"}]
+    check(bool(treffer) and not ohne,
+          f"{route} haengt an einer Berechtigung ({len(treffer)} Endpunkt(e))", "; ".join(ohne))
 
 for route in ("/api/email/admin/overview", "/api/email/admin/explore",
               "/api/email/admin/areas"):
-    pos = main_src.index('"%s"' % route)
-    check("require_local_auth" in main_src[pos:pos + 700],
-          f"{route} ist Administratoren vorbehalten")
+    treffer = _routen(route)
+    check(bool(treffer) and all("require_local_auth" in _schranken(f) for f, _, _ in treffer),
+          f"{route} ist Administratoren vorbehalten", str([f.name for f, _, _ in treffer]))
 
 # Der Konto-Endpunkt darf NICHT vorfiltern: ein unbekanntes Feld muss zu einem
 # Klartext-Fehler fuehren, nicht still verworfen und als "gespeichert" gemeldet

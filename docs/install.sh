@@ -611,7 +611,41 @@ if id jarvis &>/dev/null; then
 else
     $SUDO useradd -m -s /bin/bash jarvis >/dev/null 2>&1
     _erstkennwort_setzen
+    JARVIS_NEU_ANGELEGT=1
     success "Benutzer 'jarvis' angelegt (Erstkennwort: siehe Abschlussmeldung)"
+fi
+
+# SSH fuer 'jarvis' nur per Schluessel. Das Web-Kennwort ist zugleich das
+# Linux-Kennwort; ueber SSH liesse es sich ohne Drossel und ohne 2FA raten
+# (auf DEV: sudo-Gruppe -> root). Das Web-Login (PAM-Dienst "login") ist davon
+# NICHT betroffen. Ein BESTEHENDES Konto ohne Schluessel wird nicht umgestellt –
+# sonst schnitte ein Neulauf des Skripts laufende Zugaenge ab (2026-09-28).
+_ssh_nur_schluessel() {
+    # Pfade umlenkbar nur fuer den Waechter (tests/test_standard_zugang.py)
+    local haupt="${JARVIS_SSHD_CONFIG:-/etc/ssh/sshd_config}"
+    local dropin_dir="${JARVIS_SSHD_DROPIN_DIR:-/etc/ssh/sshd_config.d}"
+    local conf="$dropin_dir/50-jarvis-nur-schluessel.conf"
+    local sshd_bin; sshd_bin="$(command -v sshd || echo /usr/sbin/sshd)"
+    [[ -x "$sshd_bin" ]] || return 0
+    if ! $SUDO grep -qE "^[[:space:]]*Include[[:space:]]+${dropin_dir//./\\.}/" "$haupt" 2>/dev/null; then
+        warn "SSH: sshd_config bindet sshd_config.d nicht ein – 'jarvis' bitte von Hand auf Schlüssel-Anmeldung stellen"
+        return 0
+    fi
+    printf '%s\n' '# Von Jarvis install.sh: jarvis nur per Schluessel (Web-Login unberuehrt)' \
+        'Match User jarvis' '    PasswordAuthentication no' '    KbdInteractiveAuthentication no' \
+        | $SUDO tee "$conf" >/dev/null
+    if $SUDO "$sshd_bin" -t -f "$haupt" 2>/dev/null; then
+        $SUDO systemctl reload ssh 2>/dev/null || $SUDO systemctl reload sshd 2>/dev/null || true
+        success "SSH: 'jarvis' meldet sich nur noch per Schlüssel an"
+    else
+        $SUDO rm -f "$conf"
+        warn "SSH: Einstellung von sshd abgelehnt – zurückgenommen, SSH unverändert"
+    fi
+}
+if [[ "${JARVIS_NEU_ANGELEGT:-0}" == 1 ]] || $SUDO test -s ~jarvis/.ssh/authorized_keys; then
+    _ssh_nur_schluessel
+else
+    warn "SSH: 'jarvis' hat keinen hinterlegten Schlüssel – Kennwort-Anmeldung per SSH bleibt vorerst erlaubt. Nach dem Hinterlegen (~jarvis/.ssh/authorized_keys) install.sh erneut ausführen."
 fi
 
 # .env konfigurieren

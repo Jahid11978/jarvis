@@ -323,6 +323,63 @@ for rel in GEHEIM:
     check(f"{rel}: Dateiwerkzeug gilt als sensibel",
           sicher(sbx.is_sensitive, Path("/opt/jarvis") / rel) is True)
 
+# ─── 7. SSH: jarvis nur per Schluessel (install.sh, ausgefuehrt) ────────────
+print("7. install.sh: SSH fuer 'jarvis' nur per Schluessel – gemessen mit sshd -T")
+SSHD = shutil.which("sshd") or ("/usr/sbin/sshd" if os.access("/usr/sbin/sshd", os.X_OK) else None)
+KEYGEN = shutil.which("ssh-keygen")
+SH = (WURZEL / "docs" / "install.sh").read_text(encoding="utf-8")
+mf = re.search(r"\n(_ssh_nur_schluessel\(\) \{.*?\n\}\n)", SH, re.S)
+check("Positivkontrolle: _ssh_nur_schluessel im Skript gefunden", mf is not None)
+if not (SSHD and KEYGEN):
+    print("ABBRUCH: sshd/ssh-keygen fehlen – Abschnitt 7 nicht messbar")
+    sys.exit(2)
+if mf:
+    ssh_d = sandkasten / "ssh"
+    (ssh_d / "d").mkdir(parents=True)
+    subprocess.run([KEYGEN, "-q", "-t", "ed25519", "-N", "", "-f", str(ssh_d / "hk")], check=True)
+    fake = ssh_d / "bin"
+    fake.mkdir()
+    (fake / "systemctl").write_text("#!/bin/sh\nexit 0\n")
+    os.chmod(fake / "systemctl", 0o755)
+
+    def haupt(mit_include):
+        (ssh_d / "cfg").write_text(
+            f"HostKey {ssh_d / 'hk'}\n" + (f"Include {ssh_d / 'd'}/*.conf\n" if mit_include else "")
+            + "PasswordAuthentication yes\nKbdInteractiveAuthentication no\nUsePAM yes\n")
+
+    def effektiv(user):
+        r = subprocess.run([SSHD, "-T", "-f", str(ssh_d / "cfg"), "-C", f"user={user},host=x,addr=1.2.3.4"],
+                           capture_output=True, text=True)
+        mm = re.search(r"^passwordauthentication (\w+)$", r.stdout, re.M)
+        return mm.group(1) if mm else f"?({r.stderr.strip()[:80]})"
+
+    def ausfuehren():
+        skript = ('SUDO=""\nsuccess(){ echo "OK $*"; }\nwarn(){ echo "WARN $*"; }\n'
+                  + mf.group(1) + "\n_ssh_nur_schluessel")
+        return subprocess.run(["bash", "-c", skript], capture_output=True, text=True, timeout=30, env={
+            **os.environ, "PATH": f"{fake}:{os.path.dirname(SSHD)}:{os.environ['PATH']}",
+            "JARVIS_SSHD_CONFIG": str(ssh_d / "cfg"), "JARVIS_SSHD_DROPIN_DIR": str(ssh_d / "d")})
+
+    haupt(True)
+    vorher = effektiv("jarvis")
+    check("Positivkontrolle: vorher darf jarvis per Kennwort (sshd -T misst)", vorher == "yes", vorher)
+    r = ausfuehren()
+    check("Block laeuft durch und meldet Erfolg", r.returncode == 0 and "OK SSH" in r.stdout,
+          (r.stdout + r.stderr).strip()[:160])
+    check("danach: jarvis NUR per Schluessel", effektiv("jarvis") == "no", effektiv("jarvis"))
+    check("alle anderen Benutzer unveraendert (root)", effektiv("root") == "yes", effektiv("root"))
+    check("alle anderen Benutzer unveraendert (andreas)", effektiv("andreas") == "yes")
+    for f in (ssh_d / "d").glob("*.conf"):
+        f.unlink()
+    haupt(False)
+    r = ausfuehren()
+    check("ohne Include in sshd_config: nichts angelegt, Warnung",
+          not list((ssh_d / "d").glob("*.conf")) and "WARN SSH" in r.stdout, r.stdout.strip()[:120])
+aufruf = re.search(r'if \[\[ "\$\{JARVIS_NEU_ANGELEGT:-0\}" == 1 \]\] \|\| \$SUDO test -s ~jarvis/\.ssh/authorized_keys; then\n\s*_ssh_nur_schluessel\n\s*else\n\s*warn ', SH)
+check("Aufruf nur fuer NEUES Konto oder Konto MIT Schluessel (sonst Warnung)", aufruf is not None)
+check("neu angelegtes Konto setzt JARVIS_NEU_ANGELEGT=1",
+      bool(re.search(r"_erstkennwort_setzen\n\s*JARVIS_NEU_ANGELEGT=1\n", SH)))
+
 shutil.rmtree(sandkasten, ignore_errors=True)
 print(f"\n{_ok} OK, {_fail} FAIL")
 sys.exit(1 if _fail else 0)
