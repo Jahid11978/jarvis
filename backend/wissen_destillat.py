@@ -820,7 +820,7 @@ def _code_zaun_weg(text: str) -> str:
 
 
 async def destilliere(text: str, prompt: str, gruppen_prompt: str,
-                      melde=None) -> dict:
+                      melde=None, max_bloecke: int = MAX_BLOECKE) -> dict:
     """Text zu einem Markdown destillieren – blockweise, wenn er lang ist.
 
     ``melde(phase, prozent, text)`` wird bei Meilensteinen gerufen (optional).
@@ -847,8 +847,8 @@ async def destilliere(text: str, prompt: str, gruppen_prompt: str,
     if not teile:
         raise DestillatFehler("Kein verwertbarer Text.")
     gekappt = False
-    if len(teile) > MAX_BLOECKE:
-        teile = teile[:MAX_BLOECKE]
+    if len(teile) > max_bloecke:
+        teile = teile[:max(1, max_bloecke)]
         gekappt = True
 
     if melde:
@@ -881,6 +881,46 @@ async def destilliere(text: str, prompt: str, gruppen_prompt: str,
     if melde:
         melde("fertig", 100, f"{len(md)} Zeichen")
     return {"markdown": md, "bloecke": len(teile), "gekappt": gekappt}
+
+
+async def destilliere_je_datei(text: str, prompt: str, gruppen_prompt: str) -> dict:
+    """„Pro Datei getrennt": jede Quelldatei bekommt ihr eigenes Destillat.
+
+    Rueckgabe wie ``destilliere`` plus ``je_datei`` und ``ausgelassen``
+    (Dateien, die wegen des Deckels gar nicht mehr drankamen).
+
+    ⚠ EIN BLOCKBUDGET FUER DEN GANZEN LAUF (Code-Review 2026-09-28). Stand
+    vorher im Endpunkt, und ``MAX_BLOECKE`` galt dort JE ABSCHNITT: N
+    Kopfzeilen ``--- name ---`` - im Text frei eingebbar - kosteten bis zu
+    N × MAX_BLOECKE Modellaufrufe bei EINER Drosselmarke. Und ``gekappt`` war
+    fest ``False``: ein gekapptes Destillat sah vollstaendig aus.
+    """
+    teile = teile_nach_dateien(text)
+    if len(teile) <= 1:
+        return {**await destilliere(text, prompt, gruppen_prompt), "je_datei": False,
+                "ausgelassen": 0}
+    rest = MAX_BLOECKE
+    stuecke: list[str] = []
+    bloecke_n = 0
+    gekappt = False
+    ausgelassen = 0
+    for name, abschnitt in teile:
+        if rest <= 0:
+            ausgelassen += 1
+            continue
+        r = await destilliere(abschnitt, prompt, gruppen_prompt, max_bloecke=rest)
+        rest -= r["bloecke"]
+        bloecke_n += r["bloecke"]
+        gekappt = gekappt or bool(r.get("gekappt"))
+        stuecke.append(("## " + name + "\n\n" if name else "") + r["markdown"])
+    if ausgelassen:
+        gekappt = True
+        # Der Hinweis steht VOR dem, was fehlt - am Ende schnitte ihn die
+        # naechste Kappung selbst weg (Register).
+        stuecke.insert(0, f"> Hinweis: {ausgelassen} von {len(teile)} Dateien wurden "
+                          f"nicht destilliert (höchstens {MAX_BLOECKE} Blöcke je Lauf).")
+    return {"markdown": "\n\n---\n\n".join(stuecke), "bloecke": bloecke_n,
+            "gekappt": gekappt, "je_datei": True, "ausgelassen": ausgelassen}
 
 
 # ── Ergebnis verwerten ──────────────────────────────────────────────────────

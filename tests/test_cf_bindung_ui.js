@@ -701,6 +701,40 @@ section('12. Ort des Editors – beim Bearbeiten IN der Box des Eintrags (Vorgab
     s.zu();
 }
 
+// ════════════════════════════════════════════════════════════════════════
+section('Einbindung fremder Wissensgruppen: KEINE Knoepfe (Code-Review 2026-09-28)');
+{
+    // ⚠ Der Server weist Aendern/Loeschen fremder Einbindungen mit 403 ab und
+    // liefert je Eintrag `darf_aendern` (dieselbe Regel). Die Oberflaeche soll
+    // keinen Knopf anbieten, der garantiert scheitert. `=== false`: ein
+    // aelteres Backend ohne das Feld behaelt die Knoepfe.
+    const ein = (id, darf) => Object.assign({
+        id: id, typ: 'auswahl', name: 'NEXUS Dokumentation',
+        auswahl: [{ key: 'NEXUS', name: 'NEXUS Dokumentation', start: true, ganz: false, seiten: [], zweige: [] }],
+        gruppen: ['g1'], tags: [], gruppen_info: [{ id: 'g1', name: 'Technik', color: '#888' }], abgleich: null },
+        darf === undefined ? {} : { darf_aendern: darf });
+    const s = await seite({ bindung: { ok: true, aktiv: true,
+        bereiche: [ein('eigen', true), ein('fremd', false), ein('alt')] } });
+    const zeile = (id) => s.doc.querySelector('#wi-cfb-list .wi-item[data-id="' + id + '"]');
+    check('(Positivkontrolle) alle drei Zeilen stehen da',
+          !!zeile('eigen') && !!zeile('fremd') && !!zeile('alt'));
+    const hat = (id, sel) => !!(zeile(id) && zeile(id).querySelector(sel));
+    check('eigene Einbindung: Bearbeiten und Muelleimer', hat('eigen', '.wi-cfb-edit') && hat('eigen', '.wi-cfb-del'));
+    check('⚠ fremde Einbindung: KEIN Bearbeiten', !hat('fremd', '.wi-cfb-edit'));
+    check('⚠ fremde Einbindung: KEIN Muelleimer', !hat('fremd', '.wi-cfb-del'));
+    const hw = zeile('fremd') && zeile('fremd').querySelector('.wi-cfb-fremd');
+    check('…stattdessen ein Hinweis mit Text und Erklaerung',
+          !!hw && /andere Wissensgruppe/.test(hw.textContent) && /außerhalb deines Bereichs/.test(hw.getAttribute('title') || ''),
+          hw ? hw.outerHTML : 'fehlt');
+    check('Feld fehlt (aelteres Backend): Knoepfe bleiben', hat('alt', '.wi-cfb-edit') && hat('alt', '.wi-cfb-del'));
+    check('die Knoepfe der eigenen Zeile funktionieren weiter (Loeschen)', await (async () => {
+        await s.klick(zeile('eigen').querySelector('.wi-cfb-del'));
+        await warten(40);
+        return s.rufe.some(r => r.m === 'DELETE' && /\/eigen$/.test(r.pfad));
+    })());
+    s.zu();
+}
+
 clearTimeout(wach);
 bilanz = true;
 console.log(`\n\x1b[1mErgebnis: ${OK}/${OK + FAIL}\x1b[0m`);

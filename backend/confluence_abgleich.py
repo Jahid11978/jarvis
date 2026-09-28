@@ -304,6 +304,10 @@ def _lauf(client) -> dict:
     if client is None:
         from backend.confluence_client import ConfluenceClient
         client = ConfluenceClient()
+    # ⚠ Wirft ``BestandUnlesbar``, wenn die Ablage da, aber nicht lesbar ist –
+    # und MUSS es: als leere Liste gelesen raeumte der Abschnitt "Nicht mehr
+    # gewollt" unten jede importierte Seite ab. ``lauf`` faengt den Fehler, der
+    # Bestand bleibt unberuehrt.
     eintraege = cfb.liste()
     with _STAND_SPERRE:
         stand = _stand_laden()

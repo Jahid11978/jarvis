@@ -230,9 +230,37 @@ if isinstance(b2, list):
 # ═══════════════════════════════════════════════════════════════════════════
 kopf("7) Die Schranken des Werkzeugs")
 t = BT.BildTextErsetzenTool()
-check("der Pfad-Parameter ist fuer den Dispatch deklariert",
-      getattr(t, "pfad_parameter", ()) == ("pfad",),
-      str(getattr(t, "pfad_parameter", None)))
+_pp = tuple(getattr(t, "pfad_parameter", None) or ())
+check("der Pfad-Parameter ist fuer den Dispatch deklariert", "pfad" in _pp, str(_pp))
+
+# ── JEDES Feld, das execute() als Pfad LIEST, ist deklariert ──────────────
+# ⚠ Code-Review 2026-09-28: execute las auch `datei`/`bild`, deklariert war nur
+# `pfad` - der Dispatch prueft aber nur die deklarierten Felder, der Weg an
+# authorize_fs vorbei war damit ein Parametername. Gemessen wird das VERHALTEN:
+# ein nicht existierender Pfad, der in der Antwort auftaucht, wurde gelesen.
+# Die Kandidaten sind absichtlich breiter als das, was heute gelesen wird.
+import asyncio  # noqa: E402
+_SONDE = str(_SANDKASTEN / "gibt-es-nicht" / "jv-sonde.png")
+_KANDIDATEN = ("pfad", "datei", "bild", "path", "file", "image", "bildpfad",
+               "dateipfad", "quelle", "source", "input")
+
+
+async def _gelesene_felder():
+    out = []
+    for feld in _KANDIDATEN:
+        r = str(await t.execute(**{feld: _SONDE}))
+        if _SONDE in r:
+            out.append(feld)
+    return out
+
+
+_gelesen = sicher(asyncio.run, _gelesene_felder())
+# Positivkontrolle: ohne sie ist "nichts Undeklariertes gelesen" trivial wahr.
+if isinstance(_gelesen, Exception) or "pfad" not in _gelesen:
+    print(f"ABBRUCH: die Sonde erkennt nicht einmal das Feld 'pfad' ({_gelesen!r})")
+    sys.exit(2)
+check("jedes Feld, aus dem ein Pfad gelesen wird, ist deklariert",
+      set(_gelesen) <= set(_pp), f"gelesen={_gelesen} deklariert={list(_pp)}")
 check("das Schema verlangt den Pfad",
       t.parameters_schema().get("required") == ["pfad"])
 check("die Beschreibung grenzt es gegen generate_image ab",

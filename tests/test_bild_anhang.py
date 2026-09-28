@@ -235,12 +235,15 @@ _baum = ast.parse(MAIN)
 _teile = {}
 for k in ast.walk(_baum):
     if isinstance(k, ast.FunctionDef) and k.name in (
-            "_bild_als_datei", "_anhang_ablegen", "_anhang_merken"):
+            "_bild_als_datei", "_anhang_ablegen", "_anhang_merken", "_anhang_dateiname"):
         _teile[k.name] = ast.get_source_segment(MAIN, k) or ""
-check("alle drei Funktionen per AST geschnitten (Positivkontrolle)",
-      len(_teile) == 3 and all(len(v) > 100 for v in _teile.values()))
+# `_anhang_dateiname` ist die mit der Auslieferung geteilte Namensregel
+# (seit 2026-09-28) - ohne sie im Schnitt endet `_anhang_ablegen` im NameError.
+check("alle vier Funktionen per AST geschnitten (Positivkontrolle)",
+      len(_teile) == 4 and all(len(v) > 100 for v in _teile.values()))
 _quelle_kette = "\n\n".join(_teile.get(n, "") for n in
-                            ("_anhang_ablegen", "_anhang_merken", "_bild_als_datei"))
+                            ("_anhang_dateiname", "_anhang_ablegen", "_anhang_merken",
+                             "_bild_als_datei"))
 
 sandkasten = Path(tempfile.mkdtemp(prefix="bildanhang_"))
 try:

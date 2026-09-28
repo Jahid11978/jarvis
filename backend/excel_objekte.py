@@ -340,6 +340,18 @@ def _bedingt(e: dict, ziel: dict) -> str:
                 return ("Der Operator %r braucht einen zweiten Wert ('wert2')."
                         % ziel["operator"])
             ziel["wert2"] = _text(wert2, 120)
+        # ⚠ DER VERGLEICHSWERT WIRD IM FENSTER ZUR FORMEL (`'=' + wert`,
+        # excel.js). Ohne diese Pruefung kam `WEBSERVICE(...)`/`RTD(...)` als
+        # Vergleichswert an der Sperrliste vorbei, die fuer jede Zellformel gilt
+        # (Code-Review 2026-09-28). Geprueft wird GENAU die Zeichenkette, die
+        # das Fenster daraus baut. Import hier, weil excel_ask dieses Modul
+        # auf oberster Ebene importiert (Kreis).
+        from backend.excel_ask import formel_pruefen
+        for feld in ("wert", "wert2"):
+            if feld in ziel:
+                grund = formel_pruefen("=" + str(ziel[feld]))
+                if grund:
+                    return "Vergleichswert ('%s'): %s" % (feld, grund)
         for feld in ("farbe", "textfarbe"):
             f = _text(e.get(feld), 20)
             if f:

@@ -140,26 +140,34 @@ def _norm(user: str) -> str:
 #  Formulare (Definitionen)
 # ═══════════════════════════════════════════════════════════════════════════
 
-def _laden() -> dict:
+def _laden(streng: bool = False) -> dict:
     """Bestand lesen. **Streng**: eine beschaedigte Datei wird NICHT ersetzt.
 
-    Ein Parse-Fehler gibt einen leeren Bestand zurueck, damit der Bereich nicht
-    sperrt – geschrieben wird aber nur, was der Aufrufer wirklich geaendert hat.
-    Eine Automatik, die eine kaputte Datei stillschweigend durch eine leere
-    ersetzt, vernichtet die Arbeit des Administrators (Regel aus
-    ``ai_mouse_fragen._laden``).
+    Lesend (``streng=False``) gibt ein Parse-Fehler einen leeren Bestand
+    zurueck, damit der Bereich nicht sperrt. SCHREIBEND (``streng=True``)
+    wirft er ``FeedbackFehler``: ``formular_speichern`` legte sonst ein neues
+    Formular an, indem es den leeren Stand plus den neuen Eintrag UEBER die
+    unlesbare Datei schrieb – alle anderen Definitionen waeren weg
+    (Code-Review 2026-09-28). Eine Automatik, die eine kaputte Datei
+    stillschweigend durch eine leere ersetzt, vernichtet die Arbeit des
+    Administrators (Regel aus ``ai_mouse_fragen._laden``).
     """
     p = _pfad_formulare()
     if not p.is_file():
         return {"version": 1, "formulare": []}
     try:
         d = json.loads(p.read_text(encoding="utf-8"))
-    except Exception:  # noqa: BLE001
+        if not isinstance(d, dict) or not isinstance(d.get("formulare", []), list):
+            raise ValueError("unerwartete Form")
+    except Exception as e:  # noqa: BLE001
+        print(f"[Feedback] {p} nicht lesbar ({type(e).__name__}: {e}) – "
+              f"Formulare erscheinen leer, Aendern ruht.", flush=True)
+        if streng:
+            raise FeedbackFehler(
+                "Die gespeicherten Formulare können gerade nicht gelesen werden – "
+                "es wird nichts verändert. Bitte den Administrator informieren.") from e
         return {"version": 1, "formulare": []}
-    if not isinstance(d, dict):
-        return {"version": 1, "formulare": []}
-    if not isinstance(d.get("formulare"), list):
-        d["formulare"] = []
+    d.setdefault("formulare", [])
     return d
 
 
@@ -317,7 +325,7 @@ def formular_speichern(fid: str, titel: str, beschreibung: str,
                              "er steht in der Auswahl des Benutzers.")
     sp = _spalten_pruefen(spalten)
     with _SPERRE:
-        d = _laden()
+        d = _laden(streng=True)
         liste = d["formulare"]
         alt = next((f for f in liste if f.get("id") == fid), None) if fid else None
         if fid and alt is None:
@@ -362,7 +370,7 @@ def formular_loeschen(fid: str) -> bool:
     dann der Formularname aus der Abgabe selbst) und im CSV-Export.
     """
     with _SPERRE:
-        d = _laden()
+        d = _laden(streng=True)
         if not any(f.get("id") == fid for f in d["formulare"]):
             return False
         d["formulare"] = [f for f in d["formulare"] if f.get("id") != fid]
@@ -384,7 +392,7 @@ def formulare_sortieren(ids: list) -> int:
     if not gewuenscht:
         return 0
     with _SPERRE:
-        d = _laden()
+        d = _laden(streng=True)
         vorhanden = [f for f in d["formulare"] if isinstance(f, dict)]
         nach_id: dict = {}
         for f in vorhanden:

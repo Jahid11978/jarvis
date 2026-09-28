@@ -888,5 +888,82 @@ check("⚠ die Ablage laeuft ueber _benutzer.pfad_teil (EINE Datei je Mensch)",
 # durch Ziehen/Waehlen – eine Vorkommens-Pruefung hier waere trivial wahr.
 
 
+section("„Pro Datei getrennt“: EIN Blockbudget, ehrliche Kappung (Code-Review 2026-09-28)")
+# ⚠ Vorher im Endpunkt: MAX_BLOECKE galt JE ABSCHNITT (N Kopfzeilen im frei
+# eingebbaren Text = N × 40 Modellaufrufe bei EINER Drosselmarke), und
+# `gekappt` war fest False. AUSGEFUEHRT, mit gezaehltem Modellaufruf in der
+# echten Form (async, Auftragstext rein, Markdown raus).
+import asyncio  # noqa: E402
+import textwrap  # noqa: E402
+_je = getattr(wd, "destilliere_je_datei", None)
+check("(Positivkontrolle) destilliere_je_datei existiert", callable(_je))
+if callable(_je):
+    _rufe: list = []
+
+    async def _zaehl(auftrag: str) -> str:
+        _rufe.append(auftrag)
+        return "Ergebnis"
+
+    _alt_einmal, _alt_bz = wd._einmal, wd.BLOCK_ZEICHEN
+    wd._einmal = _zaehl
+    try:
+        def _lauf(txt):
+            _rufe.clear()
+            return sicher(asyncio.run, _je(txt, "", ""))
+
+        _zwei = "--- a.txt ---\nInhalt A\n\n--- b.txt ---\nInhalt B\n"
+        r = _lauf(_zwei)
+        check("zwei kleine Dateien: je_datei, nicht gekappt, zwei Aufrufe",
+              isinstance(r, dict) and r.get("je_datei") is True and r.get("gekappt") is False
+              and len(_rufe) == 2, f"{r!r} / {len(_rufe)}")
+        check("…je Datei eine Ueberschrift",
+              isinstance(r, dict) and "## a.txt" in r["markdown"] and "## b.txt" in r["markdown"])
+
+        _N = wd.MAX_BLOECKE + 20
+        _viele = "".join(f"--- d{i}.txt ---\nInhalt {i}\n\n" for i in range(_N))
+        r = _lauf(_viele)
+        check(f"⚠ {_N} Kopfzeilen: hoechstens MAX_BLOECKE Modellaufrufe (gemessen: {len(_rufe)})",
+              len(_rufe) <= wd.MAX_BLOECKE)
+        check("⚠ …und das Ergebnis ist als GEKAPPT gemeldet",
+              isinstance(r, dict) and r.get("gekappt") is True, repr(r)[:200])
+        check("…mit Zahl der ausgelassenen Dateien",
+              isinstance(r, dict) and r.get("ausgelassen") == _N - wd.MAX_BLOECKE, repr(r)[:200])
+        check("…und der Hinweis steht VOR dem Destillat",
+              isinstance(r, dict) and r["markdown"].startswith("> Hinweis:")
+              and str(_N - wd.MAX_BLOECKE) in r["markdown"].split("\n", 1)[0])
+
+        # Mehrblock-Abschnitte: das Budget gilt ueber ALLE Abschnitte zusammen.
+        wd.BLOCK_ZEICHEN = 60
+        _abs = "\n\n".join("x" * 50 for _ in range(30))       # 30 Bloecke je Datei
+        _gross = "".join(f"--- g{i}.txt ---\n{_abs}\n\n" for i in range(3))
+        r = _lauf(_gross)
+        _bl = r.get("bloecke") if isinstance(r, dict) else None
+        check(f"⚠ drei Dateien à 30 Bloecke: insgesamt hoechstens MAX_BLOECKE Bloecke (bloecke={_bl})",
+              isinstance(_bl, int) and 0 < _bl <= wd.MAX_BLOECKE)
+        check("…und gekappt ist gemeldet", isinstance(r, dict) and r.get("gekappt") is True)
+        # Zwei Dateien à 30: die zweite wird GEKAPPT, aber keine ausgelassen - die
+        # Meldung muss dann aus dem Abschnitt kommen, nicht aus "ausgelassen".
+        r = _lauf("".join(f"--- h{i}.txt ---\n{_abs}\n\n" for i in range(2)))
+        check("⚠ gekappter Abschnitt ohne ausgelassene Datei: trotzdem gekappt",
+              isinstance(r, dict) and r.get("ausgelassen") == 0 and r.get("gekappt") is True,
+              repr(r)[:200])
+        # Obergrenze der Aufrufe: Bloecke + je Abschnitt hoechstens ein Zusammenfuehren.
+        check(f"…Aufrufe gesamt <= MAX_BLOECKE + Zahl der Dateien (gemessen: {len(_rufe)})",
+              len(_rufe) <= wd.MAX_BLOECKE + 3)
+    finally:
+        wd._einmal, wd.BLOCK_ZEICHEN = _alt_einmal, _alt_bz
+
+# Verdrahtung: der Endpunkt nimmt DIESE Funktion und baut keine eigene Schleife.
+_lf = funktion(MAIN, "wissen_destillat_lauf")
+check("(Positivkontrolle) Endpunkt wissen_destillat_lauf gefunden", bool(_lf))
+_lfb = ast.parse(textwrap.dedent(_lf)) if _lf else None
+_rufe_ep = [ast.unparse(c.func) for c in ast.walk(_lfb) if isinstance(c, ast.Call)] if _lfb else []
+check("der Endpunkt ruft _wd.destilliere_je_datei", "_wd.destilliere_je_datei" in _rufe_ep, str(_rufe_ep))
+check("⚠ …und ruft _wd.destilliere nicht in einer Schleife",
+      not any(isinstance(n, (ast.For, ast.AsyncFor)) and any(
+          isinstance(c, ast.Call) and ast.unparse(c.func) == "_wd.destilliere" for c in ast.walk(n))
+          for n in ast.walk(_lfb)) if _lfb else False)
+
+
 print(f"\n\033[1mErgebnis: {OK}/{OK + FAIL}\033[0m")
 sys.exit(1 if FAIL else 0)

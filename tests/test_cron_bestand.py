@@ -60,6 +60,12 @@ if cls is None:
     print("KEIN CronManager im Quelltext gefunden - nicht pruefbar")
     sys.exit(2)
 KLASSE = ast.get_source_segment(src, cls)
+# Die Fehlerklasse fuer einen unlesbaren Bestand steht auf Modulebene - sie
+# wird mitgeschnitten, sonst endet jeder Schreibweg im NameError und die
+# Pruefungen unten waeren aus dem falschen Grund rot bzw. gruen.
+_fk = next((n for n in baum.body
+            if isinstance(n, ast.ClassDef) and n.name == "JobsUnlesbar"), None)
+FEHLERKLASSE = ast.get_source_segment(src, _fk) if _fk is not None else ""
 
 
 class _SchedStub:
@@ -101,6 +107,8 @@ def baue(jobs_datei: Path):
         "_agent_manager": None, "_broadcast_fn": None,
         "print": print,
     }
+    if FEHLERKLASSE:
+        exec(FEHLERKLASSE, ns)  # noqa: S102
     exec(KLASSE, ns)          # noqa: S102 - genau das ist der Zweck
     return ns["CronManager"]()
 
@@ -188,9 +196,10 @@ try:
     gefunden = set()
     for m in kl.body:
         if isinstance(m, ast.FunctionDef) and m.name in ZIEL:
+            # `_schreibbar` laedt selbst (und wird unten eigens geprueft).
             ruft = any(
                 isinstance(n, ast.Call) and isinstance(n.func, ast.Attribute)
-                and n.func.attr == "_ensure_loaded"
+                and n.func.attr in ("_ensure_loaded", "_schreibbar")
                 for n in ast.walk(m))
             if ruft:
                 gefunden.add(m.name)
@@ -199,6 +208,49 @@ try:
     check("POSITIVKONTROLLE: es wurden ueberhaupt Methoden geprueft",
           len(ZIEL & {m.name for m in kl.body
                       if isinstance(m, ast.FunctionDef)}) == len(ZIEL))
+
+    print("\n7) UNLESBARER Bestand: nichts wird ueberschrieben (Code-Review 2026-09-28)")
+    # ⚠ Derselbe Verlust wie im Vorfall, nur ueber den LADEFEHLER: _load setzte
+    # `_jobs = []` und trotzdem `_geladen = True` - der naechste add_job schrieb
+    # eine Liste mit genau einem Eintrag. Die erste Schranke (_save) griff nicht,
+    # weil der Bestand als geladen galt.
+    for roh, was in [('[{"id": "system_auto_update", kaputt', "kein JSON"),
+                     ('{"system_auto_update": {}}', "keine Liste"),
+                     ('["nur ein Text"]', "Liste ohne Auftraege")]:
+        JD.write_text(roh)
+        cm = baue(JD)
+        r = sicher(cm.add_job, "Wissensabgleich", "*/5 * * * *", "prueft nach",
+                   job_id="wissensabgleich", kind="wissensabgleich")
+        check(f"[{was}] add_job weist ab", isinstance(r, Exception)
+              and type(r).__name__ == "JobsUnlesbar")
+        check(f"[{was}] ⚠ die Datei steht unveraendert", JD.read_text() == roh)
+        check(f"[{was}] …und im Speicher bleibt kein Auftrag zurueck",
+              sicher(cm.list_jobs) == [])
+    JD.write_text(ALT_ROH := json.dumps(ALT)[:-3])   # abgeschnitten
+    cm = baue(JD)
+    for nm, fn in [("update_job", lambda: cm.update_job("system_auto_update", label="x")),
+                   ("delete_job", lambda: cm.delete_job("system_auto_update")),
+                   ("claim_job", lambda: cm.claim_job("system_auto_update", "a", True))]:
+        r = sicher(fn)
+        check(f"{nm} weist ab (JobsUnlesbar)", type(r).__name__ == "JobsUnlesbar")
+        check(f"{nm}: die Datei steht unveraendert", JD.read_text() == ALT_ROH)
+    check("JobsUnlesbar ist ein ValueError (die Endpunkte reichen den Grund durch)",
+          "JobsUnlesbar" in FEHLERKLASSE and "(ValueError)" in FEHLERKLASSE)
+    # Heilung: ist die Datei wieder lesbar, geht es ohne Neustart weiter.
+    JD.write_text(json.dumps(ALT))
+    r = sicher(cm.add_job, "Wissensabgleich", "*/5 * * * *", "prueft nach",
+               job_id="wissensabgleich", kind="wissensabgleich")
+    ids = [j.get("id") for j in json.loads(JD.read_text())]
+    check(f"nach der Reparatur: beide Auftraege auf der Platte (gefunden: {ids})",
+          not isinstance(r, Exception) and sorted(ids) == ["system_auto_update", "wissensabgleich"])
+
+    print("\n8) REGEL: jeder AENDERNDE Weg geht durch _schreibbar")
+    AENDERND = {"add_job", "update_job", "delete_job", "claim_job"}
+    mit = {m.name for m in kl.body if isinstance(m, ast.FunctionDef) and m.name in AENDERND
+           and any(isinstance(n, ast.Call) and isinstance(n.func, ast.Attribute)
+                   and n.func.attr == "_schreibbar" for n in ast.walk(m))}
+    check(f"alle {len(AENDERND)} aendernden Methoden rufen _schreibbar "
+          f"(fehlen: {sorted(AENDERND - mit) or 'keine'})", mit == AENDERND)
 finally:
     shutil.rmtree(SAND, ignore_errors=True)
 

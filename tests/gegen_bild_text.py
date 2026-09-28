@@ -50,8 +50,24 @@ PROBEN = [
    "    grund = (255, 255, 255)")),
  ("Schrift wird nicht verkleinert", lambda: patch("backend/tools/bild_text.py",
    "    for groesse in range(start, 6, -1):", "    for groesse in range(start, start - 1, -1):")),
- ("pfad_parameter entfernt", lambda: patch("backend/tools/bild_text.py",
-   '    pfad_parameter = ("pfad",)', "    pfad_parameter = ()")),
+ # ⚠ Nur die Deklaration zu streichen, legt das Werkzeug still (execute liest
+ # aus derselben Liste) - der Waechter bricht dann zu Recht mit Exit 2 ab. Die
+ # LUECKE ist: Deklaration weg, Lesen bleibt.
+ ("pfad_parameter entfernt", lambda: (
+   patch("backend/tools/bild_text.py",
+         '    pfad_parameter = ("pfad", "datei", "bild")', "    pfad_parameter = ()"),
+   patch("backend/tools/bild_text.py",
+         '        pfad = next((str(kwargs[f]).strip() for f in self.pfad_parameter\n'
+         '                     if str(kwargs.get(f) or "").strip()), "")',
+         '        pfad = str(kwargs.get("pfad") or "").strip()'))),
+ # Der Zustand bis 2026-09-28: execute liest Aliasse, deklariert ist nur `pfad`.
+ ("Alias gelesen, aber nicht deklariert", lambda: (
+   patch("backend/tools/bild_text.py",
+         '    pfad_parameter = ("pfad", "datei", "bild")', '    pfad_parameter = ("pfad",)'),
+   patch("backend/tools/bild_text.py",
+         '        pfad = next((str(kwargs[f]).strip() for f in self.pfad_parameter\n'
+         '                     if str(kwargs.get(f) or "").strip()), "")',
+         '        pfad = str(kwargs.get("pfad") or kwargs.get("datei") or kwargs.get("bild") or "").strip()'))),
  ("Werkzeug nicht angehaengt", lambda: patch("backend/agent.py",
    "            self._tool_instances.append(BildTextErsetzenTool())", "            pass")),
  ("nicht im Buendel 'bild'", lambda: patch("backend/werkzeug_buendel.py",

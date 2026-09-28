@@ -117,8 +117,8 @@ PROBEN = [
          '    roh = ""; _ = os.environ.get("JARVIS_RAG_AUTOINDEX")')]),
     ("die Vorpruefung indiziert selbst (zweiter Indizierweg)", [
         ("backend/rag_autoindex.py",
-         "    geaendert = K._geaenderte_dateien(files, indexed)",
-         "    geaendert = K._geaenderte_dateien(files, indexed)\n    K.force_reindex()")]),
+         "    geaendert = K._ausstehende_dateien(files, indexed)",
+         "    geaendert = K._ausstehende_dateien(files, indexed)\n    K.force_reindex()")]),
     ("Schluessel-Kollision zurueck (Grund wird leergemischt)", [
         ("backend/rag_autoindex.py", '        "hinweis": "",', '        "grund": "",'),
         ("backend/rag_autoindex.py",

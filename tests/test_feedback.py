@@ -345,12 +345,45 @@ fb.formular_loeschen(fy["id"])
 # ═══════════════════════════════════════════════════════════════════════════
 print("\n\033[1m7. Robustheit der Dateien\033[0m")
 # ═══════════════════════════════════════════════════════════════════════════
+_formulare_vor = fb._pfad_formulare().read_bytes() if fb._pfad_formulare().is_file() else None
 fb._pfad_formulare().write_text("{kaputt", encoding="utf-8")
 check("eine beschaedigte Formulardatei sperrt den Bereich nicht",
       fb.formulare() == [])
 check("⚠ und wird NICHT stillschweigend ueberschrieben",
       fb._pfad_formulare().read_text(encoding="utf-8") == "{kaputt",
       "das vernichtet sonst die Arbeit des Administrators")
+# ⚠ Code-Review 2026-09-28: das LESEN liess die Datei stehen, das naechste
+# ANLEGEN schrieb aber den leeren Stand plus das neue Formular darueber. Jeder
+# schreibende Weg wird deshalb einzeln gemessen - auch einer, der auf dem leeren
+# Stand heute "nichts findet", damit ein kuenftiger Umbau nicht still kippt.
+def _ist_fehler(r):
+    """``sicher`` liefert im Fehlerfall ``("__FEHLER__", e)``."""
+    return (isinstance(r, tuple) and len(r) == 2 and r[0] == "__FEHLER__"
+            and isinstance(r[1], fb.FeedbackFehler))
+
+
+for _nm, _fn in [
+        ("neues Formular anlegen",
+         lambda: fb.formular_speichern("", "Neu", "", [{"name": "a", "typ": "text"}])),
+        ("Formular loeschen", lambda: fb.formular_loeschen("gibtsnicht")),
+        ("Formulare sortieren", lambda: fb.formulare_sortieren(["a", "b"]))]:
+    _r = sicher(_fn)
+    check(f"⚠ {_nm} auf kaputter Datei: verweigert mit Grund",
+          _ist_fehler(_r) and "nicht gelesen" in str(_r[1]), repr(_r))
+    check(f"⚠ {_nm}: die kaputte Datei steht unveraendert",
+          fb._pfad_formulare().read_text(encoding="utf-8") == "{kaputt")
+fb._pfad_formulare().write_text('{"version": 1, "formulare": {}}', encoding="utf-8")
+_r = sicher(fb.formular_speichern, "", "Neu", "", [{"name": "a", "typ": "text"}])
+check("⚠ auch eine FORMWIDRIGE Datei (formulare kein Array) wird nicht ueberschrieben",
+      _ist_fehler(_r)
+      and fb._pfad_formulare().read_text(encoding="utf-8") == '{"version": 1, "formulare": {}}',
+      repr(_r))
+if _formulare_vor is None:
+    fb._pfad_formulare().unlink()
+else:
+    fb._pfad_formulare().write_bytes(_formulare_vor)
+check("(Gegenstueck) auf lesbarem Bestand gelingt das Anlegen wieder",
+      isinstance(sicher(fb.formular_speichern, "", "Neu", "", [{"name": "a", "typ": "text"}]), dict))
 
 with fb._pfad_abgaben().open("a", encoding="utf-8") as fh:
     fh.write("{kaputte zeile\n")

@@ -369,6 +369,49 @@ cfa._pfad().unlink()
 
 
 # ════════════════════════════════════════════════════════════════════════════
+section("9b. Unlesbare EINBINDUNG: nichts wird abgeraeumt, nichts ueberschrieben")
+# ⚠ Code-Review 2026-09-28: `_laden` gab bei einer unlesbaren Ablage `_leer()`
+# zurueck - der Abgleich hielt damit KEINE Seite mehr fuer gewollt und loeschte
+# jede importierte Confluence-Seite; hinzufuegen/aendern schrieben den leeren
+# Stand plus den neuen Eintrag ueber die Datei.
+_b_vor = cfb._pfad().read_bytes() if cfb._pfad().is_file() else None
+if cfb._pfad().is_file():
+    cfb._pfad().unlink()
+e9 = cfb.hinzufuegen([{"key": "NXDP", "seiten": ["100"]}], "tester", ["technik"])
+lauf(C)
+_fs9 = dateien()
+check("(Positivkontrolle) es gibt importiertes Wissen, das verloren gehen koennte",
+      any("100_" in f for f in _fs9), str(_fs9))
+KAPUTT_B = b'{"version": 1, "bereiche": [ kein json'
+cfb._pfad().write_bytes(KAPUTT_B)
+_st9 = cfa._pfad().read_bytes()
+r = sicher(cfa.lauf, client=C, aktiv=(True, ""))
+check("lauf() wirft nicht und meldet den Fehler",
+      isinstance(r, dict) and "fehlgeschlagen" in r.get("grund", ""), str(r))
+check("⚠ kein importiertes Wissen geloescht", dateien() == _fs9, str(dateien()))
+check("⚠ der Abgleichsstand ist unveraendert", cfa._pfad().read_bytes() == _st9)
+for _nm, _fn in [("hinzufuegen", lambda: cfb.hinzufuegen([{"key": "OPS", "start": True}], "x", ["technik"])),
+                 ("aendern", lambda: cfb.aendern(e9["id"], [{"key": "OPS", "start": True}], "x", ["technik"])),
+                 ("entfernen", lambda: cfb.entfernen(e9["id"]))]:
+    _r = sicher(_fn)
+    check(f"⚠ {_nm} verweigert mit BestandUnlesbar",
+          isinstance(_r, getattr(cfb, "BestandUnlesbar", ())), repr(_r))
+    check(f"⚠ {_nm} laesst die unlesbare Datei, wie sie war", cfb._pfad().read_bytes() == KAPUTT_B)
+for _form in (b'[]', b'{"bereiche": {}}'):
+    cfb._pfad().write_bytes(_form)
+    check(f"formwidrige Ablage {_form.decode()} gilt ebenfalls als unlesbar",
+          isinstance(sicher(cfb.liste), getattr(cfb, "BestandUnlesbar", ())))
+# Gegenstueck: eine FEHLENDE Ablage ist wirklich "nichts eingebunden" - dann
+# raeumt der Lauf ab. Belegt zugleich, dass der Aufbau oben Zaehne hat.
+cfb._pfad().unlink()
+lauf(C)
+check("(Gegenstueck) ohne Ablage wird das Wissen abgeraeumt", dateien() == [], str(dateien()))
+if _b_vor is not None:
+    cfb._pfad().write_bytes(_b_vor)
+cfa._pfad().unlink()
+
+
+# ════════════════════════════════════════════════════════════════════════════
 section("10. Verdrahtung im Cron-Auftrag (AST)")
 SCH = (ROOT / "backend" / "scheduler.py").read_text(encoding="utf-8")
 baum = ast.parse(SCH)

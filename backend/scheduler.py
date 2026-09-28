@@ -22,6 +22,13 @@ _agent_manager = None
 _broadcast_fn = None  # async fn(msg: dict) → sendet an alle WS-Clients
 
 
+class JobsUnlesbar(ValueError):
+    """Die Auftragsliste existiert, laesst sich aber nicht lesen oder deuten.
+
+    ValueError, damit die vorhandenen Endpunkte (``except ValueError`` -> 400)
+    den Grund an die Oberflaeche reichen, statt mit 500 zu enden."""
+
+
 def init(agent_manager, broadcast_fn):
     global _agent_manager, _broadcast_fn
     _agent_manager = agent_manager
@@ -44,6 +51,9 @@ class CronManager:
         # jeder Zugriff laedt bei Bedarf selbst (_ensure_loaded), und _save()
         # verweigert den Dienst, solange nie geladen wurde.
         self._geladen = False
+        # Zuletzt gemeldeter Ladefehler - damit ein dauerhaft unlesbarer
+        # Bestand das Journal nicht bei JEDEM Zugriff erneut fuellt.
+        self._ladefehler = ""
 
     # ─── Lifecycle ───────────────────────────────────────────────────────────
 
@@ -105,7 +115,7 @@ class CronManager:
         darin, wird der Job STILL zu einem Agentenlauf - er laeuft dann, tut
         etwas voellig anderes als bestellt, und niemand sieht warum.
         """
-        self._ensure_loaded()
+        self._schreibbar()
         job = {
             "id": job_id or str(uuid.uuid4()),
             "label": label,
@@ -144,7 +154,7 @@ class CronManager:
     UPDATABLE_FIELDS = {"label", "cron", "task", "enabled", "once"}
 
     def update_job(self, job_id: str, **fields) -> dict:
-        self._ensure_loaded()
+        self._schreibbar()
         job = self.get_job(job_id)
         if not job:
             raise ValueError(f"Job {job_id} nicht gefunden")
@@ -161,7 +171,7 @@ class CronManager:
         return job
 
     def delete_job(self, job_id: str):
-        self._ensure_loaded()
+        self._schreibbar()
         job = self.get_job(job_id)
         if not job:
             raise ValueError(f"Job {job_id} nicht gefunden")
@@ -184,7 +194,7 @@ class CronManager:
         (vgl. UPDATABLE_FIELDS). Damit ist auch ein Altbestand-Job ohne Besitzer
         reparierbar, statt dauerhaft unprivilegiert zu scheitern.
         """
-        self._ensure_loaded()
+        self._schreibbar()
         job = self.get_job(job_id)
         if not job:
             raise ValueError(f"Job {job_id} nicht gefunden")
@@ -328,6 +338,23 @@ class CronManager:
         except Exception as e:
             raise ValueError(f"Ungültiger Cron-Ausdruck '{cron_expr}': {e}")
 
+    def _schreibbar(self):
+        """Vor jeder AENDERUNG: nur auf einem wirklich geladenen Bestand.
+
+        ⚠ Code-Review 2026-09-28: bei einer unlesbaren ``jobs.json`` galt der
+        Bestand trotzdem als geladen (``_jobs = []``) - der naechste
+        ``add_job`` (etwa der Wissensabgleich beim Start) schrieb dann eine
+        Liste mit genau EINEM Eintrag ueber die echten Auftraege. Dieselbe
+        Folge wie am 2026-09-21, nur ueber den Ladefehler statt ueber die
+        Reihenfolge. Hier wird LAUT abgewiesen, BEVOR ``_jobs`` oder der
+        APScheduler angefasst werden - ein stiller Speicher-Verzicht liesse
+        einen Auftrag im Speicher zurueck, den es auf der Platte nie gab."""
+        self._ensure_loaded()
+        if not self._geladen:
+            raise JobsUnlesbar(
+                "Die Liste der zeitgesteuerten Aufträge kann gerade nicht gelesen "
+                "werden – es wird nichts verändert. Bitte den Administrator informieren.")
+
     def _ensure_loaded(self):
         """Den Bestand von der Platte holen, falls das noch nicht geschehen ist.
 
@@ -343,12 +370,26 @@ class CronManager:
     def _load(self):
         if JOBS_FILE.exists():
             try:
-                self._jobs = json.loads(JOBS_FILE.read_text())
+                jobs = json.loads(JOBS_FILE.read_text())
+                if not isinstance(jobs, list) or not all(isinstance(j, dict) for j in jobs):
+                    raise ValueError("unerwartete Form (keine Liste von Auftraegen)")
             except Exception as e:
-                print(f"[Scheduler] Fehler beim Laden der Jobs: {e}", flush=True)
+                # ⚠ NICHT als geladen markieren: eine leere Liste aus einem
+                # FEHLER ist kein Bestand und darf nie gespeichert werden
+                # (_save verweigert, _schreibbar weist ab). Der naechste Zugriff
+                # versucht es erneut - ein behobenes Rechteproblem heilt damit
+                # ohne Neustart.
+                grund = f"{type(e).__name__}: {e}"
+                if grund != self._ladefehler:
+                    print(f"[Scheduler] ⚠ {JOBS_FILE} nicht lesbar ({grund}) – "
+                          f"Auftraege ruhen, Aendern ist gesperrt.", flush=True)
+                    self._ladefehler = grund
                 self._jobs = []
+                return
+            self._jobs = jobs
         else:
             self._jobs = []
+        self._ladefehler = ""
         # Altbestand ohne Auftraggeber-Bindung sichtbar machen. Nicht geraten:
         # ohne Besitzer laeuft der Job unprivilegiert (siehe _actor_for), und die
         # Oberflaeche zeigt es an, damit ein Admin ihn bewusst uebernehmen kann.

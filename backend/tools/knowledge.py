@@ -198,27 +198,38 @@ def _unlesbar_speichern(d: dict) -> None:
         _log.warning("Negativ-Cache nicht schreibbar: %s", e)
 
 
-def _unlesbar_ueberspringen(path_str: str, mtime: float, groesse: int) -> str | None:
-    """Ist diese Datei bekannt unlesbar UND unveraendert? Dann der Grund, sonst None.
+def _unlesbar_trifft(e, mtime: float, groesse: int) -> bool:
+    """Gilt der Cache-Eintrag ``e`` fuer GENAU diesen Dateistand?
 
     ⚠ mtime UND Groesse: eine geaenderte Datei bekommt eine neue Chance. Ohne
     dieses Paar waere der Cache eine Sackgasse - eine reparierte Datei kaeme nie
-    wieder in den Index.
-    """
-    e = _unlesbar_laden().get(path_str)
+    wieder in den Index. EINE Fassung fuer den Lauf und die Vorpruefung
+    (``_ausstehende_dateien``)."""
     if not isinstance(e, dict):
-        return None
+        return False
     if abs(float(e.get("mtime") or 0) - float(mtime)) > 1e-6:
-        return None
-    if int(e.get("groesse") or -1) != int(groesse):
+        return False
+    return int(e.get("groesse") or -1) == int(groesse)
+
+
+def _unlesbar_ueberspringen(path_str: str, mtime: float, groesse: int) -> str | None:
+    """Ist diese Datei bekannt unlesbar UND unveraendert? Dann der Grund, sonst None."""
+    e = _unlesbar_laden().get(path_str)
+    if not _unlesbar_trifft(e, mtime, groesse):
         return None
     return str(e.get("grund") or "bekannt unlesbar")
 
 
-def _unlesbar_merken(path_str: str, mtime: float, groesse: int, grund: str) -> None:
+def _unlesbar_merken(path_str: str, mtime: float, groesse: int, grund: str,
+                     leer: bool = False) -> None:
+    """``leer=True``: lesbar, aber ohne Text - kein FEHLER, nur nichts zu holen.
+    Gemerkt wird es trotzdem, sonst gilt die Datei jedem Takt als geaendert
+    (ihre mtime landet nie im Index) - siehe ``_ausstehende_dateien``."""
     d = _unlesbar_laden()
     d[path_str] = {"mtime": float(mtime), "groesse": int(groesse),
                    "grund": str(grund)[:300], "ts": time.time()}
+    if leer:
+        d[path_str]["leer"] = True
     # Deckel: der Cache soll nicht unbegrenzt wachsen, aelteste zuerst weg.
     if len(d) > 2000:
         for k, _v in sorted(d.items(), key=lambda x: x[1].get("ts", 0))[:len(d) - 2000]:
@@ -389,6 +400,39 @@ def _geaenderte_dateien(files: list[Path], indexed: dict) -> list[Path]:
     return geaendert
 
 
+def _ausstehende_dateien(files: list[Path], indexed: dict) -> list[Path]:
+    """Die geaenderten Dateien, an denen ein Lauf WIRKLICH etwas zu tun haette.
+
+    ⚠ Code-Review 2026-09-28: eine bekannt unlesbare oder leere Datei bekommt
+    ihre mtime NIE in den Index - ``_geaenderte_dateien`` meldet sie deshalb
+    bei JEDEM Aufruf. Der Lauf ueberspringt sie (Negativ-Cache), die
+    Vorpruefung der Automatik aber stiess damit alle fuenf Minuten einen
+    ``force_reindex`` an, der nichts tat - samt ``status: running`` und
+    Share-Rescan. Dieselbe Regel wie im Lauf (``_unlesbar_trifft``), sonst
+    driften Vorpruefung und Lauf auseinander.
+
+    ⚠ NICHT IN ``_geaenderte_dateien`` SELBST: der Lauf braucht die bekannt
+    unlesbaren Dateien in seiner Liste, weil er sie in der Fehlerliste des
+    Laufs weiter NENNT ("uebersprungen, unveraendert").
+    """
+    geaendert = _geaenderte_dateien(files, indexed)
+    if not geaendert:
+        return geaendert
+    cache = _unlesbar_laden()        # EINMAL lesen, nicht je Datei
+    raus: list[Path] = []
+    for filepath in geaendert:
+        e = cache.get(str(filepath))
+        if e is not None:
+            try:
+                st = filepath.stat()
+            except Exception:  # noqa: BLE001
+                continue
+            if _unlesbar_trifft(e, st.st_mtime, st.st_size):
+                continue
+        raus.append(filepath)
+    return raus
+
+
 def _rebuild_vector_index(folders: list[Path], max_bytes: int, force: bool = False) -> bool:
     """Inkrementeller Vektor-Index Aufbau. Gibt True zurueck wenn Index Inhalt hat.
 
@@ -516,6 +560,10 @@ def _vector_index_lauf(vs, indexed, folders: list[Path], max_bytes: int,
             # Reindex ihren vollen Zeitdeckel - und jede knowledge_search stoesst
             # einen Reindex an. Auf ECHT waren das 120 s je Suche (2026-09-06).
             _bekannt = _unlesbar_ueberspringen(path_str, mtime, _st.st_size)
+            if _bekannt is not None and (_unlesbar_laden().get(path_str) or {}).get("leer"):
+                # Bekannt LEER und unveraendert: nichts zu holen, aber auch kein
+                # Fehler - eine leere Datei gehoert nicht in die Fehlerliste.
+                continue
             if _bekannt is not None:
                 failed += 1
                 _note_failed(path_str, f"{_bekannt} (uebersprungen, unveraendert)")
@@ -555,6 +603,13 @@ def _vector_index_lauf(vs, indexed, folders: list[Path], max_bytes: int,
             else:
                 # Lesbar, aber leer -> Eintrag ist gegenstandslos.
                 vs.remove_file(path_str)
+                # ⚠ MERKEN: ohne Eintrag im Index gilt die Datei sonst jedem
+                # Takt als geaendert (``_ausstehende_dateien``) - und ein leerer
+                # Scan wuerde bei jeder Suche erneut durch die OCR geschickt.
+                try:
+                    _unlesbar_merken(path_str, mtime, _st.st_size, "ohne Text", leer=True)
+                except Exception:  # noqa: BLE001
+                    pass
         except Exception as e:
             failed += 1
             _note_failed(path_str, f"{type(e).__name__}: {e}"[:200])

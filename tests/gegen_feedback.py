@@ -88,13 +88,11 @@ PROBEN = [
      '        raus += [f for f in vorhanden if f.get("id") not in gesehen]',
      "        raus += []", BACKEND),
     ("eine beschaedigte Datei wird ueberschrieben", "backend/feedback.py",
-     '    except Exception:  # noqa: BLE001\n'
      '        return {"version": 1, "formulare": []}\n'
-     "    if not isinstance(d, dict):",
-     '    except Exception:  # noqa: BLE001\n'
+     '    d.setdefault("formulare", [])',
      '        _speichern({"version": 1, "formulare": []})\n'
      '        return {"version": 1, "formulare": []}\n'
-     "    if not isinstance(d, dict):", BACKEND),
+     '    d.setdefault("formulare", [])', BACKEND),
     ("CSV-Injection wird NICHT entschaerft", "backend/feedback.py",
      "    if s.startswith(_CSV_GEFAEHRLICH):\n        return \"'\" + s",
      "    if False:\n        return \"'\" + s", BACKEND),
@@ -144,8 +142,8 @@ PROBEN = [
      '            "feedback": _user_may_use_feedback(user),', BACKEND),
     ("die Abgaben stehen nicht in der Sperrliste", "backend/sandbox.py",
      '    "data/feedback_formulare.json", "data/feedback_abgaben.jsonl",\n'
-     "    # Verankerte SAP-Serverzertifikate",
-     "    # Verankerte SAP-Serverzertifikate", BACKEND),
+     "    # Dynamische Confluence-Einbindung",
+     "    # Dynamische Confluence-Einbindung", BACKEND),
     ("eine Reiter-Sektion ist nicht gebunden", "frontend/js/app.js",
      "                { hdr: 'fb-sect-abg-hdr',  body: 'fb-sect-abg-body',  tog: 'fb-sect-abg-tog'  },\n",
      "", BACKEND),

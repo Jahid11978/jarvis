@@ -100,7 +100,7 @@ class FakePath:
     def stat(self):
         if self._m is None:
             raise OSError("Netzlaufwerk gerade weg")
-        return types.SimpleNamespace(st_mtime=self._m)
+        return types.SimpleNamespace(st_mtime=self._m, st_size=int(self._m))
 
 
 indexed = {"/kb/a.md": 100.0, "/kb/b.md": 200.0}
@@ -133,6 +133,67 @@ st3 = sicher(_verwaist, set(), idx, [])
 check("verwaist: KEIN erreichbarer Ordner -> nichts wird abgeraeumt",
       isinstance(st3, list) and st3 == [])
 
+# ══ 1b. Bekannt unlesbar/leer ist KEINE ausstehende Arbeit ════════════════
+print("\n1b. Negativ-Cache in der Vorpruefung (Code-Review 2026-09-28)")
+# ⚠ Eine bekannt unlesbare oder leere Datei bekommt ihre mtime NIE in den Index.
+# `_geaenderte_dateien` meldet sie deshalb bei JEDEM Aufruf - die Vorpruefung
+# stiess damit alle fuenf Minuten einen force_reindex an, der nichts tat.
+# Geschnitten wird die ECHTE Fassung samt der Vergleichsregel des Laufs.
+NS2 = schneide(K_SRC, "_geaenderte_dateien", "_ausstehende_dateien", "_unlesbar_trifft")
+CACHE: dict = {}
+NS2["_unlesbar_laden"] = lambda: dict(CACHE)
+_ausstehend = NS2["_ausstehende_dateien"]
+f_unl = FakePath("/kb/kaputt.one", 500.0)          # neu, bekannt unlesbar
+f_leer = FakePath("/kb/leer.pdf", 600.0)           # neu, bekannt leer
+f_neu = FakePath("/kb/neu.md", 700.0)              # neu, echte Arbeit
+f_rep = FakePath("/kb/repariert.one", 900.0)       # im Cache, aber GEAENDERT
+CACHE.update({
+    "/kb/kaputt.one": {"mtime": 500.0, "groesse": 500, "grund": "Zeitlimit"},
+    "/kb/leer.pdf": {"mtime": 600.0, "groesse": 600, "grund": "ohne Text", "leer": True},
+    "/kb/repariert.one": {"mtime": 800.0, "groesse": 800, "grund": "Zeitlimit"},
+})
+_fs = [f_unl, f_leer, f_neu, f_rep]
+# Positivkontrolle: OHNE Cache-Blick sind alle vier "geaendert" - sonst waere
+# die Pruefung unten trivial wahr.
+_roh = sicher(_geaendert, _fs, {})
+check("Positivkontrolle: _geaenderte_dateien meldet alle vier",
+      isinstance(_roh, list) and len(_roh) == 4)
+erg = sicher(_ausstehend, _fs, {})
+na = sorted(str(f) for f in erg) if isinstance(erg, list) else [str(erg)]
+check(f"bekannt unlesbar + unveraendert ist keine Arbeit (gefunden: {na})",
+      "/kb/kaputt.one" not in na)
+check("bekannt leer + unveraendert ist keine Arbeit", "/kb/leer.pdf" not in na)
+check("eine echte neue Datei bleibt Arbeit", "/kb/neu.md" in na)
+check("⚠ eine GEAENDERTE, frueher unlesbare Datei bekommt eine neue Chance",
+      "/kb/repariert.one" in na)
+CACHE.clear()
+erg = sicher(_ausstehend, _fs, {})
+check("ohne Cache-Eintraege: alle vier sind Arbeit",
+      isinstance(erg, list) and len(erg) == 4)
+
+# Drift: die Vorpruefung und der Lauf benutzen DIESELBE Vergleichsregel.
+_fn = {n.name: n for n in ast.walk(ast.parse(K_SRC)) if isinstance(n, ast.FunctionDef)}
+def _ruft(fname, ziel):
+    f = _fn.get(fname)
+    return f is not None and any(isinstance(n, ast.Call) and isinstance(n.func, ast.Name)
+                                 and n.func.id == ziel for n in ast.walk(f))
+check("_ausstehende_dateien RUFT _geaenderte_dateien (baut sie nicht nach)",
+      _ruft("_ausstehende_dateien", "_geaenderte_dateien"))
+check("_ausstehende_dateien und der Lauf teilen _unlesbar_trifft",
+      _ruft("_ausstehende_dateien", "_unlesbar_trifft")
+      and _ruft("_unlesbar_ueberspringen", "_unlesbar_trifft")
+      and _ruft("_vector_index_lauf", "_unlesbar_ueberspringen"))
+# Der Lauf MERKT eine leere Datei - sonst kaeme sie nie in den Cache und die
+# Vorpruefung saehe sie trotzdem jedes Mal.
+_vl = _fn.get("_vector_index_lauf")
+_leer_gemerkt = _vl is not None and any(
+    isinstance(n, ast.Call) and isinstance(n.func, ast.Name) and n.func.id == "_unlesbar_merken"
+    and any(k.arg == "leer" and isinstance(k.value, ast.Constant) and k.value.value is True
+            for k in n.keywords)
+    for n in ast.walk(_vl))
+check("der Lauf merkt eine LEERE Datei im Negativ-Cache (leer=True)", _leer_gemerkt)
+
+
 # ══ 2. DRIFT: der Reindex ruft dieselben Regeln ═══════════════════════════
 print("\n2. Drift-Schranke: eine Fassung, zwei Aufrufer")
 k_baum = ast.parse(K_SRC)
@@ -159,8 +220,10 @@ check("pruefen() gefunden", pr is not None)
 if pr is not None:
     attr_rufe = {n.func.attr for n in ast.walk(pr)
                  if isinstance(n, ast.Call) and isinstance(n.func, ast.Attribute)}
-    check("pruefen() benutzt _geaenderte_dateien aus knowledge",
-          "_geaenderte_dateien" in attr_rufe)
+    check("pruefen() benutzt _ausstehende_dateien aus knowledge (mit Negativ-Cache)",
+          "_ausstehende_dateien" in attr_rufe)
+    check("…und NICHT die rohe _geaenderte_dateien (die meldet Unlesbares ewig)",
+          "_geaenderte_dateien" not in attr_rufe)
     check("pruefen() benutzt _verwaiste_dateien aus knowledge",
           "_verwaiste_dateien" in attr_rufe)
 
@@ -228,6 +291,7 @@ class FakeK(types.ModuleType):
         self.pruef_wirft = False
         self.reindex_wirft = False
         self._geaenderte_dateien = _geaendert    # ECHT
+        self._ausstehende_dateien = _ausstehend  # ECHT (Cache in CACHE)
         self._verwaiste_dateien = _verwaist      # ECHT
 
     def _get_vector_store(self):
@@ -343,6 +407,23 @@ check("geloeschte Datei: Grund nennt sie", isinstance(r, dict) and "1 geloescht"
 ai, fk = frisch(idx={}, dateien=[FakePath("/kb/neu.md", 1.0)])
 sicher(ai.lauf)
 check("neue Datei loest einen Indexlauf aus", len(fk.reindex_rufe) == 1)
+
+# (d2) ⚠ Code-Review 2026-09-28: eine bekannt unlesbare bzw. leere Datei ist
+# KEIN Anlass - vorher stiess sie alle fuenf Minuten einen Lauf an, fuer immer.
+CACHE.update({"/kb/kaputt.one": {"mtime": 500.0, "groesse": 500, "grund": "Zeitlimit"},
+              "/kb/leer.pdf": {"mtime": 600.0, "groesse": 600, "leer": True}})
+ai, fk = frisch(idx={"/kb/a.md": 5.0},
+                dateien=[FakePath("/kb/a.md", 5.0), FakePath("/kb/kaputt.one", 500.0),
+                         FakePath("/kb/leer.pdf", 600.0)])
+r = sicher(ai.lauf)
+check("⚠ bekannt unlesbare + leere Datei: KEIN Indexlauf", fk.reindex_rufe == [])
+check("…und die Rueckgabe sagt 'nichts geaendert'",
+      isinstance(r, dict) and r.get("grund") == "nichts geaendert")
+ai, fk = frisch(idx={"/kb/a.md": 5.0},
+                dateien=[FakePath("/kb/kaputt.one", 501.0), FakePath("/kb/a.md", 5.0)])
+sicher(ai.lauf)
+check("(Gegenstueck) dieselbe Datei GEAENDERT: ein Indexlauf", len(fk.reindex_rufe) == 1)
+CACHE.clear()
 
 # (e) Reindex laeuft bereits -> nicht dazwischenfunken
 ai, fk = frisch(idx={}, dateien=[FakePath("/kb/neu.md", 1.0)], running=True)

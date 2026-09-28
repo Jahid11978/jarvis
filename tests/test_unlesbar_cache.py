@@ -178,6 +178,50 @@ check("und sie ueberspringt wirklich (continue)",
 check("ein Fehlschlag wird gemerkt", "_unlesbar_merken" in _q)
 check("ein Erfolg raeumt den Eintrag weg", "_unlesbar_vergessen" in _q)
 
+print("\n\033[1m6. Eine LEERE Datei wird gemerkt - und ist danach keine Arbeit mehr\033[0m")
+# ⚠ Code-Review 2026-09-28: eine leere Datei wurde per remove_file entfernt,
+# ihre mtime landete nie im Index - jeder Lauf (und jeder Takt der Automatik)
+# hielt sie fuer geaendert und schickte sie erneut durch den Extraktor.
+# AUSGEFUEHRT, am echten Lauf, mit einer Store-Attrappe und gezaehltem Extraktor.
+class _VS:
+    def __init__(self):
+        self.entfernt = []
+    def add_chunks(self, *a, **k): pass
+    def remove_file(self, p): self.entfernt.append(p); return 0
+    def remove_files(self, ps): return 0
+    def chunk_count(self): return 1
+    def save(self, *a, **k): pass
+
+_ord = Path(_tmp) / "kb6"; _ord.mkdir()
+_leer = _ord / "leer.md"; _leer.write_text("   \n", encoding="utf-8")
+kn._unlesbar_speichern({})
+_ex_rufe = []
+_ex_alt = kn._extract_text
+kn._extract_text = lambda fp, mb: (_ex_rufe.append(str(fp)) or "   ")
+try:
+    _vs6 = _VS()
+    _r1 = sicher(kn._vector_index_lauf, _vs6, {}, [_ord], 10**7, True)
+    check("Positivkontrolle: der Lauf lief und hat die Datei extrahiert",
+          not str(_r1).startswith("__WURF__") and _ex_rufe == [str(_leer)])
+    _e = kn._unlesbar_laden().get(str(_leer)) or {}
+    check("⚠ die leere Datei steht im Negativ-Cache, als LEER markiert",
+          _e.get("leer") is True)
+    check("…und ist fuer die Vorpruefung keine Arbeit mehr",
+          sicher(kn._ausstehende_dateien, [_leer], {}) == [])
+    _ex_rufe.clear()
+    with kn._progress_lock:
+        kn._index_progress["failed_list"] = []
+    sicher(kn._vector_index_lauf, _VS(), {}, [_ord], 10**7, True)
+    check("⚠ der zweite Lauf ruft den Extraktor fuer sie NICHT mehr", _ex_rufe == [])
+    check("⚠ …und fuehrt eine leere Datei NICHT als Fehlschlag",
+          not any("leer.md" in str(x.get("file")) for x in kn._index_progress.get("failed_list", [])))
+    _leer.write_text("jetzt mit Inhalt", encoding="utf-8")
+    os.utime(_leer, (time.time() + 5, time.time() + 5))
+    check("(Gegenstueck) GEAENDERT ist sie wieder Arbeit",
+          [str(p) for p in (sicher(kn._ausstehende_dateien, [_leer], {}) or [])] == [str(_leer)])
+finally:
+    kn._extract_text = _ex_alt
+
 print(f"\n\033[1mErgebnis: {OK} OK, {FAIL} FAIL\033[0m")
 import shutil                                                   # noqa: E402
 shutil.rmtree(_tmp, ignore_errors=True)

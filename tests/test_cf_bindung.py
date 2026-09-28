@@ -27,6 +27,7 @@ import json
 import os
 import sys
 import tempfile
+import types
 import tokenize
 from pathlib import Path
 
@@ -247,14 +248,23 @@ check("Ablage ist 0640", mode == "0o640", str(mode))
 # ⚠ Eine beschaedigte Datei darf NICHT stillschweigend ersetzt werden.
 kaputt = b'{"version": 1, "bereiche": [ das ist kein json'
 cfb._pfad().write_bytes(kaputt)
-check("kaputte Datei -> leere Liste (Container sperrt nicht)", cfb.liste() == [])
+# ⚠ Bis 2026-09-28 hiess es hier "kaputte Datei -> leere Liste". Eine leere
+# Liste ist aber eine AUSSAGE ("nichts eingebunden") - der Abgleich raeumte
+# daraufhin alles ab, und hinzufuegen schrieb ueber die Datei.
+_BU = getattr(cfb, "BestandUnlesbar", ())
+check("⚠ kaputte Datei -> BestandUnlesbar, NICHT die leere Liste", isinstance(sicher(cfb.liste), _BU))
 check("⚠ kaputte Datei wird beim LESEN nicht ueberschrieben", cfb._pfad().read_bytes() == kaputt)
+_r = sicher(cfb.hinzufuegen, [{"key": "NEU", "start": True}], "x", ["technik"])
+check("⚠ hinzufuegen verweigert auf einer kaputten Datei", isinstance(_r, _BU), repr(_r))
+check("⚠ …und schreibt NICHT darueber", cfb._pfad().read_bytes() == kaputt)
+check("BestandUnlesbar ist ein BindungFehler (die Endpunkte fangen ihn)",
+      isinstance(_BU, type) and issubclass(_BU, cfb.BindungFehler))
 import contextlib, io as _io  # noqa: E402
 _buf = _io.StringIO()
 with contextlib.redirect_stdout(_buf):
-    cfb.liste()
+    sicher(cfb.liste)
 check("⚠ ein Lesefehler wird BENANNT (Journal), nicht verschluckt",
-      "CF-Bindung" in _buf.getvalue() and "LEER" in _buf.getvalue(), repr(_buf.getvalue()[:120]))
+      "CF-Bindung" in _buf.getvalue() and "nicht lesbar" in _buf.getvalue(), repr(_buf.getvalue()[:120]))
 cfb._pfad().unlink()
 _buf2 = _io.StringIO()
 with contextlib.redirect_stdout(_buf2):
@@ -419,6 +429,79 @@ check("⚠ PUT: Zuordnungen AUSSERHALB des eigenen Bereichs werden behalten",
       "not in eigene" in pu and "alt.get('gruppen')" in pu, "fremde Gruppen gingen verloren")
 check("PUT: eigene Gruppen kommen als Kennungen (nicht als Gruppen-Objekte)",
       "g.get('id')" in pu, "set(_editable_groups_for(...)) waere eine Menge von dicts")
+
+# ⚠ Code-Review 2026-09-28: PUT/DELETE prueften nur, OB der Aufrufer irgendeine
+# Gruppe bearbeitet - ein Editor von A konnte die Einbindung von B loeschen.
+# (a) Die Regel AUSGEFUEHRT, an einer Attrappe mit der echten Rueckgabeform.
+_DE = fn("_cfb_darf_eintrag")
+check("(Positivkontrolle) _cfb_darf_eintrag gefunden", _DE is not None)
+if _DE is not None:
+    _kgm = types.ModuleType("backend.knowledge_groups")
+    _GRUPPEN = [{"id": "a"}, {"id": "b"}, {"id": "c"}]
+    _kgm.list_groups = lambda *x, **k: {"groups": list(_GRUPPEN)}
+    _BEREICH = {"ed_a": [{"id": "a"}], "ed_ac": [{"id": "a"}, {"id": "c"}], "global": _GRUPPEN}
+    _ns = {"_editable_groups_for": lambda u: list(_BEREICH.get(u, []))}
+    _vor = sys.modules.get("backend.knowledge_groups")
+    sys.modules["backend.knowledge_groups"] = _kgm
+    try:
+        # Die Regel steht in drei Teilen (Rechte EINMAL je Abruf, reine Regel,
+        # Huelle) - alle drei kommen mit, sonst endet der Aufruf im NameError.
+        _teile = [fn(x) for x in ("_cfb_rechte", "_cfb_darf", "_cfb_darf_eintrag")]
+        check("(Positivkontrolle) _cfb_rechte/_cfb_darf/_cfb_darf_eintrag gefunden", all(_teile))
+        exec(compile(ast.Module(body=[x for x in _teile if x], type_ignores=[]), "main", "exec"), _ns)  # noqa: S102
+        _darf = _ns["_cfb_darf_eintrag"]
+        for u, g, soll, was in [
+                ("ed_a", ["b"], False, "⚠ Editor von A darf die Einbindung von B NICHT"),
+                ("ed_a", ["a"], True, "Editor von A darf die von A"),
+                ("ed_a", ["a", "b"], True, "gemischte Einbindung: wer EINE davon bearbeitet, darf"),
+                ("ed_ac", ["b"], False, "⚠ auch mit zwei fremden Gruppen nicht die von B"),
+                ("global", ["b"], True, "globaler Wissens-Editor darf alles"),
+                ("ed_a", [], True, "Altbestand OHNE Zuordnung: reparierbar"),
+                ("ed_a", ["weg"], True, "nur geloeschte Gruppen: gehoert niemandem, reparierbar"),
+                ("ed_a", ["weg", "b"], False, "⚠ geloeschte + fremde Gruppe: bleibt fremd")]:
+            r = sicher(_darf, u, {"gruppen": g})
+            check(was, r is soll, repr(r))
+        _kgm.list_groups = lambda *x, **k: (_ for _ in ()).throw(RuntimeError("weg"))
+        check("⚠ Gruppenliste nicht ermittelbar: fail-closed",
+              sicher(_darf, "ed_a", {"gruppen": []}) is False)
+    finally:
+        if _vor is not None:
+            sys.modules["backend.knowledge_groups"] = _vor
+        else:
+            sys.modules.pop("backend.knowledge_groups", None)
+
+# (b) Die Verdrahtung als WIRKUNG: ein `if not _cfb_darf_eintrag(...)`, dessen
+# Rumpf 403 zurueckgibt - und das VOR dem Schreiben steht.
+def _schranke(k, schreib):
+    if k is None:
+        return False, "fehlt"
+    ifs = [n for n in ast.walk(k) if isinstance(n, ast.If)
+           and isinstance(n.test, (ast.UnaryOp, ast.BoolOp))
+           and "_cfb_darf_eintrag(user," in ast.unparse(n.test)
+           and any(isinstance(x, ast.Return) and "status_code=403" in ast.unparse(x) for x in n.body)]
+    f = rufe(k)
+    return (len(ifs) == 1 and 0 <= pos(f, "_cfb_darf_eintrag") < pos(f, schreib)), f"{len(ifs)} / {f}"
+for nm, k, schreib in [("PUT", PUT, "aendern"), ("DELETE", DEL, "entfernen")]:
+    _ok, _info = _schranke(k, schreib)
+    check(f"⚠ {nm}: fremde Einbindung -> 403, VOR dem Schreiben", _ok, _info)
+# Die Liste liefert je Eintrag `darf_aendern` aus DERSELBEN Regel - danach
+# blendet /wissen die Knoepfe aus. Eine zweite Fassung liefe auseinander.
+_mgf = fn("_cfb_mit_gruppen")
+check("die Liste setzt darf_aendern ueber _cfb_darf (dieselbe Regel wie der 403)",
+      _mgf is not None and "_cfb_darf" in rufe(_mgf) and "_cfb_rechte" in rufe(_mgf)
+      and "'darf_aendern'" in rumpf(_mgf))
+check("⚠ die Rechte werden EINMAL je Abruf ermittelt, nicht je Eintrag",
+      _mgf is not None and not any(isinstance(n, (ast.For, ast.comprehension)) and any(
+          isinstance(c, ast.Call) and getattr(c.func, "id", "") == "_cfb_rechte" for c in ast.walk(n))
+          for n in ast.walk(_mgf)))
+for nm, k in [("GET", GET), ("POST", POST), ("PUT", PUT), ("DELETE", DEL)]:
+    _aufr = [c for c in ast.walk(k) if isinstance(c, ast.Call)
+             and getattr(c.func, "id", "") == "_cfb_mit_gruppen"] if k else []
+    check(f"{nm}: die Liste bekommt den Abrufenden (darf_aendern)",
+          bool(_aufr) and all(len(c.args) >= 2 and ast.unparse(c.args[1]) == "user" for c in _aufr),
+          str([ast.unparse(c) for c in _aufr]))
+check("PUT: die Eigentumspruefung laeuft VOR der Netzrundreise (_cfb_auswahl_lesen)",
+      0 <= pos(rufe(PUT), "_cfb_darf_eintrag") < pos(rufe(PUT), "_cfb_auswahl_lesen"))
 
 _mg = fn("_cfb_mit_gruppen"); _mgq = rumpf(_mg)
 check("⚠ die Namen kommen aus ALLEN Wissensgruppen, nicht aus dem Bereich des Abrufers",

@@ -50,7 +50,8 @@ def abbruch(grund):
 BAUM = ast.parse(MAIN)
 FUNK = {k.name: k for k in ast.walk(BAUM)
         if isinstance(k, (ast.FunctionDef, ast.AsyncFunctionDef))}
-for n in ("_anhang_ablegen", "_bild_als_datei", "get_chat_attachment"):
+for n in ("_anhang_ablegen", "_bild_als_datei", "get_chat_attachment",
+          "_anhang_dateiname", "_bild_mime_aus_kopf", "_bild_mime_aus_bytes"):
     if n not in FUNK:
         abbruch(f"Funktion {n} fehlt in main.py")
 
@@ -79,7 +80,7 @@ try:
     ns = {"Path": Path, "os": os, "print": lambda *a, **k: None, "_documents": _Doc,
           "_anhang_merken": lambda *a, **k: None, "__file__": str(sk / "backend" / "main.py")}
     quelle = "\n\n".join(ast.get_source_segment(MAIN, FUNK[n])
-                         for n in ("_anhang_ablegen", "_bild_als_datei"))
+                         for n in ("_anhang_dateiname", "_anhang_ablegen", "_bild_als_datei"))
     exec(compile(quelle, "<kette>", "exec"), ns)
     abl = []
     h = ns["_bild_als_datei"](base64.b64encode(PNG_1x1).decode(), "image.png",
@@ -145,8 +146,17 @@ try:
     docs.mkdir(parents=True)
     for n in ("image.png", "boese.svg", "seite.html"):
         (docs / n).write_bytes(PNG_1x1)
-    EIGNER = {"image.png": "andreas.bender", "boese.svg": "andreas.bender",
-              "seite.html": "andreas.bender"}
+    # ⚠ Code-Review 2026-09-28: ein Umlaut-Name wurde abgelegt, aber nicht
+    # ausgeliefert (400) - das Bild verschwand nach F5. Und der TYP kommt aus
+    # dem INHALT: echtes SVG/HTML bleibt draussen, auch unter .png-Namen.
+    JPG = b"\xff\xd8\xff\xe0" + b"\x00" * 60
+    (docs / "Übersicht.png").write_bytes(PNG_1x1)
+    (docs / "foto.jfif").write_bytes(JPG)
+    (docs / "FOTO.JPG").write_bytes(JPG)
+    (docs / "echt.svg").write_bytes(b'<svg xmlns="http://www.w3.org/2000/svg"><script>x</script></svg>')
+    (docs / "tarn.png").write_bytes(b"<html><script>alert(1)</script></html>")
+    EIGNER = {n: "andreas.bender" for n in ("image.png", "boese.svg", "seite.html",
+              "Übersicht.png", "foto.jfif", "FOTO.JPG", "echt.svg", "tarn.png")}
 
     class _D:
         @staticmethod
@@ -164,10 +174,17 @@ try:
 
     fn = FUNK["get_chat_attachment"]
     fn.decorator_list = []
-    src = ast.unparse(fn)
+    _magic = next((ast.get_source_segment(MAIN, k) for k in BAUM.body if isinstance(k, ast.Assign)
+                   and any(getattr(t, "id", "") == "_ANHANG_BILD_MAGIC" for t in k.targets)), None)
+    if not _magic:
+        abbruch("_ANHANG_BILD_MAGIC fehlt in main.py")
+    # Die Helfer kommen MIT - sie sind die geteilte Regel, keine Attrappe.
+    src = "\n\n".join([_magic] + [ast.get_source_segment(MAIN, FUNK[n]) for n in
+                                   ("_bild_mime_aus_kopf", "_anhang_dateiname")] + [ast.unparse(fn)])
     ns = {"Path": Path, "JSONResponse": _JSON, "FileResponse": _File, "_documents": _D,
           "_is_admin_user": lambda u: u == "admin", "Depends": lambda f: None,
-          "require_auth_or_query": None, "__file__": str(sk / "backend" / "main.py")}
+          "require_auth_or_query": None, "__file__": str(sk / "backend" / "main.py"),
+          "os": os}
     exec(compile(src, "<endpunkt>", "exec"), ns)
 
     def ruf(name, user):
@@ -181,12 +198,38 @@ try:
     check("fremder Benutzer: 404", ruf("image.png", "fremd").status_code == 404)
     check("Admin darf", ruf("image.png", "admin").status_code == 200)
     check("fehlende Datei: 404", ruf("weg.png", "andreas.bender").status_code == 404)
-    check("SVG wird nicht ausgeliefert", ruf("boese.svg", "andreas.bender").status_code == 400)
-    check("HTML wird nicht ausgeliefert", ruf("seite.html", "andreas.bender").status_code == 400)
+    # Der Typ kommt aus dem INHALT: PNG-Bytes unter .svg gehen als image/png raus -
+    # nie als SVG. Echtes SVG/HTML wird abgewiesen, auch unter .png-Namen.
+    _r = ruf("boese.svg", "andreas.bender")
+    check("PNG-Inhalt unter .svg: als image/png, nie als SVG",
+          _r.status_code == 200 and getattr(_r, "media_type", "") == "image/png", str(_r.status_code))
+    check("⚠ echtes SVG wird nicht ausgeliefert", ruf("echt.svg", "andreas.bender").status_code == 400)
+    check("⚠ HTML unter .png-Namen wird nicht ausgeliefert",
+          ruf("tarn.png", "andreas.bender").status_code == 400)
+    check("HTML-Endung mit PNG-Inhalt: als image/png",
+          getattr(ruf("seite.html", "andreas.bender"), "media_type", "") == "image/png")
+    _r = ruf("Übersicht.png", "andreas.bender")
+    check("⚠ Umlaut-Name wird ausgeliefert (vorher 400)", _r.status_code == 200, str(_r.status_code))
+    _r = ruf("foto.jfif", "andreas.bender")
+    check("⚠ .jfif wird als JPEG ausgeliefert (vorher 400)",
+          _r.status_code == 200 and getattr(_r, "media_type", "") == "image/jpeg", str(_r.status_code))
+    check("Endung in Grossbuchstaben", ruf("FOTO.JPG", "andreas.bender").status_code == 200)
+    check("⚠ fremdes Umlaut-Bild bleibt 404", ruf("Übersicht.png", "fremd").status_code == 404)
+    for _boes in ("a b.png", "a/b.png", "a\\b.png", "_x.png", "x.png\n", ".versteckt.png", "", "a" * 256 + ".png"):
+        check(f"kein Fixpunkt der Ablageregel abgewiesen: {_boes[:20]!r}",
+              ruf(_boes, "andreas.bender").status_code == 400)
     check("Pfadversuch abgewiesen", ruf("../documents/image.png", "andreas.bender").status_code == 400)
     check("Punkt-Anfang abgewiesen", ruf("..png", "andreas.bender").status_code == 400)
 finally:
     shutil.rmtree(sk, ignore_errors=True)
+
+def _ruft(fname, ziel):
+    return any(isinstance(k, ast.Call) and isinstance(k.func, ast.Name) and k.func.id == ziel
+               for k in ast.walk(FUNK[fname]))
+check("Ablage und Auslieferung teilen _anhang_dateiname (keine zweite Fassung)",
+      _ruft("_anhang_ablegen", "_anhang_dateiname") and _ruft("get_chat_attachment", "_anhang_dateiname"))
+check("Upload und Auslieferung teilen _bild_mime_aus_kopf",
+      _ruft("_bild_mime_aus_bytes", "_bild_mime_aus_kopf") and _ruft("get_chat_attachment", "_bild_mime_aus_kopf"))
 
 # ─────────────────────────────────────────────────────────────────────────
 print("4. Frontend (jsdom): Rueckmeldung speichern, Verlauf zeigt das Bild")

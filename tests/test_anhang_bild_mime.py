@@ -85,7 +85,14 @@ if _i_tab < 0:
     sys.exit(2)
 _TAB = SRC[_i_tab:SRC.index(")\n", _i_tab) + 1]
 _raum: dict = {}
-exec(_TAB + "\n" + ast.get_source_segment(SRC, _f), _raum)  # noqa: S102
+# Die Erkennung selbst steht seit 2026-09-28 in `_bild_mime_aus_kopf` (geteilt
+# mit der Auslieferung) - sie gehoert mit in den Schnitt.
+_k = funktion("_bild_mime_aus_kopf")
+if _k is None:
+    print("ABBRUCH: _bild_mime_aus_kopf nicht gefunden")
+    sys.exit(2)
+exec(_TAB + "\n" + ast.get_source_segment(SRC, _k) + "\n\n"
+     + ast.get_source_segment(SRC, _f), _raum)  # noqa: S102
 bild_mime = _raum["_bild_mime_aus_bytes"]
 
 import base64  # noqa: E402

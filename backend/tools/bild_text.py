@@ -424,7 +424,12 @@ class BildTextErsetzenTool(BaseTool):
     # Der Dispatch prueft diesen Parameter generisch gegen authorize_fs("read").
     # OHNE DAS waere das Werkzeug der bequemste Weg am Pfad-Confinement und an
     # der Eigentuemer-Schranke in data/documents vorbei.
-    pfad_parameter = ("pfad",)
+    # ⚠ JEDES Feld, aus dem execute() einen Pfad liest, MUSS hier stehen - und
+    # execute() liest AUSSCHLIESSLICH aus dieser Liste. Bis 2026-09-28 nahm es
+    # zusaetzlich `datei`/`bild` an, deklariert war nur `pfad`: ein
+    # `bild_text_ersetzen(datei=<fremder Anhang>)` lief an authorize_fs und
+    # der Eigentuemer-Schranke vorbei (Code-Review 2026-09-28).
+    pfad_parameter = ("pfad", "datei", "bild")
 
     @property
     def name(self) -> str:
@@ -467,7 +472,9 @@ class BildTextErsetzenTool(BaseTool):
         }
 
     async def execute(self, **kwargs) -> str:
-        pfad = str(kwargs.get("pfad") or kwargs.get("datei") or kwargs.get("bild") or "").strip()
+        # Nur die deklarierten Felder - dieselbe Quelle, die der Dispatch prueft.
+        pfad = next((str(kwargs[f]).strip() for f in self.pfad_parameter
+                     if str(kwargs.get(f) or "").strip()), "")
         if not pfad:
             return "Fehler: Es wurde kein Bildpfad (pfad) angegeben."
         ziel_sprache = str(kwargs.get("zielsprache") or "Deutsch").strip() or "Deutsch"

@@ -1831,6 +1831,23 @@
         if (!cfbEditorPlatzieren()) { cfbEditModus(null); cfbBaumLeeren(); }
     }
 
+    // Bearbeiten + Muelleimer - oder, fuer eine Einbindung fremder
+    // Wissensgruppen, ein Hinweis statt der Knoepfe. ⚠ `=== false`, NICHT
+    // Falsyness: ein aelteres Backend ohne das Feld behaelt die Knoepfe (der
+    // Server weist ohnehin mit 403 ab). Die Entscheidung trifft der SERVER mit
+    // derselben Regel wie am 403 (`_cfb_darf`) - der Client kennt nur seinen
+    // Bereich und koennte sie nicht nachbauen.
+    function cfbAktionen(b) {
+        if (b.darf_aendern === false) {
+            return '<span class="wi-cfb-fremd" title="' + esc(t('wissen.cfb_foreign_hint')) + '">'
+                + esc(t('wissen.cfb_foreign')) + '</span>';
+        }
+        return '<button type="button" class="sec-btn small wi-cfb-edit" title="'
+            + esc(t('wissen.cfb_edit_hint')) + '">' + esc(t('wissen.cfb_edit')) + '</button>'
+            + '<button type="button" class="sec-btn small danger wi-cfb-del" title="'
+            + esc(t('wissen.cfb_del')) + '">' + JarvisIcons.trash() + '</button>';
+    }
+
     function cfbRenderEintraege(box) {
         var arr = _cfbBereiche || [];
         if (!arr.length) {
@@ -1869,10 +1886,7 @@
                 + cfbSyncZeile(b)
                 + '</div>'
                 + chips
-                + '<button type="button" class="sec-btn small wi-cfb-edit" title="'
-                + esc(t('wissen.cfb_edit_hint')) + '">' + esc(t('wissen.cfb_edit')) + '</button>'
-                + '<button type="button" class="sec-btn small danger wi-cfb-del" title="'
-                + esc(t('wissen.cfb_del')) + '">' + JarvisIcons.trash() + '</button>'
+                + cfbAktionen(b)
                 + '</div>';
         }).join('');
         box.querySelectorAll('.wi-cfb-del').forEach(function (btn) {

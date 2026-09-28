@@ -315,7 +315,7 @@ def ausschnitt_ablegen(daten: bytes, mime: str, user: str) -> str:
     """Legt den Ausschnitt als Arbeitskopie ab und gibt den PFAD zurueck.
 
     ⚠ OHNE DIESE DATEI IST ``bild_text_ersetzen`` STRUKTURELL UNERREICHBAR.
-    Das Werkzeug traegt ``pfad_parameter = ("pfad",)`` und verlangt eine Datei;
+    Das Werkzeug nimmt einen deklarierten Pfad (``pfad_parameter``) und verlangt eine Datei;
     der Ausschnitt ging bis hierher ausschliesslich als ``inline_data`` raus.
     Genau dieser Zustand hat im Chat am 2026-09-15 acht Schritte gekostet: das
     Modell SAH das Bild, sollte es bearbeiten, suchte die Datei und enumerierte

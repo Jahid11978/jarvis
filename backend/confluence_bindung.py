@@ -141,32 +141,42 @@ def _leer() -> dict:
     return {"version": 1, "bereiche": []}
 
 
+class BestandUnlesbar(BindungFehler):
+    """Die Ablage EXISTIERT, laesst sich aber nicht lesen oder deuten.
+
+    ⚠ DAS IST KEIN LEERER BESTAND. Bis 2026-09-28 gab ``_laden`` hier ``_leer()``
+    zurueck – und beide Folgen waren Datenverlust (Code-Review 2026-09-28):
+    der Abgleich sah keine Eintraege mehr und raeumte JEDE importierte
+    Confluence-Seite ab, und ``hinzufuegen``/``aendern`` schrieben den leeren
+    Stand plus den neuen Eintrag UEBER die unlesbare Datei. Wer liest, bekommt
+    deshalb diesen Fehler; wer schreibt, schreibt gar nicht."""
+
+
 def _laden() -> dict:
-    """Bestand lesen. **Streng**: eine beschaedigte Datei wird NICHT
-    ueberschrieben – ein Parse-Fehler gibt einen leeren Bestand zurueck, damit
-    der Container nicht sperrt, aber ``_speichern`` schreibt nur, was der
-    Aufrufer wirklich geaendert hat."""
+    """Bestand lesen. **Streng**: nur eine FEHLENDE Datei ist ein leerer
+    Bestand. Eine vorhandene, aber unlesbare oder formwidrige Datei wirft
+    ``BestandUnlesbar`` – sie wird nie ueberschrieben und nie als „nichts
+    eingebunden" gedeutet."""
     p = _pfad()
     if not p.is_file():
         return _leer()
     try:
         d = json.loads(p.read_text(encoding="utf-8"))
     except Exception as e:  # noqa: BLE001
-        # ⚠ FAIL-OPEN, ABER NICHT STILL. "Leer" ist hier eine Aussage ("nichts
-        # eingebunden"), und wenn sie aus einem FEHLER stammt, ist sie falsch:
-        # die Oberflaeche meldet dann "Noch kein Bereich eingebunden", waehrend
-        # welche in der Datei stehen. Beim Bau genau so passiert – eine als
-        # root geschriebene Datei (0640 root:root) ist fuer den Dienst nicht
-        # lesbar, und ohne diese Zeile gibt es dafuer keine einzige Spur.
+        # Beim Bau genau so passiert – eine als root geschriebene Datei
+        # (0640 root:root) ist fuer den Dienst nicht lesbar. Die Protokollzeile
+        # bleibt: sie nennt, WAS zu pruefen ist.
         print(f"[CF-Bindung] {p} nicht lesbar ({type(e).__name__}: {e}) – "
-              f"die Liste erscheint LEER. Pruefe Eigentuemer/Rechte "
+              f"Abgleich und Bearbeiten ruhen. Pruefe Eigentuemer/Rechte "
               f"(erwartet: jarvis:jarvis 0640) bzw. den JSON-Inhalt.")
-        return _leer()
-    if not isinstance(d, dict):
-        return _leer()
-    d.setdefault("bereiche", [])
-    if not isinstance(d["bereiche"], list):
-        d["bereiche"] = []
+        raise BestandUnlesbar(
+            "Die gespeicherten Einbindungen können gerade nicht gelesen werden – "
+            "es wird nichts verändert. Bitte den Administrator informieren.") from e
+    if not isinstance(d, dict) or not isinstance(d.setdefault("bereiche", []), list):
+        print(f"[CF-Bindung] {p} hat eine unerwartete Form – Abgleich und Bearbeiten ruhen.")
+        raise BestandUnlesbar(
+            "Die gespeicherten Einbindungen haben eine unerwartete Form – "
+            "es wird nichts verändert. Bitte den Administrator informieren.")
     return d
 
 

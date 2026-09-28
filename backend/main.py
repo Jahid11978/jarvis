@@ -609,12 +609,33 @@ def _bild_mime_aus_bytes(daten_b64: str) -> str:
         kopf = _b64m.b64decode((daten_b64 or "")[:32], validate=False)
     except Exception:  # noqa: BLE001
         return ""
+    return _bild_mime_aus_kopf(kopf)
+
+
+def _bild_mime_aus_kopf(kopf: bytes) -> str:
+    """MIME aus den ersten Bytes (roh) – "" wenn es keine Rastergrafik ist.
+    EINE Tabelle fuer den Upload (``_bild_mime_aus_bytes``) und die
+    Auslieferung (``get_chat_attachment``)."""
     for signatur, mime in _ANHANG_BILD_MAGIC:
         if kopf.startswith(signatur):
             return mime
     if kopf[:4] == b"RIFF" and kopf[8:12] == b"WEBP":
         return "image/webp"
     return ""
+
+
+def _anhang_dateiname(dateiname: str) -> str:
+    """Der Ablagename eines Anhangs in ``data/documents``.
+
+    ⚠ EINE REGEL FUER ABLEGEN UND AUSLIEFERN. ``get_chat_attachment`` hatte
+    eine eigene, engere Fassung (nur ASCII): ``Übersicht.png`` wurde hier
+    abgelegt, dort mit 400 abgewiesen - das Bild verschwand nach F5, genau
+    der Fall, fuer den die Auslieferung gebaut wurde (Code-Review 2026-09-28).
+    Die Auslieferung prueft deshalb, dass ein Name ein FIXPUNKT dieser
+    Funktion ist - dann hat er keinen Pfadtrenner und kein fremdes Zeichen.
+    """
+    return "".join(c if (c.isalnum() or c in "._-") else "_"
+                   for c in os.path.basename(dateiname or "")).strip("_") or "datei"
 
 
 def _anhang_ablegen(rohdaten: bytes, dateiname: str, benutzer: str):
@@ -643,8 +664,7 @@ def _anhang_ablegen(rohdaten: bytes, dateiname: str, benutzer: str):
     try:
         docs_dir = Path(__file__).parent.parent / "data" / "documents"
         docs_dir.mkdir(parents=True, exist_ok=True)
-        sicher = "".join(c if (c.isalnum() or c in "._-") else "_"
-                         for c in os.path.basename(dateiname)).strip("_") or "datei"
+        sicher = _anhang_dateiname(dateiname)
         ziel = docs_dir / sicher
         if ziel.exists():
             stamm, suffix = os.path.splitext(sicher)
@@ -4198,29 +4218,34 @@ async def update_settings_set(request: Request, user: str = Depends(require_loca
 
     if schedule != "never":
         cron_expr = "0 3 * * *" if schedule == "daily" else "0 3 * * 1"
-        cron_manager.add_job(
-            label="Auto-Update (System)",
-            cron=cron_expr,
-            task=(
-                "Führe ein Jarvis-System-Update durch:\n"
-                "1. Prüfe ob Updates auf GitHub verfügbar sind\n"
-                "2. Falls ja: git pull und Neustart\n"
-                "Nutze dafür den shell_execute-Tool mit: "
-                "cd /opt/jarvis && git fetch origin && git pull origin master && "
-                "systemctl restart jarvis.service"
-            ),
-            enabled=True,
-            job_id=_AUTO_JOB_ID,
-            # Auftraggeber-Bindung nachgetragen (2026-07-29): ohne owner lief der
-            # Job seit dem Fix vom 28.07. UNPRIVILEGIERT (fail-closed) und wäre an
-            # 'git pull'/'systemctl restart' gescheitert – das Auto-Update war
-            # damit still tot. Der Endpunkt verlangt require_local_auth, der
-            # Anleger IST also ein Administrator; Systemrechte sind hier gewollt
-            # und ausdrücklich, nicht geerbt.
-            owner=user,
-            owner_privileged=True,
-            created_via="auto_update_settings",
-        )
+        from backend.scheduler import JobsUnlesbar
+        try:
+            cron_manager.add_job(
+                label="Auto-Update (System)",
+                cron=cron_expr,
+                task=(
+                    "Führe ein Jarvis-System-Update durch:\n"
+                    "1. Prüfe ob Updates auf GitHub verfügbar sind\n"
+                    "2. Falls ja: git pull und Neustart\n"
+                    "Nutze dafür den shell_execute-Tool mit: "
+                    "cd /opt/jarvis && git fetch origin && git pull origin master && "
+                    "systemctl restart jarvis.service"
+                ),
+                enabled=True,
+                job_id=_AUTO_JOB_ID,
+                # Auftraggeber-Bindung nachgetragen (2026-07-29): ohne owner lief der
+                # Job seit dem Fix vom 28.07. UNPRIVILEGIERT (fail-closed) und wäre an
+                # 'git pull'/'systemctl restart' gescheitert – das Auto-Update war
+                # damit still tot. Der Endpunkt verlangt require_local_auth, der
+                # Anleger IST also ein Administrator; Systemrechte sind hier gewollt
+                # und ausdrücklich, nicht geerbt.
+                owner=user,
+                owner_privileged=True,
+                created_via="auto_update_settings",
+            )
+        except JobsUnlesbar as e:
+            # Unlesbare Auftragsliste: nichts angelegt, Grund an die Oberflaeche.
+            return JSONResponse({"error": str(e)}, status_code=500)
 
     return JSONResponse({"ok": True, "auto_update_schedule": schedule})
 
@@ -6842,17 +6867,25 @@ async def get_chat_attachment(name: str, user: str = Depends(require_auth_or_que
     Bewusst NUR Rastergrafik: ein SVG oder HTML inline aus der eigenen Herkunft
     auszuliefern waere ein Skript-Einfallstor.
     """
-    import re
-    _MEDIA = {"png": "image/png", "jpg": "image/jpeg", "jpeg": "image/jpeg",
-              "gif": "image/gif", "webp": "image/webp", "bmp": "image/bmp"}
-    m = re.fullmatch(r"[A-Za-z0-9_\-][A-Za-z0-9._\-]{0,200}\.([A-Za-z0-9]{1,8})", name or "")
-    media = _MEDIA.get(m.group(1).lower()) if m else None
-    if not media or ".." in name:
+    # Die FORM kommt aus derselben Regel wie beim Ablegen (Fixpunkt), der TYP
+    # aus dem INHALT: eine Endungsliste wies `.jfif` & Co. ab, obwohl der
+    # Upload sie als Bild erkannt und abgelegt hatte.
+    if (not name or len(name) > 255 or name.startswith(".") or ".." in name
+            or _anhang_dateiname(name) != name):
         return JSONResponse({"error": "ungueltiger Name"}, status_code=400)
     p = Path(__file__).parent.parent / "data" / "documents" / name
     # 404 statt 403 auch bei fremder Datei: ob sie existiert, ist selbst eine Information.
     if not p.is_file() or not _documents.may_access(name, user, _is_admin_user(user)):
         return JSONResponse({"error": "nicht gefunden"}, status_code=404)
+    try:
+        with open(p, "rb") as fh:
+            media = _bild_mime_aus_kopf(fh.read(16))
+    except OSError:
+        media = ""
+    if not media:
+        # Bewusst nur Rastergrafik (siehe Docstring) - und erst NACH der
+        # Eigentuemerpruefung, sonst verriete die Antwort fremde Dateitypen.
+        return JSONResponse({"error": "kein Bild"}, status_code=400)
     return FileResponse(str(p), media_type=media, content_disposition_type="inline",
                         filename=name,
                         headers={"Cache-Control": "private, max-age=3600",
@@ -14489,7 +14522,10 @@ async def feedback_admin_sortieren(request: Request,
     if len(ids) > fb.MAX_FORMULARE:
         return JSONResponse({"ok": False, "error": "Zu viele Kennungen."},
                             status_code=400)
-    bewegt = await asyncio.to_thread(fb.formulare_sortieren, ids)
+    try:
+        bewegt = await asyncio.to_thread(fb.formulare_sortieren, ids)
+    except fb.FeedbackFehler as f:   # unlesbarer Bestand: nichts geschrieben
+        return JSONResponse({"ok": False, "error": str(f)}, status_code=500)
     # Die neue Liste kommt MIT zurueck: die Oberflaeche zeichnet aus der
     # SERVER-Antwort, nicht aus ihrem Zwischenstand – sonst behauptet sie eine
     # Reihenfolge, die der Server womoeglich anders gespeichert hat.
@@ -14538,7 +14574,11 @@ async def feedback_admin_loeschen(fid: str, user: str = Depends(require_local_au
     Die ABGABEN bleiben liegen (siehe `feedback.formular_loeschen`).
     """
     from backend import feedback as fb  # noqa: PLC0415
-    if not await asyncio.to_thread(fb.formular_loeschen, fid):
+    try:
+        weg = await asyncio.to_thread(fb.formular_loeschen, fid)
+    except fb.FeedbackFehler as f:   # unlesbarer Bestand: nichts geschrieben
+        return JSONResponse({"ok": False, "error": str(f)}, status_code=500)
+    if not weg:
         return JSONResponse({"ok": False, "error": "Das Formular wurde nicht gefunden."},
                             status_code=404)
     return JSONResponse({"ok": True})
@@ -18864,7 +18904,55 @@ def _cfb_aktiv() -> tuple[bool, bool]:
         return False, False
 
 
-def _cfb_mit_gruppen(bereiche: list) -> list:
+_CFB_FREMD = ("Diese Einbindung gehört zu Wissensgruppen außerhalb deines Bereichs – "
+              "ändern oder löschen kann sie nur, wer eine davon bearbeitet.")
+
+
+def _cfb_rechte(user: str):
+    """``(eigene, bekannte)`` Gruppen-Kennungen fuer ``_cfb_darf`` – oder
+    ``None``, wenn die Gruppenliste nicht ermittelbar ist. EINMAL je Abruf:
+    ``_editable_groups_for`` liest den Index, das soll nicht je Eintrag laufen."""
+    eigene = {g.get("id") for g in (_editable_groups_for(user) or []) if isinstance(g, dict)}
+    try:
+        from backend import knowledge_groups as kg
+        bekannt = {g.get("id") for g in kg.list_groups().get("groups", []) if isinstance(g, dict)}
+    except Exception as e:  # noqa: BLE001
+        print(f"[Wissen/CF-Bindung] Gruppen nicht ermittelbar, Aenderung verweigert: {e}")
+        return None
+    return eigene, bekannt
+
+
+def _cfb_darf(rechte, eintrag: dict) -> bool:
+    """Die Regel selbst (siehe ``_cfb_darf_eintrag``); ``rechte`` aus ``_cfb_rechte``."""
+    if rechte is None:
+        # Fail-closed: ohne Gruppenliste ist "gehoert niemandem" nicht feststellbar.
+        return False
+    eigene, bekannt = rechte
+    gueltig = [g for g in (eintrag.get("gruppen") or []) if g in bekannt]
+    return not gueltig or any(g in eigene for g in gueltig)
+
+
+def _cfb_darf_eintrag(user: str, eintrag: dict) -> bool:
+    """Darf ``user`` diese Einbindung aendern oder loeschen?
+
+    ⚠ Code-Review 2026-09-28: PUT/DELETE prueften nur, OB der Aufrufer
+    irgendeine Wissensgruppe bearbeitet - ein Editor von Gruppe A konnte damit
+    die Einbindung von Gruppe B loeschen (deren Wissen verschwindet beim
+    naechsten Abgleich) oder umstellen, welche Bereiche B speisen. Dieselbe
+    Regel wie ueberall in /wissen: nur im EIGENEN Bereich.
+
+    Erlaubt, wenn die Einbindung mindestens eine Gruppe aus dem Bereich des
+    Aufrufers traegt - oder GAR KEINE noch existierende Gruppe (Altbestand
+    ohne Zuordnung, geloeschte Gruppen): dann gehoert sie niemandem, und ohne
+    diese Ausnahme koennte sie keiner mehr reparieren oder entfernen.
+
+    Dieselbe Regel liefert ``darf_aendern`` an die Liste (``_cfb_mit_gruppen``)
+    - die Oberflaeche blendet damit genau die Knoepfe aus, die hier 403 ergaeben.
+    """
+    return _cfb_darf(_cfb_rechte(user), eintrag)
+
+
+def _cfb_mit_gruppen(bereiche: list, user: str = "") -> list:
     """Jede Einbindung um die ANZEIGENAMEN ihrer Wissensgruppen ergaenzen.
 
     ⚠ DIE NAMEN KOMMEN VOM SERVER, und zwar aus ALLEN Gruppen – nicht aus den
@@ -18895,9 +18983,15 @@ def _cfb_mit_gruppen(bereiche: list) -> list:
     except Exception as e:  # noqa: BLE001
         print(f"[Wissen/CF-Bindung] Abgleichsstand nicht ermittelbar: {e}")
         staende = {}
+    # Welche Eintraege der ABRUFENDE aendern darf - dieselbe Regel wie der 403
+    # an PUT/DELETE, einmal je Abruf berechnet. Ohne `user` (aelterer Aufruf)
+    # fehlt das Feld, und die Oberflaeche zeigt die Knoepfe wie bisher.
+    rechte = _cfb_rechte(user) if user else None
     aus = []
     for b in bereiche:
         c = dict(b)
+        if user:
+            c["darf_aendern"] = _cfb_darf(rechte, c)
         info = []
         for gid in (c.get("gruppen") or []):
             g = bekannt.get(gid)
@@ -18924,9 +19018,13 @@ async def wissen_cf_bindung_lesen(user: str = Depends(require_auth)):
                             status_code=403)
     import backend.confluence_bindung as _cfb
     skill, conf = _cfb_aktiv()
+    try:
+        bereiche = _cfb_mit_gruppen(_cfb.liste(), user) if (skill and conf) else []
+    except _cfb.BestandUnlesbar as e:
+        # Nicht "keine Eintraege" melden, wenn es nur nicht lesbar ist.
+        return JSONResponse({"ok": False, "error": str(e)}, status_code=500)
     return JSONResponse({"ok": True, "skill_aktiv": skill, "configured": conf,
-                         "aktiv": skill and conf,
-                         "bereiche": _cfb_mit_gruppen(_cfb.liste()) if (skill and conf) else []})
+                         "aktiv": skill and conf, "bereiche": bereiche})
 
 
 async def _cfb_auswahl_lesen(request: Request, user: str):
@@ -19015,13 +19113,15 @@ async def wissen_cf_bindung_anlegen(request: Request, user: str = Depends(requir
         return fehler
     try:
         eintrag = _cfb.hinzufuegen(auswahl, _display_name(user), req_groups, namen, tags)
+    except _cfb.BestandUnlesbar as e:
+        return JSONResponse({"ok": False, "error": str(e)}, status_code=500)
     except _cfb.BindungFehler as e:
         return JSONResponse({"ok": False, "error": str(e)}, status_code=400)
     except Exception as e:  # noqa: BLE001
         return JSONResponse({"ok": False, "error": f"Konnte nicht gespeichert werden: {e}"},
                             status_code=500)
     return JSONResponse({"ok": True, "bereich": eintrag,
-                         "bereiche": _cfb_mit_gruppen(_cfb.liste())})
+                         "bereiche": _cfb_mit_gruppen(_cfb.liste(), user)})
 
 
 @app.put("/api/wissen/confluence/bindung/{bid}")
@@ -19041,9 +19141,14 @@ async def wissen_cf_bindung_aendern(bid: str, request: Request,
         return JSONResponse({"ok": False, "error": "Dir ist kein Wissensbereich zugewiesen."},
                             status_code=403)
     import backend.confluence_bindung as _cfb
-    alt = _cfb.holen(bid)
+    try:
+        alt = _cfb.holen(bid)
+    except _cfb.BestandUnlesbar as e:
+        return JSONResponse({"ok": False, "error": str(e)}, status_code=500)
     if alt is None:
         return JSONResponse({"ok": False, "error": "Einbindung nicht gefunden."}, status_code=404)
+    if not _cfb_darf_eintrag(user, alt):
+        return JSONResponse({"ok": False, "error": _CFB_FREMD}, status_code=403)
     fehler, auswahl, req_groups, namen, tags = await _cfb_auswahl_lesen(request, user)
     if fehler is not None:
         return fehler
@@ -19054,13 +19159,15 @@ async def wissen_cf_bindung_aendern(bid: str, request: Request,
         eintrag = _cfb.aendern(bid, auswahl, _display_name(user), gruppen, namen, tags)
     except KeyError:
         return JSONResponse({"ok": False, "error": "Einbindung nicht gefunden."}, status_code=404)
+    except _cfb.BestandUnlesbar as e:
+        return JSONResponse({"ok": False, "error": str(e)}, status_code=500)
     except _cfb.BindungFehler as e:
         return JSONResponse({"ok": False, "error": str(e)}, status_code=400)
     except Exception as e:  # noqa: BLE001
         return JSONResponse({"ok": False, "error": f"Konnte nicht gespeichert werden: {e}"},
                             status_code=500)
     return JSONResponse({"ok": True, "bereich": eintrag,
-                         "bereiche": _cfb_mit_gruppen(_cfb.liste())})
+                         "bereiche": _cfb_mit_gruppen(_cfb.liste(), user)})
 
 
 @app.delete("/api/wissen/confluence/bindung/{bid}")
@@ -19070,9 +19177,16 @@ async def wissen_cf_bindung_loeschen(bid: str, user: str = Depends(require_auth)
         return JSONResponse({"ok": False, "error": "Dir ist kein Wissensbereich zugewiesen."},
                             status_code=403)
     import backend.confluence_bindung as _cfb
-    if not _cfb.entfernen(bid):
+    try:
+        alt = _cfb.holen(bid)
+        if alt is not None and not _cfb_darf_eintrag(user, alt):
+            return JSONResponse({"ok": False, "error": _CFB_FREMD}, status_code=403)
+        weg = _cfb.entfernen(bid)
+    except _cfb.BestandUnlesbar as e:
+        return JSONResponse({"ok": False, "error": str(e)}, status_code=500)
+    if not weg:
         return JSONResponse({"ok": False, "error": "Einbindung nicht gefunden."}, status_code=404)
-    return JSONResponse({"ok": True, "bereiche": _cfb_mit_gruppen(_cfb.liste())})
+    return JSONResponse({"ok": True, "bereiche": _cfb_mit_gruppen(_cfb.liste(), user)})
 
 
 @app.post("/api/wissen/extract/confluence")
@@ -19408,17 +19522,10 @@ async def wissen_destillat_lauf(request: Request, user: str = Depends(require_au
     try:
         _wd.drossel_pruefen(user)
         if je_datei:
-            teile = _wd.teile_nach_dateien(text)
-            if len(teile) > 1:
-                stuecke = []
-                for name, abschnitt in teile:
-                    r = await _wd.destilliere(abschnitt, prompt, gruppen_prompt)
-                    stuecke.append(("## " + name + "\n\n" if name else "")
-                                   + r["markdown"])
-                return JSONResponse({"ok": True,
-                                     "markdown": "\n\n---\n\n".join(stuecke),
-                                     "bloecke": len(teile), "gekappt": False,
-                                     "je_datei": True})
+            # EIN Blockbudget fuer den ganzen Lauf, Kappung wird gemeldet
+            # (siehe wissen_destillat.destilliere_je_datei).
+            return JSONResponse({"ok": True, **await _wd.destilliere_je_datei(
+                text, prompt, gruppen_prompt)})
         ergebnis = await _wd.destilliere(text, prompt, gruppen_prompt)
     except _wd.DestillatFehler as e:
         return JSONResponse({"error": str(e)}, status_code=400)

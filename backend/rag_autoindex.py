@@ -32,8 +32,8 @@ Deshalb: erst eine **rein lesende Vorpruefung**, und nur wenn wirklich etwas
 anliegt, laeuft der EINE vorhandene Weg (``force_reindex(incremental=True)``).
 Im Regelfall - nichts geaendert - passiert damit gar nichts und niemand merkt
 den Lauf. Einen zweiten Indizierweg gibt es ausdruecklich NICHT; die Erkennung
-teilt sich mit dem Reindex dieselben Funktionen (``_geaenderte_dateien``,
-``_verwaiste_dateien``), sonst driften Vorpruefung und Lauf auseinander.
+teilt sich mit dem Reindex dieselben Funktionen (``_ausstehende_dateien`` auf
+``_geaenderte_dateien``, ``_verwaiste_dateien``), sonst driften Vorpruefung und Lauf auseinander.
 
 ⚠ AUSGELOEST WIRD ES VON EINEM CRON-AUFTRAG (Vorgabe 2026-09-21), sichtbar und
 steuerbar unter *Einstellungen → Tasks → Cron-Aufgaben*. Der fruehere eigene
@@ -141,7 +141,10 @@ def pruefen() -> dict:
     alive = K._nutzbare_ordner(folders, indexed, streng=True)
     files = K._all_files(alive)
 
-    geaendert = K._geaenderte_dateien(files, indexed)
+    # ⚠ NICHT `_geaenderte_dateien`: bekannt unlesbare/leere Dateien stehen dort
+    # bei JEDEM Aufruf und stiessen alle fuenf Minuten einen Lauf an, der nichts
+    # tut (Code-Review 2026-09-28).
+    geaendert = K._ausstehende_dateien(files, indexed)
     verwaist = K._verwaiste_dateien({str(f) for f in files}, indexed, alive)
 
     return {
