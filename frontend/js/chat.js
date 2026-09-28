@@ -2332,6 +2332,12 @@
         { key: 'ibs',   icon: '👥' },
         { key: 'multi2', icon: '🔎' },
         { key: 'code',  icon: '💻' },
+        // 'viz' (2026-09-28): eingefuegte Tabelle direkt als Diagramm (create_chart).
+        { key: 'viz',   icon: '📈' },
+        // 'image' zurueck (2026-09-28): seit 2026-09-02 malt generate_image mit dem
+        // eigenen BILDPROFIL (config.IMAGE_PROFILE_ID) statt mit dem Textprofil des
+        // Laufs – der Grund fuer das Entfernen am 2026-08-04 ist damit entfallen.
+        { key: 'image', icon: '🎨' },
     ];
 
     /** Baut die Willkommens-Karte mit anklickbaren Beispiel-Prompts. */
