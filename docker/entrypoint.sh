@@ -113,10 +113,13 @@ OBMENU
 fi
 
 # ── 4. x11vnc ──────────────────────────────────────────────────────────────
+# NUR loopback: x11vnc laeuft mit -nopw, websockify davor ohne Anmeldung.
+# Der Desktop ist ausschliesslich ueber /ws/vnc auf 443 (Token + Admin) da.
+# Vorher: -listen 0.0.0.0 und 6080 veroeffentlicht = Desktop ohne Kennwort.
 log "Starte x11vnc auf Port $VNC_PORT..."
 x11vnc -display "$DISPLAY_NUM" \
     -nopw \
-    -listen 0.0.0.0 \
+    -localhost \
     -rfbport "$VNC_PORT" \
     -forever \
     -shared \
@@ -138,7 +141,7 @@ if [[ -n "$NOVNC_DIR" ]]; then
         --ssl-only \
         --cert="$CERT_DIR/server.crt" \
         --key="$CERT_DIR/server.key" \
-        "$NOVNC_PORT" \
+        "127.0.0.1:$NOVNC_PORT" \
         "localhost:$VNC_PORT" &
 else
     log "WARNUNG: noVNC nicht gefunden – VNC-Streaming deaktiviert."

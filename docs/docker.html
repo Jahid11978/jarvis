@@ -216,9 +216,8 @@ docker compose up -d</code>
                     <div class="step-desc" style="margin-top:10px;">Danach im Browser öffnen:</div>
                     <div class="code-block" style="margin-top:8px;">
                         <code>https://&lt;server-ip&gt;         <span class="comment"># Web-UI (HTTPS)</span>
-https://&lt;server-ip&gt;:6080   <span class="comment"># VNC Desktop (HTTPS)</span>
 
-Login: jarvis / jarvis</code>
+Login: jarvis / Erstkennwort  <span class="comment"># docker logs jarvis | grep Erstkennwort</span></code>
                     </div>
                     <div class="info-box tip" style="margin-top:12px;">
                         <span class="icon">🔐</span>
@@ -291,15 +290,13 @@ Login: jarvis / jarvis</code>
             <tbody>
                 <tr><td><span class="port-badge">443</span></td><td>443</td><td><strong>Jarvis Web-UI</strong> (HTTPS/FastAPI)</td></tr>
                 <tr><td><span class="port-badge">80</span></td><td>80</td><td><strong>HTTP → HTTPS Redirect</strong></td></tr>
-                <tr><td><span class="port-badge">6080</span></td><td>6080</td><td><strong>noVNC Desktop</strong> (HTTPS/WebSocket)</td></tr>
             </tbody>
         </table>
 
         <p style="color:var(--text-secondary); font-size:0.88rem; margin-top:8px;">Anderen Port verwenden (z.B. wenn 443 belegt ist):</p>
         <div class="code-block">
             <code><span class="key">ports</span>:
-  - <span class="str">"9443:443"</span>    <span class="comment"># Jarvis dann auf Port 9443 erreichbar</span>
-  - <span class="str">"9080:6080"</span>   <span class="comment"># VNC dann auf Port 9080</span></code>
+  - <span class="str">"9443:443"</span>    <span class="comment"># Jarvis dann auf Port 9443 erreichbar</span></code>
         </div>
 
         <h3>Hinter einem Reverse Proxy (nginx / Traefik)</h3>
@@ -369,7 +366,7 @@ echo "GEMINI_API_KEY=AIza..." >> .env
                 <div class="step-num">1</div>
                 <div class="step-content">
                     <div class="step-title">Web-UI öffnen und einloggen</div>
-                    <div class="step-desc"><span class="code-inline">https://&lt;server-ip&gt;</span> → Login: jarvis / jarvis</div>
+                    <div class="step-desc"><span class="code-inline">https://&lt;server-ip&gt;</span> → Login: jarvis / Erstkennwort aus <span class="code-inline">docker logs jarvis</span> – beim ersten Login muss es geändert werden</div>
                 </div>
             </div>
             <div class="step">
@@ -536,12 +533,11 @@ docker compose logs jarvis | tail -50</code>
 docker compose ps
 
 <span class="comment"># Prüfen ob Ports gebunden sind</span>
-ss -tlnp | grep -E "443|6080"
+ss -tlnp | grep -E ":443\b"
 
 <span class="comment"># Firewall-Ports freigeben (ufw)</span>
 ufw allow 443/tcp
-ufw allow 80/tcp
-ufw allow 6080/tcp</code>
+ufw allow 80/tcp</code>
         </div>
 
         <h3>SSL-Zertifikat wird nicht akzeptiert</h3>

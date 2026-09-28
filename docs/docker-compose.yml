@@ -5,7 +5,8 @@
 # Schnellstart:
 #   docker compose up -d
 #   Browser: https://<server-ip>  (SSL-Warnung bestätigen)
-#   Login:   jarvis / jarvis
+#   Login:   jarvis / Erstkennwort aus  docker logs jarvis | grep Erstkennwort
+#            (oder JARVIS_PASSWORD setzen; Wechsel beim ersten Login ist Pflicht)
 # ──────────────────────────────────────────────────────────────────────────────
 
 services:
@@ -18,12 +19,13 @@ services:
     ports:
       - "80:80"       # HTTP → HTTPS Redirect
       - "443:443"     # Web-UI (HTTPS)
-      - "6080:6080"   # noVNC Desktop-Streaming
+      # 6080 (noVNC) bewusst NICHT veroeffentlicht: dahinter haengt x11vnc ohne
+      # Kennwort. Der Desktop laeuft ueber 443 (/novnc + /ws/vnc, mit Anmeldung).
     environment:
       # Docker-Modus aktivieren (deaktiviert PAM-Authentifizierung)
       JARVIS_DOCKER: "1"
       # Web-Login Passwort (Benutzername ist immer "jarvis")
-      JARVIS_PASSWORD: "${JARVIS_PASSWORD:-jarvis}"
+      JARVIS_PASSWORD: "${JARVIS_PASSWORD:-}"
       # Server-IP für SSL-Zertifikat (WICHTIG: Auf eigene IP anpassen!)
       SERVER_IP: "${SERVER_IP:-127.0.0.1}"
       # LLM API-Keys (alternativ im Web-UI unter Einstellungen eintragen)

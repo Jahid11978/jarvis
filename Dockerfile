@@ -76,14 +76,13 @@ COPY docker/entrypoint.sh /entrypoint.sh
 RUN chmod +x /entrypoint.sh
 
 # ── Ports ────────────────────────────────────────────────────────────────────
-EXPOSE 80 443 6080
+EXPOSE 80 443
 
 # ── Volumes fuer persistente Daten ───────────────────────────────────────────
 VOLUME ["/app/data", "/app/certs"]
 
 # ── Umgebungsvariablen (Defaults) ────────────────────────────────────────────
 ENV JARVIS_DOCKER=1 \
-    JARVIS_PASSWORD=jarvis \
     DISPLAY=:1 \
     PYTHONUNBUFFERED=1
 

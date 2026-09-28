@@ -557,12 +557,61 @@ fi
 step "System-Benutzer & Konfiguration"
 
 # Jarvis-Benutzer anlegen (PAM-Login)
+#
+# KEIN festes Erstkennwort: Benutzer+Kennwort "jarvis" standen oeffentlich in README und
+# Landingpage, und der Benutzer ist ein echtes Linux-Konto (SSH, oft sudo).
+# Neu angelegt -> Zufallskennwort, einmal in der Abschlussmeldung gezeigt;
+# beim ersten Web-Login erzwingt Jarvis den Wechsel. Ein BESTEHENDES Konto,
+# das noch das Standardkennwort (oder gar keines) traegt, wird ebenso
+# umgestellt (Vorfall 2026-09-28).
+JARVIS_ERSTKENNWORT=""
+_zufallskennwort() {
+    # 16 Zeichen aus [A-Za-z0-9]; urandom statt $RANDOM
+    LC_ALL=C tr -dc 'A-Za-z0-9' </dev/urandom | head -c 16 || true
+}
+_hat_standardkennwort() {
+    # 0 = Standard/leer, 1 = individuell/gesperrt, 2 = nicht pruefbar
+    command -v perl >/dev/null 2>&1 || return 2
+    $SUDO perl -e '
+        my $h = (split /:/, `getent shadow $ARGV[0]`)[1] // "";
+        exit 0 if $h eq "";
+        exit 1 if $h =~ /^[!*]/;
+        exit 2 unless $h =~ /^\$/;
+        exit((crypt("jarvis", $h) // "") eq $h ? 0 : 1);
+    ' "$1"
+}
+_erstkennwort_setzen() {
+    JARVIS_ERSTKENNWORT="$(_zufallskennwort)"
+    if [[ ${#JARVIS_ERSTKENNWORT} -lt 16 ]]; then
+        error "Konnte kein Zufallskennwort erzeugen"; exit 1
+    fi
+    printf '%s:%s\n' jarvis "$JARVIS_ERSTKENNWORT" | $SUDO chpasswd
+    # Wechsel beim ersten Web-Login erzwingen, auch wenn ein alter Merker
+    # aus einer frueheren Installation "schon geaendert" sagt.
+    if [[ -f "$INSTALL_DIR/data/auth_state.json" ]]; then
+        $SUDO python3 - "$INSTALL_DIR/data/auth_state.json" <<'PY' || true
+import json, sys
+p = sys.argv[1]
+d = json.load(open(p))
+d.setdefault("users", {}).setdefault("jarvis", {})["must_change_password"] = True
+json.dump(d, open(p, "w"), indent=4)
+PY
+    fi
+}
 if id jarvis &>/dev/null; then
-    success "Benutzer 'jarvis' bereits vorhanden"
+    _rc=0; _hat_standardkennwort jarvis || _rc=$?
+    if [[ $_rc -eq 0 ]]; then
+        _erstkennwort_setzen
+        warn "Benutzer 'jarvis' hatte das öffentlich bekannte Standardkennwort – durch ein Zufallskennwort ersetzt (siehe Abschlussmeldung)"
+    elif [[ $_rc -eq 2 ]]; then
+        warn "Kennwort von 'jarvis' nicht prüfbar – falls es noch 'jarvis' lautet: sudo passwd jarvis"
+    else
+        success "Benutzer 'jarvis' bereits vorhanden"
+    fi
 else
     $SUDO useradd -m -s /bin/bash jarvis >/dev/null 2>&1
-    echo "jarvis:jarvis" | $SUDO chpasswd
-    success "Benutzer 'jarvis' angelegt (Web-Login: jarvis / jarvis)"
+    _erstkennwort_setzen
+    success "Benutzer 'jarvis' angelegt (Erstkennwort: siehe Abschlussmeldung)"
 fi
 
 # .env konfigurieren
@@ -572,6 +621,15 @@ if [[ ! -f "$INSTALL_DIR/.env" ]]; then
 else
     success ".env bereits vorhanden"
 fi
+
+# SECRET_KEY: ein Wert aus der oeffentlichen Vorlage/Doku signiert Tokens, die
+# jeder nachbauen kann -> leeren. Das Backend erzeugt dann einen Zufallsschluessel
+# in data/.secret_key (backend/secret_key.py). Greift auch bei Bestandsinstallationen.
+if grep -qiE '^SECRET_KEY=[[:space:]]*change-me' "$INSTALL_DIR/.env"; then
+    sed -i -E 's/^SECRET_KEY=.*/SECRET_KEY=/' "$INSTALL_DIR/.env"
+    warn "SECRET_KEY war der öffentliche Beispielwert – entfernt, beim Start wird ein Zufallsschlüssel erzeugt (bestehende Anmeldungen werden ungültig)"
+fi
+$SUDO chmod 600 "$INSTALL_DIR/.env" 2>/dev/null || true
 
 echo -e "
 ${CYAN}ℹ  Hinweis zu API-Keys:${RESET}
@@ -816,7 +874,8 @@ ${BOLD}Status:${RESET}
 
 ${BOLD}Jetzt im Browser öffnen:${RESET}
   ${CYAN}https://${SERVER_IP}${RESET}   ${YELLOW}← im Browser öffnen${RESET}
-  Login: ${BOLD}jarvis / jarvis${RESET}
+  Login: ${BOLD}jarvis${RESET} / ${BOLD}${JARVIS_ERSTKENNWORT:-<dein bisheriges Kennwort>}${RESET}
+  ${YELLOW}(Beim ersten Login wirst du aufgefordert, das Kennwort zu ändern)${RESET}
   ${YELLOW}(SSL-Warnung beim ersten Aufruf einfach bestätigen)${RESET}
 
 ${BOLD}API-Key einrichten:${RESET}

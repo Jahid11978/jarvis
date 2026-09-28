@@ -43,7 +43,15 @@ import psutil
 
 # ─── Docker-Modus: PAM durch ENV-Variable ersetzen ───────────────────
 _DOCKER_MODE = os.getenv("JARVIS_DOCKER", "0") == "1"
-_JARVIS_PASSWORD = os.getenv("JARVIS_PASSWORD", "jarvis")
+# Kein festes Standardkennwort im Docker-Modus (Vorfall 2026-09-28):
+# fehlt JARVIS_PASSWORD oder lautet es "jarvis", gilt ein Zufallskennwort
+# aus data/.erstkennwort (backend/standard_zugang.py).
+from backend import standard_zugang as _standard_zugang
+_JARVIS_PASSWORD = (
+    _standard_zugang.docker_erstkennwort(
+        os.getenv("JARVIS_PASSWORD", ""),
+        Path(__file__).parent.parent / "data" / ".erstkennwort")
+    if _DOCKER_MODE else "")
 
 if not _DOCKER_MODE:
     import pam as _pam_module
@@ -3027,6 +3035,12 @@ def _save_auth_state(state: dict):
     """Speichert den Auth-State in die JSON-Datei."""
     _AUTH_STATE_FILE.parent.mkdir(parents=True, exist_ok=True)
     _AUTH_STATE_FILE.write_text(json.dumps(state, indent=4))
+    # 2FA-Geheimnisse: nur der Dienst (sandbox.PRIVATE_FILES_STRENG setzt es
+    # beim Start ebenfalls – hier fuer die NEU angelegte Datei, 2026-09-28)
+    try:
+        os.chmod(_AUTH_STATE_FILE, 0o600)
+    except OSError:
+        pass
 
 def _get_user_auth_state(username: str) -> dict:
     """Gibt den Auth-State eines Benutzers zurück (Defaults: must_change_password=True)."""
@@ -3076,7 +3090,7 @@ def _validate_password_strength(password: str, username: str) -> list[str]:
         errors.append("Mindestens eine Ziffer erforderlich.")
     if password.lower() == username.lower():
         errors.append("Kennwort darf nicht mit dem Benutzernamen identisch sein.")
-    if password.lower() in ("jarvis", "password", "passwort", "12345678", "123456789"):
+    if _standard_zugang.ist_standardkennwort(password, username):
         errors.append("Kennwort zu einfach – bitte ein sichereres Kennwort wählen.")
     return errors
 
@@ -3768,6 +3782,15 @@ async def login(request: Request):
             status_code=401,
         )
 
+    # Standard-Kennwort (jarvis/jarvis & Co., oeffentlich im Repo) -> Wechsel
+    # ERZWINGEN, egal was der Merker sagt: er kann aus einer frueheren
+    # Installation stammen, waehrend das Kennwort wieder auf dem Standard steht
+    # (backend/standard_zugang.py, Vorfall 2026-09-28). Nur lokale Konten – ein
+    # AD-Kennwort verwaltet die Domaene.
+    if username in ALLOWED_USERS and _standard_zugang.ist_standardkennwort(password, username):
+        print(f"[AUTH] Anmeldung von '{username}' mit Standard-Kennwort – Wechsel wird erzwungen",
+              flush=True)
+        _set_user_auth_state(username, {"must_change_password": True})
     user_state = _get_user_auth_state(username)
     # Nur der lokale jarvis-Benutzer muss bei der ersten Anmeldung aendern;
     # Domaenen-/AD-Benutzer NIEMALS.

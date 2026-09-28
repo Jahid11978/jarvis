@@ -404,8 +404,8 @@ OLLAMA_BASE_URL=http://localhost:11434
 
 # ── Authentication ──────────────────────────────────────────────
 JARVIS_USERNAME=jarvis
-JARVIS_PASSWORD=jarvis          # Change this in production!
-SECRET_KEY=change-me-to-a-random-string
+JARVIS_PASSWORD=                # Docker only; empty = random initial password (docker logs), change enforced at first login
+SECRET_KEY=                     # leave empty: a random key is generated into data/.secret_key
 
 # ── WhatsApp ────────────────────────────────────────────────────
 WA_ALLOWED_NUMBERS=+4915112345678,+4917098765432  # Comma-separated whitelist

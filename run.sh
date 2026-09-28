@@ -102,9 +102,9 @@ if ! pgrep -f "websockify.*${WEBSOCKIFY_PORT}" > /dev/null 2>&1; then
         echo -e "${BLUE}   noVNC Verzeichnis: ${NOVNC_DIR}${NC}"
         # System-websockify bevorzugen, dann venv-websockify
         if command -v /usr/bin/websockify &> /dev/null; then
-            /usr/bin/websockify --web="$NOVNC_DIR" "$WEBSOCKIFY_PORT" "localhost:${VNC_PORT}" > /dev/null 2>&1 &
+            /usr/bin/websockify --web="$NOVNC_DIR" "127.0.0.1:$WEBSOCKIFY_PORT" "localhost:${VNC_PORT}" > /dev/null 2>&1 &
         else
-            python -m websockify --web="$NOVNC_DIR" "$WEBSOCKIFY_PORT" "localhost:${VNC_PORT}" > /dev/null 2>&1 &
+            python -m websockify --web="$NOVNC_DIR" "127.0.0.1:$WEBSOCKIFY_PORT" "localhost:${VNC_PORT}" > /dev/null 2>&1 &
         fi
         WEBSOCKIFY_PID=$!
         sleep 1
@@ -141,7 +141,7 @@ echo -e "${GREEN}═════════════════════
 echo -e "${GREEN}🚀 Jarvis wird gestartet...${NC}"
 PORT_SUFFIX=""; [ "$SERVER_PORT" != "443" ] && PORT_SUFFIX=":${SERVER_PORT}"
 echo -e "${GREEN}🌐 Öffne im Browser: ${CYAN}https://$(hostname -I | awk '{print $1}')${PORT_SUFFIX}${NC}"
-echo -e "${GREEN}🔑 Standard-Passwort: jarvis${NC}"
+echo -e "${GREEN}🔑 Login: Linux-Benutzer jarvis mit seinem Kennwort (Standardkennwörter werden beim Login zum Wechsel gezwungen)${NC}"
 echo -e "${GREEN}═══════════════════════════════════════════════════${NC}"
 echo ""
 

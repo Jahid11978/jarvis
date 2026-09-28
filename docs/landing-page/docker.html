@@ -243,9 +243,8 @@ docker compose up -d</code>
                     <div class="step-desc" style="margin-top:10px;"><span class="t-de">Danach im Browser öffnen:</span><span class="t-en">Then open in your browser:</span></div>
                     <div class="code-block" style="margin-top:8px;">
                         <code>https://&lt;server-ip&gt;         <span class="comment"># Web-UI (HTTPS)</span>
-https://&lt;server-ip&gt;:6080   <span class="comment"># VNC Desktop (HTTPS)</span>
 
-Login: jarvis / jarvis</code>
+Login: jarvis / initial password  <span class="comment"># docker logs jarvis | grep Erstkennwort</span></code>
                     </div>
                     <div class="info-box tip" style="margin-top:12px;">
                         <span class="icon">🔐</span>
@@ -318,15 +317,13 @@ Login: jarvis / jarvis</code>
             <tbody>
                 <tr><td><span class="port-badge">443</span></td><td>443</td><td><strong>Jarvis Web-UI</strong> (HTTPS/FastAPI)</td></tr>
                 <tr><td><span class="port-badge">80</span></td><td>80</td><td><strong>HTTP → HTTPS Redirect</strong></td></tr>
-                <tr><td><span class="port-badge">6080</span></td><td>6080</td><td><strong>noVNC Desktop</strong> (HTTPS/WebSocket)</td></tr>
             </tbody>
         </table>
 
         <p style="color:var(--text-secondary); font-size:0.88rem; margin-top:8px;"><span class="t-de">Anderen Port verwenden (z.B. wenn 443 belegt ist):</span><span class="t-en">Use a different port (e.g. if 443 is already in use):</span></p>
         <div class="code-block">
             <code><span class="key">ports</span>:
-  - <span class="str">"9443:443"</span>    <span class="comment"># Jarvis accessible on port 9443</span>
-  - <span class="str">"9080:6080"</span>   <span class="comment"># VNC accessible on port 9080</span></code>
+  - <span class="str">"9443:443"</span>    <span class="comment"># Jarvis accessible on port 9443</span></code>
         </div>
 
         <h3><span class="t-de">Hinter einem Reverse Proxy (nginx / Traefik)</span><span class="t-en">Behind a reverse proxy (nginx / Traefik)</span></h3>
@@ -396,7 +393,7 @@ echo "GEMINI_API_KEY=AIza..." >> .env
                 <div class="step-num">1</div>
                 <div class="step-content">
                     <div class="step-title"><span class="t-de">Web-UI öffnen und einloggen</span><span class="t-en">Open Web-UI and log in</span></div>
-                    <div class="step-desc"><span class="code-inline">https://&lt;server-ip&gt;</span> → Login: jarvis / jarvis</div>
+                    <div class="step-desc"><span class="code-inline">https://&lt;server-ip&gt;</span> → Login: jarvis / initial password from <span class="code-inline">docker logs jarvis</span> – you must change it at first login</div>
                 </div>
             </div>
             <div class="step">
@@ -563,12 +560,11 @@ docker compose logs jarvis | tail -50</code>
 docker compose ps
 
 <span class="comment"># Check if ports are bound</span>
-ss -tlnp | grep -E "443|6080"
+ss -tlnp | grep -E ":443\b"
 
 <span class="comment"># Open firewall ports (ufw)</span>
 ufw allow 443/tcp
-ufw allow 80/tcp
-ufw allow 6080/tcp</code>
+ufw allow 80/tcp</code>
         </div>
 
         <h3><span class="t-de">SSL-Zertifikat wird nicht akzeptiert</span><span class="t-en">SSL certificate not accepted</span></h3>

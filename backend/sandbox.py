@@ -113,6 +113,9 @@ _SECRET_NAMES = {
     ".env", "settings.json", "memory.json", "auth_state.json",
     "credentials.json", "id_rsa", "id_ed25519", "id_dsa", ".htpasswd",
     ".netrc", "shadow", "gshadow", "sudoers",
+    # Signierschluessel der Sitzungstokens und Docker-Erstkennwort: wer sie
+    # liest, meldet sich als beliebiger Benutzer an (2026-09-28).
+    ".secret_key", ".erstkennwort",
 }
 _SECRET_SUFFIX = {".key", ".pem", ".crt", ".cer", ".p12", ".pfx", ".jks", ".keystore"}
 _SECRET_DIRPARTS = {".ssh", ".git", "certs"}
@@ -352,7 +355,14 @@ PRIVATE_FILES_STRENG = ("data/.mailkey", "data/.sapkey", "data/.jirakey",
                         "data/claude_subagent.json",
                         # Der private Signierschluessel des Hauses und sein
                         # Kennwort – die strengste Stufe ist hier das Mindeste.
-                        "data/.aimouse_sign.pfx", "data/.aimousesignkey")
+                        "data/.aimouse_sign.pfx", "data/.aimousesignkey",
+                        # SECRET_KEY signiert JEDES Sitzungstoken: wer ihn liest,
+                        # stellt sich ein Admin-Token aus. auth_state.json traegt
+                        # die 2FA-Geheimnisse, .erstkennwort das Docker-Erstkennwort.
+                        # Auf DEV am 2026-09-28 gemessen: alle drei 0644, lesbar
+                        # fuer jarvis_sandbox.
+                        "data/.secret_key", "data/auth_state.json",
+                        "data/.erstkennwort")
 PRIVATE_FILE_MODE_STRENG = 0o600
 
 
@@ -639,6 +649,8 @@ SHELL_SECRET_PATHS = re.compile(
     # Kennwoerter der Netzwerk-Freigaben: .mountkey entschluesselt die
     # password_enc-Felder in settings.json (das ohnehin gesperrt ist).
     r'\.mountkey\b|'
+    # Signierschluessel der Sitzungstokens und Docker-Erstkennwort (2026-09-28)
+    r'\.secret_key\b|\.erstkennwort\b|'
     # Short Tracks: fremde Dump-Prompts samt Werkzeug-Zuschnitt (beschreibbar
     # waere das ein Dump mit `shell` unter fremder Kennung) und die
     # Ergebnistexte fremder Laeufe.

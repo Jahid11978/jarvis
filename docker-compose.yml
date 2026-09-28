@@ -5,7 +5,8 @@
 # Schnellstart:
 #   docker compose up -d
 #   Browser: https://<server-ip>  (SSL-Warnung bestätigen)
-#   Login:   jarvis / jarvis
+#   Login:   jarvis / Erstkennwort aus  docker logs jarvis | grep Erstkennwort
+#            (oder JARVIS_PASSWORD setzen; Wechsel beim ersten Login ist Pflicht)
 # ──────────────────────────────────────────────────────────────────────────────
 
 services:
@@ -18,7 +19,8 @@ services:
     ports:
       - "80:80"       # HTTP → HTTPS Redirect
       - "443:443"     # Web-UI (HTTPS)
-      - "6080:6080"   # noVNC Desktop-Streaming
+      # 6080 (noVNC) bewusst NICHT veroeffentlicht: dahinter haengt x11vnc ohne
+      # Kennwort. Der Desktop laeuft ueber 443 (/novnc + /ws/vnc, mit Anmeldung).
     environment:
       # Docker-Modus aktivieren (deaktiviert PAM-Authentifizierung)
       JARVIS_DOCKER: "1"
@@ -26,7 +28,7 @@ services:
       JARVIS_WEBHOOK: "https://localhost/api/whatsapp/incoming"
       NODE_TLS_REJECT_UNAUTHORIZED: "0"
       # Web-Login Passwort (Benutzername ist immer "jarvis")
-      JARVIS_PASSWORD: "${JARVIS_PASSWORD:-jarvis}"
+      JARVIS_PASSWORD: "${JARVIS_PASSWORD:-}"
       # !! WICHTIG: Auf die eigene Server-IP setzen – sonst wird das SSL-Zertifikat
       # !! von Windows abgelehnt! Beispiel: SERVER_IP: "1.2.3.4"
       SERVER_IP: "${SERVER_IP:-127.0.0.1}"
