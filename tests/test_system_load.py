@@ -145,6 +145,21 @@ abschnitt("5. Oberflaeche")
 js = JS.read_text(encoding="utf-8")
 portal = PORTAL.read_text(encoding="utf-8")
 check("/portal bindet sysload.js ein", re.search(r'/static/js/sysload\.js\?v=\d+', portal))
+# Der Klick hinter der CPU-Anzeige gilt auf JEDER Seite mit CPU-Anzeige, nicht
+# nur auf /portal. Gemessen an den <script src>-Angaben, nicht am Teilstring –
+# ein Kommentar, der "cpubar.js" erwaehnt, ist kein Einbinden.
+SRC = re.compile(r'<script\b[^>]*\bsrc="/static/js/([a-z_]+)\.js(?:\?v=\d+)?"', re.I)
+mit_cpu, ohne_load = [], []
+for p in sorted((ROOT / "frontend").glob("*.html")):
+    skripte = set(SRC.findall(p.read_text(encoding="utf-8")))
+    if "cpubar" in skripte:
+        mit_cpu.append(p.name)
+        if "sysload" not in skripte:
+            ohne_load.append(p.name)
+if "portal.html" not in mit_cpu or len(mit_cpu) < 2:
+    abbruch(f"Seiten mit CPU-Anzeige nicht erkannt ({mit_cpu})")
+check(f"jede Seite mit CPU-Anzeige ({len(mit_cpu)}) bindet sysload.js ein",
+      not ohne_load, ohne_load)
 check("fragt /api/system/load ab", "'/api/system/load'" in js)
 check("Admin-Frage ueber /api/me", "'/api/me'" in js and "is_admin" in js)
 
