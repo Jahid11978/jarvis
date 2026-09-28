@@ -653,8 +653,10 @@ section('12. Ort des Editors – beim Bearbeiten IN der Box des Eintrags (Vorgab
         && zeile(id).classList.contains('wi-cfb-editing')
         && d.querySelectorAll('.wi-item.wi-cfb-editing').length === 1;
     // Positivkontrolle: ohne Editor-Huelle waeren alle Ortspruefungen trivial
-    check('(Positivkontrolle) Editor-Huelle vorhanden und enthaelt Gruppen, Tags, Baum, Knopf, Status',
-          !!ed() && ['wi-cfb-groups', 'wi-cfb-tags', 'wi-cfb-tree', 'wi-cfb-add', 'wi-cfb-cancel', 'wi-cfb-status']
+    // Die Statuszeile gehoert NICHT dazu: sie wandert beim Schliessen unter
+    // "Neuer Bereich" (Abschnitt 13) und steht nur im OFFENEN Editor darin.
+    check('(Positivkontrolle) Editor-Huelle vorhanden und enthaelt Gruppen, Tags, Baum, Knopf',
+          !!ed() && ['wi-cfb-groups', 'wi-cfb-tags', 'wi-cfb-tree', 'wi-cfb-add', 'wi-cfb-cancel']
               .every(id => ed().contains(d.getElementById(id))));
     check('(Positivkontrolle) zwei Eintraege in der Liste', !!zeile('e1') && !!zeile('e2'));
     check('Neuanlage: Editor steht OBERHALB der Liste, in keiner Box', geparkt());
@@ -662,6 +664,7 @@ section('12. Ort des Editors – beim Bearbeiten IN der Box des Eintrags (Vorgab
     await s.klick(zeile('e1').querySelector('.wi-cfb-edit'));
     await warten(60);
     check('⚠ Bearbeiten e1: Editor steht IN der Box von e1', inBox('e1'));
+    check('... und die Statuszeile steht im offenen Editor', ed().contains(d.getElementById('wi-cfb-status')));
     check('der Baum wandert mit (keine Kopie)', d.querySelectorAll('#wi-cfb-tree').length === 1
           && zeile('e1').contains(d.getElementById('wi-cfb-tree')));
     check('der Editor steht NACH der Kopfzeile der Box',
@@ -698,6 +701,72 @@ section('12. Ort des Editors – beim Bearbeiten IN der Box des Eintrags (Vorgab
     check('⚠ bearbeiteten Eintrag geloescht: Editor oberhalb der Liste, Anlege-Modus',
           geparkt() && /Übernehmen/.test(d.getElementById('wi-cfb-add').textContent)
           && !!d.getElementById('wi-cfb-tree'));
+    s.zu();
+}
+
+// ════════════════════════════════════════════════════════════════════════
+section('13. Editor nur bei "Neuer Bereich" oder "Bearbeiten" (Vorgabe 2026-09-28)');
+{
+    const E = { id: 'e1', typ: 'auswahl', name: 'Eins', gruppen: ['g1'],
+        gruppen_info: [{ id: 'g1', name: 'Technik', color: '#888' }],
+        auswahl: [{ key: 'NEXUS', start: true, ganz: false, seiten: [], zweige: [] }] };
+    const s = await seite({ bindung: { ok: true, aktiv: true, bereiche: [E] } });
+    const d = s.doc;
+    // Sichtbar = kein Vorfahr (bis zum Abschnitt) mit display:none. jsdom
+    // rechnet kein Layout - gemessen wird die Kette der display-Werte.
+    const sichtbar = (el) => {
+        for (let x = el; x && x !== d.body; x = x.parentElement) {
+            if (x.style && x.style.display === 'none') return false;
+        }
+        return !!el;
+    };
+    const ed = d.getElementById('wi-cfb-editor');
+    const neu = d.getElementById('wi-cfb-new');
+    const st = () => d.getElementById('wi-cfb-status');
+    const felder = ['wi-cfb-groups', 'wi-cfb-tags', 'wi-cfb-such', 'wi-cfb-tree', 'wi-cfb-add'];
+    const keinesSichtbar = () => felder.every(id => !sichtbar(d.getElementById(id)));
+    const alleSichtbar = () => felder.every(id => sichtbar(d.getElementById(id)));
+    check('(Positivkontrolle) Abschnitt sichtbar, Editor und Knopf vorhanden',
+          sichtbar(d.getElementById('wi-sec-cfbind')) && !!ed && !!neu);
+    check('⚠ Grundzustand: Gruppen, Tags, Suche, Baum, Übernehmen NICHT sichtbar', keinesSichtbar());
+    check('Grundzustand: "Neuer Bereich" sichtbar, beschriftet',
+          sichtbar(neu) && /Neuer Bereich/.test(neu.textContent), neu && neu.textContent);
+    check('Grundzustand: die Liste ist sichtbar', sichtbar(d.querySelector('#wi-cfb-list .wi-item')));
+
+    await s.klick(neu);
+    check('⚠ "Neuer Bereich": Editor offen, alle Felder sichtbar', alleSichtbar());
+    check('"Neuer Bereich": der Knopf selbst ist weg, "Abbrechen" da',
+          !sichtbar(neu) && sichtbar(d.getElementById('wi-cfb-cancel')));
+    check('"Neuer Bereich": Anlege-Modus ("Übernehmen")', /Übernehmen/.test(d.getElementById('wi-cfb-add').textContent));
+    check('"Neuer Bereich": Statuszeile im Editor', ed.contains(st()));
+
+    await s.klick(d.getElementById('wi-cfb-cancel'));
+    check('⚠ Abbrechen der Neuanlage: Editor wieder zu', keinesSichtbar() && sichtbar(neu));
+
+    await s.klick(neu);
+    await s.klick(s.tog(s.sp('OPS')));
+    await s.klick(d.getElementById('wi-cfb-add'));
+    await warten(40);
+    check('(Positivkontrolle) Übernehmen lief als POST',
+          s.posts().some(x => x.m === 'POST' && x.pfad === '/api/wissen/confluence/bindung'));
+    check('⚠ nach dem Übernehmen: Editor zu', keinesSichtbar() && sichtbar(neu));
+    check('⚠ ... und die Erfolgsmeldung bleibt SICHTBAR (unter "Neuer Bereich")',
+          sichtbar(st()) && !ed.contains(st()) && /✅/.test(st().textContent), st().textContent);
+
+    await s.klick(d.querySelector('#wi-cfb-list .wi-item[data-id="e1"] .wi-cfb-edit'));
+    await warten(60);
+    check('⚠ "Bearbeiten": Editor offen in der Box, alle Felder sichtbar',
+          alleSichtbar() && !!ed.closest('.wi-item'));
+    check('"Bearbeiten": "Neuer Bereich" bleibt erreichbar', sichtbar(neu));
+    await s.klick(d.getElementById('wi-cfb-cancel'));
+    check('⚠ Abbrechen des Bearbeitens: Editor wieder zu', keinesSichtbar());
+
+    await s.klick(d.querySelector('#wi-cfb-list .wi-item[data-id="e1"] .wi-cfb-edit'));
+    await warten(60);
+    await s.klick(neu);
+    check('"Neuer Bereich" waehrend des Bearbeitens: Anlege-Modus, Editor oberhalb der Liste',
+          alleSichtbar() && !ed.closest('.wi-item') && /Übernehmen/.test(d.getElementById('wi-cfb-add').textContent)
+          && d.querySelectorAll('#wi-cfb-tree .wi-cfb-cb:checked').length === 0);
     s.zu();
 }
 

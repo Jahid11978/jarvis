@@ -232,6 +232,36 @@ with connect(ws, open_timeout=20, max_size=60_000_000) as sock:
         check("POSITIVKONTROLLE: der Container ist sichtbar", auf == "da", str(auf))
         n = js(sock, "document.querySelectorAll('#wi-cfb-tree li.wi-cfb-sp').length")
         check("POSITIVKONTROLLE: der Baum traegt die Bereiche", n == 3, str(n))
+        # Vorgabe 2026-09-28: der Editor ist ZU, bis "Neuer Bereich" oder
+        # "Bearbeiten" geklickt wird. Gemessen ueber checkVisibility() -
+        # sichtbar heisst: der Browser zeichnet es.
+        zu = js(sock, """(function(){var v=function(id){var e=document.getElementById(id);
+          return !!e && e.checkVisibility();};
+          return {ed:v('wi-cfb-editor'), baum:v('wi-cfb-tree'), grp:v('wi-cfb-groups'),
+                  add:v('wi-cfb-add'), neu:v('wi-cfb-new'), liste:v('wi-cfb-list'),
+                  ueber:document.documentElement.scrollWidth-document.documentElement.clientWidth};})()""")
+        check("⚠ Grundzustand: Gruppen, Baum, Übernehmen NICHT sichtbar",
+              bool(zu) and not (zu["ed"] or zu["baum"] or zu["grp"] or zu["add"]), str(zu))
+        check("Grundzustand: 'Neuer Bereich' und die Liste sichtbar",
+              bool(zu) and zu["neu"] and zu["liste"], str(zu))
+        check("Grundzustand: kein waagerechter Ueberlauf", bool(zu) and zu["ueber"] <= 0, str(zu))
+        js(sock, "(function(){var e=document.getElementById('wi-cfb-new');if(e)e.scrollIntoView({block:'center'});})()")
+        time.sleep(0.4)
+        bild(sock, f"cfb-zu-{thema}.png")
+        kn = js(sock, KONTRAST % "#wi-cfb-new")
+        # ⚠ NICHT in `gemessen`: dort prueft die Positivkontrolle "hell !=
+        # dunkel", und `.sec-btn.primary` ist in beiden Themen gleich (Register).
+        kv = kontrast(farbe(kn["fg"]), farbe(kn["bg"])) if kn else 0.0
+        check(f"Knopf 'Neuer Bereich' lesbar (>= 4,5:1): {kv:.2f}:1", kv >= 4.5, str(kn))
+        js(sock, "document.getElementById('wi-cfb-new').click()")
+        time.sleep(0.5)
+        auf2 = js(sock, """(function(){var v=function(id){var e=document.getElementById(id);
+          return !!e && e.checkVisibility();};
+          return {ed:v('wi-cfb-editor'), baum:v('wi-cfb-tree'), add:v('wi-cfb-add'),
+                  ab:v('wi-cfb-cancel'), neu:v('wi-cfb-new')};})()""")
+        check("⚠ nach 'Neuer Bereich': Editor, Baum, Übernehmen und Abbrechen sichtbar",
+              bool(auf2) and auf2["ed"] and auf2["baum"] and auf2["add"] and auf2["ab"] and not auf2["neu"],
+              str(auf2))
 
         # [+] am ersten Bereich klicken (echter Klick ueber das DOM)
         js(sock, "document.querySelector('#wi-cfb-tree li.wi-cfb-sp .wi-cfb-tog').click()")

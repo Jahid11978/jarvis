@@ -228,6 +228,9 @@
         /* Die Knoepfe duerfen nicht mitwachsen: `.wi-cfb-actions` ist ein
            Flex-Container. */
         .wi-cfb-add { flex: 0 0 auto; }
+        .wi-cfb-newrow { display: flex; align-items: center; gap: 10px; flex-wrap: wrap;
+                         margin-bottom: 8px; }
+        .wi-cfb-newrow > .wi-status { flex: 1 1 auto; min-width: 0; }
         /* Eintrag in Bearbeitung: der Editor steht IN seiner Box, unter der
            Kopfzeile (Name, Gruppen, Knoepfe). `flex-wrap` + `flex-basis: 100%`
            setzen ihn auf eine eigene Zeile; der Akzentrand zeigt, WELCHER
@@ -766,7 +769,15 @@
                  (cfbEditorPlatzieren) diesen Block IN die Box des bearbeiteten
                  Eintrags, bei der Neuanlage steht er hier. Er muss deshalb
                  unmittelbar vor #wi-cfb-list stehen. -->
-            <div class="wi-cfb-editor" id="wi-cfb-editor">
+            <!-- ⚠ DER EDITOR IST ZU, bis "Neuer Bereich" oder "Bearbeiten"
+                 geklickt wird (Vorgabe 2026-09-28) - wissen.js::cfbEditorZeigen.
+                 Die Statuszeile wandert mit: offen steht sie im Editor, zu
+                 hier unter dem Knopf (sonst waere "gespeichert" unsichtbar). -->
+            <div class="wi-cfb-newrow" id="wi-cfb-newrow">
+                <button type="button" class="sec-btn primary wi-cfb-add" id="wi-cfb-new"
+                        data-i18n="wissen.cfb_new">Neuer Bereich</button>
+            </div>
+            <div class="wi-cfb-editor" id="wi-cfb-editor" style="display:none;">
             <div class="wi-cfb-groups-wrap">
                 <label data-i18n="wissen.groups_label">Wissensgruppen (dein Bereich) *</label>
                 <div class="wi-groups" id="wi-cfb-groups"></div>
@@ -837,7 +848,7 @@
     <script src="/static/js/cpubar.js?v=1"></script>
     <script src="/static/js/syspackages.js?v=2"></script>
     <script src="/static/js/sysload.js?v=3"></script>
-    <script src="/static/js/i18n.js?v=298"></script>
+    <script src="/static/js/i18n.js?v=299"></script>
     <script src="/static/js/seite_breit.js?v=1"></script>
     <script src="/static/js/theme.js?v=3"></script>
     <script src="/static/js/profile_switcher.js?v=5"></script>
@@ -849,7 +860,7 @@
     <script src="/static/js/sessions.js?v=8"></script>
     <script src="/static/js/logo_home.js?v=1"></script>
     <script src="/static/js/wissen_destillat.js?v=7"></script>
-    <script src="/static/js/wissen.js?v=62"></script>
+    <script src="/static/js/wissen.js?v=63"></script>
 <script src="/static/js/settings_btn.js?v=4"></script>
     <script src="/static/js/branding.js?v=26"></script>
 <!-- Avatar-Assistent (nur aktiv, wenn der Avatar-Skill eingeschaltet ist) -->

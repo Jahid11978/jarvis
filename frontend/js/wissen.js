@@ -1432,6 +1432,7 @@
     // frei und ein zweiter Aufruf moeglich, mitten im ersten.
     var _cfbLaeuft = false;
     var _cfbEdit = null;         // Kennung des Eintrags, der gerade bearbeitet wird
+    var _cfbNeu = false;         // Editor fuer die Neuanlage offen ("Neuer Bereich")
     var _cfbBaumFuer = null;     // Bereichsliste, fuer die der Baum gezeichnet ist
 
     function cfbStatus(msg, warn) {
@@ -1472,6 +1473,38 @@
         cfbRenderGroups();
         cfbRenderBaum();
         cfbRenderList();
+        cfbEditorZeigen();
+    }
+
+    // ⚠ DER EDITOR IST NUR BEI "Neuer Bereich" ODER "Bearbeiten" OFFEN
+    // (Vorgabe 2026-09-28). Die Statuszeile ist EIN Element, das wandert:
+    // offen steht sie am Ende des Editors (am Knopf, der sie ausloest), zu
+    // unter "Neuer Bereich" - sonst waeren "gespeichert"/"entfernt" nach dem
+    // Schliessen unsichtbar. Zwei Statuszeilen liefen auseinander.
+    function cfbEditorZeigen() {
+        var ed = $('wi-cfb-editor'), st = $('wi-cfb-status');
+        var zeile = $('wi-cfb-newrow'), neu = $('wi-cfb-new'), ab = $('wi-cfb-cancel');
+        var offen = !!(_cfbEdit || _cfbNeu);
+        if (ed) ed.style.display = offen ? '' : 'none';
+        // Bei der Neuanlage steht der Editor direkt darunter - ein zweiter
+        // Klick haette nichts zu tun. Beim Bearbeiten bleibt er: der Weg zur
+        // Neuanlage fuehrt dann ueber ihn (das Bearbeiten endet damit).
+        if (neu) neu.style.display = _cfbNeu ? 'none' : '';
+        // "Abbrechen" ist jetzt der Weg, den Editor wieder zu schliessen -
+        // auch bei der Neuanlage, nicht nur beim Bearbeiten.
+        if (ab) ab.style.display = offen ? '' : 'none';
+        if (st && ed && zeile) {
+            if (offen && st.parentNode !== ed) ed.appendChild(st);
+            if (!offen && st.parentNode !== zeile) zeile.appendChild(st);
+        }
+    }
+
+    function cfbNeu() {
+        cfbEditModus(null);
+        cfbBaumLeeren();
+        cfbStatus('');
+        _cfbNeu = true;
+        cfbEditorZeigen();
     }
 
     // ⚠ MINDESTENS EINE WISSENSGRUPPE IST PFLICHT (Vorgabe 2026-09-22).
@@ -1902,11 +1935,13 @@
         });
     }
 
+    // cfbEditModus(null) SCHLIESST den Editor (auch eine offene Neuanlage);
+    // cfbNeu() oeffnet ihn danach ausdruecklich wieder.
     function cfbEditModus(b) {
         _cfbEdit = b ? b.id : null;
-        var add = $('wi-cfb-add'), ab = $('wi-cfb-cancel'), note = $('wi-cfb-editnote');
+        _cfbNeu = false;
+        var add = $('wi-cfb-add'), note = $('wi-cfb-editnote');
         if (add) add.textContent = t(b ? 'wissen.cfb_save' : 'wissen.cfb_add');
-        if (ab) ab.style.display = b ? '' : 'none';
         if (note) {
             note.style.display = b ? '' : 'none';
             note.textContent = b ? t('wissen.cfb_editing', { n: b.name || b.id }) : '';
@@ -1916,6 +1951,7 @@
         var tg = $('wi-cfb-tags');
         if (tg) tg.value = b ? (b.tags || []).join(', ') : '';
         cfbEditorPlatzieren();
+        cfbEditorZeigen();
     }
 
     // Einen gespeicherten Eintrag in den Baum laden: Haken und Gruppen so, wie
@@ -2047,6 +2083,8 @@
         if (btn) btn.addEventListener('click', function () { cfbAdd(); });
         var ab = $('wi-cfb-cancel');
         if (ab) ab.addEventListener('click', cfbAbbrechen);
+        var nb = $('wi-cfb-new');
+        if (nb) nb.addEventListener('click', cfbNeu);
         // Wissensgruppen-Pflicht: der Knopf folgt der Auswahl. DELEGIERT am
         // Container - die Kaestchen entstehen erst beim Zeichnen. Nur auf
         // `change` hoeren und NIE selbst umschalten (am AD-Picker bezahlt).
