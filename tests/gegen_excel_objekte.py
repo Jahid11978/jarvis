@@ -173,8 +173,8 @@ def _p9():
 @probe("_angelegt wird nicht gesetzt", "frontend/excel-addin/excel.js")
 def _p10():
     patch("frontend/excel-addin/excel.js",
-          "                a._angelegt = true;\n                return { a: a, ok: true };",
-          "                return { a: a, ok: true };")
+          "Ruecknahmen mit.\n                    a._angelegt = true;\n                    return { a: a, ok: true };",
+          "Ruecknahmen mit.\n                    return { a: a, ok: true };")
 
 
 @probe("Fehlermeldung nennt Werte, die selbst abgelehnt wuerden",

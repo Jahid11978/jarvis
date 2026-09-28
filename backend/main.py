@@ -19776,7 +19776,18 @@ async def knowledge_assignments_set(request: Request, user: str = Depends(requir
     # ⚠ DIE TYPPRUEFUNG BLEIBT DAVOR: eine leere Liste ENTFERNT hier die
     # Zuordnung – wer `{"groups": "abc"}` stillschweigend zu `[]` normiert,
     # loescht damit die Gruppen einer Datei.
+    # ⚠ DASSELBE GILT FUER DIE EINTRAEGE (Review 2026-09-28): die Normierung
+    # VERWIRFT Nicht-Strings, `{"groups": [1]}` wurde damit zu `[]` und nahm
+    # der Datei alle Gruppen. Hier ist ein fremder Eintrag deshalb ein 400 –
+    # nur an dieser Stelle, weil nur hier "leer" "alles entfernen" heisst.
+    if any(not isinstance(g, str) for g in groups):
+        return JSONResponse({"ok": False, "error": "groups darf nur Gruppenkennungen enthalten"},
+                            status_code=400)
+    roh_anzahl = len(groups)
     groups = _gruppen_normieren(groups)
+    if roh_anzahl and not groups:
+        return JSONResponse({"ok": False, "error": "keine gültige Gruppe angegeben"},
+                            status_code=400)
 
     if not _may_edit_knowledge(user):
         # Nur geänderte Gruppen prüfen (hinzugefügt ODER entfernt).

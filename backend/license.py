@@ -385,16 +385,41 @@ def instanz_kennung() -> str:
             return "D1-" + roh
     except Exception:
         pass
+    # ⚠ EIGENE TEMP-DATEI UND `link` STATT `replace` (Review 2026-09-28):
+    # vorher schrieben zwei gleichzeitige Erstaufrufe (Worker, Broker-Abfrage)
+    # in DIESELBE `.tmp`. A gab seine Kennung zurueck, B hatte die Temp-Datei
+    # inzwischen ueberschrieben, A's `replace` setzte also B's Kennung ein –
+    # und B's `replace` fand keine Datei mehr und lieferte "". Zwei Aufrufer,
+    # zwei verschiedene Antworten, keine davon passte sicher zur Datei.
+    # `os.link` scheitert, wenn das Ziel schon existiert: die ERSTE Kennung
+    # gewinnt, jeder spaetere Aufrufer liest sie.
+    tmp = None
     try:
         neu = uuid.uuid4().hex
         INSTANZ_FILE.parent.mkdir(parents=True, exist_ok=True)
-        tmp = INSTANZ_FILE.with_suffix(".tmp")
-        tmp.write_text(neu + "\n")
-        os.chmod(tmp, 0o600)
-        os.replace(tmp, INSTANZ_FILE)
+        tmp = INSTANZ_FILE.with_name("%s.%s.tmp" % (INSTANZ_FILE.name, neu[:8]))
+        fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+        with os.fdopen(fd, "w") as f:
+            f.write(neu + "\n")
+        try:
+            os.link(tmp, INSTANZ_FILE)
+        except FileExistsError:
+            roh = INSTANZ_FILE.read_text().strip()
+            return ("D1-" + roh) if re.fullmatch(r"[0-9a-f]{32}", roh) else ""
+        except OSError:
+            # Dateisystem ohne harte Links: der alte Weg, jetzt aber mit
+            # eigener Temp-Datei – das Wettrennen bleibt, der Totalausfall nicht.
+            os.replace(tmp, INSTANZ_FILE)
+            tmp = None
         return "D1-" + neu
     except Exception:
         return ""
+    finally:
+        if tmp is not None:
+            try:
+                tmp.unlink()
+            except OSError:
+                pass
 
 
 def kennung() -> str:

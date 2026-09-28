@@ -133,11 +133,17 @@ PROBEN = [
      "def liest_rumpf_groups(knoten) -> bool:\n    return False\n    for n in ast.walk(knoten):", W),
 
     # Der CF-Waechter muss die Verdrahtung ebenfalls halten.
+    # Anker seit fabf66c (Einbindung als Baum): die Normierung steht jetzt vor
+    # dem Rueckgabe-Tupel des gemeinsamen Pruefschritts.
     ("CF-Endpunkt umgeht die gemeinsame Normierung", MAIN,
-     '    req_groups = _gruppen_normieren(body.get("groups") if isinstance(body, dict) else None)\n'
-     '    if not key:',
-     '    req_groups = [g for g in ((body.get("groups") if isinstance(body, dict) else None) or []) if g]\n'
-     '    if not key:', W_CF),
+     '    req_groups = _gruppen_normieren(body.get("groups"))\n'
+     '    ok, err = _wissen_check_groups(user, req_groups)\n'
+     '    if not ok:\n'
+     '        return (JSONResponse(',
+     '    req_groups = [g for g in (body.get("groups") or []) if g]\n'
+     '    ok, err = _wissen_check_groups(user, req_groups)\n'
+     '    if not ok:\n'
+     '        return (JSONResponse(', W_CF),
 ]
 
 # ── Regel: jede angefasste Datei ist gesichert ──────────────────────────────

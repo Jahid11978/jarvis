@@ -3008,6 +3008,14 @@ check("Positivkontrolle: der Kommentar-Filter behaelt den Code",
       and "bau_noetig" in _dk24)
 check("die Kachel nennt den Bau, statt nur die alte Nummer zu zeigen",
       "quelltext_version" in _dk24_code)
+# ⚠ ABWESENHEIT STATT VORKOMMEN (2026-09-28): "vs.textContent kommt vor" blieb
+# gruen, als die ERSTE Zuweisung auf innerHTML umgestellt war – die zweite
+# (`+=`) traegt den Teilstring weiter. Die Gegenprobe biss nicht (0 FAIL).
+# Gemessen wird deshalb die Eigenschaft: im CODE der Funktion (ohne
+# Kommentare, dort steht "nicht innerHTML" als Begruendung) gibt es kein
+# innerHTML.
+check("kein innerHTML in der Anzeige (Wert kommt vom Server)",
+      "innerHTML" not in _dk24_code)
 check("…sie vergleicht beide Angaben, statt bau_noetig zu holen",
       "q !== v" in _dk24_code and "bau_noetig" not in _dk24_code)
 check("…und schweigt, wenn eine Angabe fehlt (keine Behauptung)",

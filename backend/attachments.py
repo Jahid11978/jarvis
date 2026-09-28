@@ -219,21 +219,26 @@ def _leere_kennungen_entfernen(grenze: float, uid: int) -> list[str]:
     """
     weg: list[str] = []
     try:
-        from backend.lauf_tmp import ANH_ROOT
+        from backend.lauf_tmp import ANH_ROOT, ANH_VERZ_SPERRE
         if not ANH_ROOT.is_dir():
             return weg
         kinder = list(ANH_ROOT.iterdir())
     except Exception:  # noqa: BLE001
         return weg
+    import stat as _stat
     for d in kinder:
         try:
-            st = d.lstat()
-            import stat as _stat
-            if not _stat.S_ISDIR(st.st_mode):     # Symlink/Datei: nicht anfassen
-                continue
-            if st.st_uid != uid or st.st_mtime >= grenze:
-                continue
-            d.rmdir()                              # scheitert, wenn NICHT leer
+            # ⚠ lstat + rmdir UNTER DER SPERRE von ``lauf_tmp.anhang_verzeichnis``
+            # (Review 2026-09-28): sonst las diese Schleife die ALTE mtime, ein
+            # Upload legte parallel seine Kopie an, und `rmdir` nahm ihm das
+            # Verzeichnis unter der Hand weg, bevor die Datei darin stand.
+            with ANH_VERZ_SPERRE:
+                st = d.lstat()
+                if not _stat.S_ISDIR(st.st_mode):  # Symlink/Datei: nicht anfassen
+                    continue
+                if st.st_uid != uid or st.st_mtime >= grenze:
+                    continue
+                d.rmdir()                          # scheitert, wenn NICHT leer
             weg.append(d.name)
         except OSError:
             continue                               # nicht leer / parallel weg

@@ -1428,30 +1428,37 @@
         return Excel.run(function (ctx) {
             var s = blattVon(ctx, a.blatt);
             var erzeugt = null;
+            var ausbau = null;      // setzt Felder/Titel/Namen – ZWEITER Schritt
             if (a.typ === 'pivot') {
                 // `add` nimmt die Quelle als Adressstring; das Ziel als Range,
                 // damit ein leerer Blattname das aktive Blatt trifft.
                 erzeugt = s.pivotTables.add(a.name, a.quelle, s.getRange(a.adresse));
-                (a.zeilenfelder || []).forEach(function (f) {
-                    erzeugt.rowHierarchies.add(erzeugt.hierarchies.getItem(f));
-                });
-                (a.spaltenfelder || []).forEach(function (f) {
-                    erzeugt.columnHierarchies.add(erzeugt.hierarchies.getItem(f));
-                });
-                (a.wertfelder || []).forEach(function (w) {
-                    var dh = erzeugt.dataHierarchies.add(
-                        erzeugt.hierarchies.getItem(w.feld));
-                    try { dh.summarizeBy = w.funktion; } catch (e) { }
-                });
+                ausbau = function () {
+                    (a.zeilenfelder || []).forEach(function (f) {
+                        erzeugt.rowHierarchies.add(erzeugt.hierarchies.getItem(f));
+                    });
+                    (a.spaltenfelder || []).forEach(function (f) {
+                        erzeugt.columnHierarchies.add(erzeugt.hierarchies.getItem(f));
+                    });
+                    (a.wertfelder || []).forEach(function (w) {
+                        var dh = erzeugt.dataHierarchies.add(
+                            erzeugt.hierarchies.getItem(w.feld));
+                        try { dh.summarizeBy = w.funktion; } catch (e) { }
+                    });
+                };
             } else if (a.typ === 'diagramm') {
                 erzeugt = s.charts.add(a.art, quellBereich(ctx, a.quelle), 'Auto');
-                try { erzeugt.setPosition(s.getRange(a.adresse)); } catch (e) { }
-                if (a.titel) { try { erzeugt.title.text = a.titel; } catch (e) { } }
-                if (a.name) { try { erzeugt.name = a.name; } catch (e) { } }
+                ausbau = function () {
+                    try { erzeugt.setPosition(s.getRange(a.adresse)); } catch (e) { }
+                    if (a.titel) { try { erzeugt.title.text = a.titel; } catch (e) { } }
+                    if (a.name) { try { erzeugt.name = a.name; } catch (e) { } }
+                };
             } else if (a.typ === 'tabelle') {
                 erzeugt = s.tables.add(a.adresse, a.kopfzeile !== false);
-                try { erzeugt.name = a.name; } catch (e) { }
-                if (a.stil) { try { erzeugt.style = a.stil; } catch (e) { } }
+                ausbau = function () {
+                    try { erzeugt.name = a.name; } catch (e) { }
+                    if (a.stil) { try { erzeugt.style = a.stil; } catch (e) { } }
+                };
             } else if (a.typ === 'bedingt') {
                 var r = s.getRange(a.adresse);
                 bedingtSetzen(r, a);
@@ -1464,23 +1471,54 @@
             } else {
                 return Promise.resolve({ a: a, ok: false, grund: 'unbekannter Typ' });
             }
-            // Den erzeugten NAMEN zuruecklesen: bei einem Diagramm ohne
-            // eigenen Namen vergibt Excel selbst einen, und ohne ihn gaebe es
-            // keinen Rueckweg.
-            try { erzeugt.load('name'); } catch (e) { }
+            // ⚠ ZWEI SYNCS, UND DER ERSTE IST DER GRUND (Review 2026-09-28):
+            // Office.js fuehrt einen Stapel der Reihe nach aus und bricht beim
+            // ersten Fehler ab – was DAVOR lief, bleibt. In einem gemeinsamen
+            // Sync legte `add` die Pivot-Tabelle an, ein falscher Feldname in
+            // `hierarchies.getItem` warf danach, und der Lauf meldete "nicht
+            // angelegt": die halbe Pivot stand im Blatt, OHNE `_angelegt` und
+            // damit ohne Rueckweg. Darum: erst anlegen und synchronisieren
+            // (jetzt steht fest, DASS es existiert), dann ausbauen – und
+            // scheitert der Ausbau, das Angelegte wieder abbauen.
             return ctx.sync().then(function () {
-                try { a._objName = erzeugt.name || a.name || ''; }
-                catch (e) { a._objName = a.name || ''; }
-                // NUR ein wirklich angelegtes Objekt darf zurueckgenommen
-                // werden – sonst liefe der Rueckweg auf ein `getItem`, das
-                // wirft, und riss die uebrigen Ruecknahmen mit.
-                a._angelegt = true;
-                return { a: a, ok: true };
+                ausbau();
+                // Den erzeugten NAMEN zuruecklesen: bei einem Diagramm ohne
+                // eigenen Namen vergibt Excel selbst einen, und ohne ihn gaebe
+                // es keinen Rueckweg.
+                try { erzeugt.load('name'); } catch (e) { }
+                return ctx.sync().then(function () {
+                    try { a._objName = erzeugt.name || a.name || ''; }
+                    catch (e) { a._objName = a.name || ''; }
+                    // NUR ein wirklich angelegtes Objekt darf zurueckgenommen
+                    // werden – sonst liefe der Rueckweg auf ein `getItem`, das
+                    // wirft, und riss die uebrigen Ruecknahmen mit.
+                    a._angelegt = true;
+                    return { a: a, ok: true };
+                }, function (e) {
+                    return objektAbbauen(ctx, a, erzeugt).then(function () { throw e; });
+                });
             });
         }).catch(function (e) {
             protokoll('objekt', (a.typ || '?') + ' ' + (a.blatt ? a.blatt + '!' : '') +
                 a.adresse + ' nicht angelegt\n    ' + fehlerDetails(e));
             return { a: a, ok: false, grund: fehlerKurz(e) };
+        });
+    }
+
+    /* Baut ein halb angelegtes Objekt wieder ab (siehe `objektSchreiben`).
+
+       Eine Tabelle wird auch hier ZURUECKVERWANDELT statt geloescht – aus
+       demselben Grund wie in `objektLoeschen`: `delete()` naehme die Daten
+       mit. Scheitert der Abbau selbst, zaehlt der URSPRUENGLICHE Fehler; der
+       Abbau-Fehler steht im Protokoll, damit ein Rest nicht still bleibt. */
+    function objektAbbauen(ctx, a, erzeugt) {
+        try {
+            if (a.typ === 'tabelle') erzeugt.convertToRange();
+            else erzeugt.delete();
+        } catch (e) { return Promise.resolve(); }
+        return ctx.sync().catch(function (e2) {
+            protokoll('objekt', (a.typ || '?') + ' ' + (a.blatt ? a.blatt + '!' : '') +
+                a.adresse + ' halb angelegt, Abbau gescheitert\n    ' + fehlerDetails(e2));
         });
     }
 

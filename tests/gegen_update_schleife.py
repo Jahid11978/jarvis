@@ -38,10 +38,15 @@ DATEIEN = [
 # Ablauf faehrt (nachgemessen: 5 FAIL). Sie hier als "zahnlos" zu fuehren waere
 # eine Falschaussage ueber den Waechter.
 PROBEN = [
-    ("Server: Drift-Schranke ausgebaut (der gemeldete Fall)",
+    # ⚠ DER ALTE ANKER (`if bau_noetig(): return ""`) IST SEIT 6f57c68 WEG –
+    # der Riegel ist ersatzlos entfallen, weil die QUELLE umgestellt wurde:
+    # der Server meldet die Version der ausgelieferten EXE, nicht die der
+    # csproj. Die Probe dreht deshalb genau diese Quelle zurueck (der
+    # gemeldete Fall von 2026-09-14).
+    ("Server: meldet wieder die Quelltext- statt der EXE-Version (der gemeldete Fall)",
      "backend/ai_mouse.py",
-     "        if bau_noetig():\n            return \"\"",
-     "        if False and bau_noetig():\n            return \"\"", "quelltext"),
+     "    \"\"\"\n    return exe_version()\n",
+     "    \"\"\"\n    return quelltext_version()\n", "quelltext"),
 
     ("Client: Schleifen-Bremse ausgebaut",
      "ai-mouse/src/AiMouse/Update/Aktualisierung.cs",

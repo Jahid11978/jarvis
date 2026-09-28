@@ -135,6 +135,13 @@ if not (c == 0 and b and f == 0):
     sys.exit(2)
 print("gruen\n")
 
+_m_ver = re.search(r"<Version>([\d.]+)</Version>",
+                   (ROOT / "ai-mouse/src/AiMouse/AiMouse.csproj").read_text(encoding="utf-8"))
+if _m_ver is None:
+    print("⚠ ABBRUCH: keine <Version> in AiMouse.csproj – Probe nicht aufbaubar")
+    sys.exit(2)
+_CSPROJ_VERSION = _m_ver.group(1)
+
 PROBEN = [
     ("Anzeige vierteilig (Eigene.ToString)",
      "ai-mouse/src/AiMouse/Update/Aktualisierung.cs",
@@ -162,9 +169,12 @@ PROBEN = [
     ("DE=EN-Ausnahme nicht eingetragen",
      "tests/live_texte_dev.py",
      '    "Version",       # dasselbe Wort in beiden Sprachen\n', ""),
+    # ⚠ ANKER AUS DER DATEI, NICHT ABGETIPPT: hier stand "<Version>1.0.2" –
+    # seit 1.0.3 fand die Probe nichts mehr (Zeitbombe). "1.0.4" liegt unter
+    # der Schranke des Waechters (>= 1.0.5) und steht in keiner Chronik.
     ("Version nicht hochgezaehlt",
      "ai-mouse/src/AiMouse/AiMouse.csproj",
-     "<Version>1.0.2</Version>", "<Version>1.0.1</Version>"),
+     "<Version>%s</Version>" % _CSPROJ_VERSION, "<Version>1.0.4</Version>"),
     ("Kachel ohne Platz fuer die Version",
      "frontend/ai_mouse.html",
      '<span id="am-version" class="ja-note"></span>', ""),

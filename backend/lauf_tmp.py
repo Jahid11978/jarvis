@@ -100,6 +100,7 @@ import shlex
 import shutil
 import stat
 import subprocess
+import threading
 import time
 import uuid
 from pathlib import Path
@@ -149,6 +150,10 @@ ARBEIT_MODUS = 0o2770
 # Anhang-Arbeitskopien (Verzeichnis-Gate statt Dateirechte).
 LAUF_DATEI_MODUS = 0o666
 ANH_ROOT = TMP_ECHT / "jarvis-anhaenge"
+# Sperre zwischen "Verzeichnis anlegen/auffrischen" und "leeres Verzeichnis
+# abraeumen" (``attachments._leere_kennungen_entfernen``). Beide laufen im
+# Backend-Prozess – ein Thread-Lock genuegt.
+ANH_VERZ_SPERRE = threading.Lock()
 
 # Ziel des matplotlib-Caches IM Lauf. Er liegt jetzt einfach IM Arbeits-
 # verzeichnis – das ist je Benutzer und ueberlebt den Lauf, also braucht es
@@ -623,9 +628,18 @@ def anhang_verzeichnis(benutzer: str, anlegen: bool = False) -> Path | None:
     ziel = ANH_ROOT / kennung
     if anlegen:
         try:
-            _wurzel_sicherstellen(ANH_ROOT, 0o755)
-            ziel.mkdir(parents=True, exist_ok=True)
-            os.chmod(ziel, 0o755)
+            # ⚠ AUFFRISCHEN UNTER DER SPERRE (Review 2026-09-28): ein bereits
+            # vorhandenes, leeres und altes Verzeichnis konnte zwischen diesem
+            # `mkdir` und dem Schreiben der Kopie vom Aufraeumer per `rmdir`
+            # entfernt werden – die Kopie scheiterte mit FileNotFoundError.
+            # `mkdir(exist_ok)` und `chmod` aendern die mtime NICHT; erst
+            # `utime` macht das Verzeichnis frisch, und die Sperre sorgt dafuer,
+            # dass der Aufraeumer die alte mtime nicht schon gelesen hat.
+            with ANH_VERZ_SPERRE:
+                _wurzel_sicherstellen(ANH_ROOT, 0o755)
+                ziel.mkdir(parents=True, exist_ok=True)
+                os.chmod(ziel, 0o755)
+                os.utime(ziel)
         except Exception as e:  # noqa: BLE001
             _log(f"Anhang-Verzeichnis nicht anlegbar: {e}")
             return None

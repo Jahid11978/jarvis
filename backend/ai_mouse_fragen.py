@@ -243,14 +243,17 @@ def _uebernehmen(d: dict, user: str) -> bool:
         vid = str(e.get("id") or "")
         if not vid or vid in have:
             continue
-        have.append(vid)
-        geaendert = True
         # Der Deckel gilt je Zugriff neu – sonst schiebt eine volle Liste die
         # Kennung ungenutzt in `have` und die Vorgabe waere still verloren.
-        if len(eigen) < MAX_JE_BENUTZER:
-            eigen.append(_neu(e.get("titel", ""), e.get("prompt", ""), vid))
-        else:
-            have.remove(vid)
+        # ⚠ UND OHNE `geaendert` (Review 2026-09-28): vorher wurde die Kennung
+        # erst eingetragen, dann wieder entfernt – der Stand war derselbe, das
+        # Flag aber gesetzt. Bei voller Liste schrieb damit JEDES Lesen der
+        # Liste die Datei neu.
+        if len(eigen) >= MAX_JE_BENUTZER:
+            continue
+        have.append(vid)
+        eigen.append(_neu(e.get("titel", ""), e.get("prompt", ""), vid))
+        geaendert = True
     # `gesaet_fuer` weiter pflegen: ein Rueckschritt auf den alten Stand darf
     # nicht die ganze Liste ein zweites Mal kopieren.
     gesaet = d.setdefault("gesaet_fuer", [])
