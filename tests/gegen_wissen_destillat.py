@@ -331,6 +331,18 @@ PROBEN = [
      "                : (ta.value.trim() ? '' : t('wissen.dest_need_text'));",
      "            run.title = '';", JS_W),
 
+    # ── Laufanzeige: Drehkreis statt Sanduhr (Vorgabe 2026-09-28) ──────────
+    ("Lauf zeigt wieder Text ohne Drehkreis", JS,
+     "        status('wi-dest-status', t('wissen.dest_running'), 'busy');\n",
+     "        status('wi-dest-status', t('wissen.dest_running'));\n", JS_W),
+    ("Uebernahme zeigt wieder Text ohne Drehkreis", JS,
+     "        status('wi-dest-takestatus', t('wissen.dest_taking'), 'busy');\n",
+     "        status('wi-dest-takestatus', t('wissen.dest_taking'));\n", JS_W),
+    ("Sanduhr kehrt in den Text zurueck", I18N,
+     "'wissen.dest_running': 'Das Modell", "'wissen.dest_running': '⏳ Das Modell", JS_W),
+    ("Laufanzeige ohne CSS-Regel", HTML,
+     "        .wi-dest-busy { display: inline-flex;", "        .wi-dest-busy-weg { display: inline-flex;", JS_W),
+
     ("Uebernahme sendet auch OHNE Wissensgruppe", JS,
      "        if (!groups.length) {\n",
      "        if (false) {\n", JS_W),

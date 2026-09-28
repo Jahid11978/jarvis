@@ -208,6 +208,14 @@ abschnitt('5. Destillieren-Knopf: gesperrt MIT Grund');
           JSON.stringify(gesendet.map(function (g) { return g.pfad; })));
     check('… und zwar an den Destillat-Endpunkt',
           gesendet[gesendet.length - 1].pfad === '/api/wissen/destillat/lauf');
+    // Vorgabe 2026-09-28: waehrend des Laufs derselbe Drehkreis wie beim
+    // Upload und beim Lesen der Dateien – keine Sanduhr im Text.
+    const st = doc.getElementById('wi-dest-status');
+    check('waehrend des Laufs: Drehkreis in der Statuszeile',
+          !!st.querySelector('.wi-dest-busy .wi-busy-spin'), st.innerHTML);
+    check('… Text "Das Modell arbeitet" OHNE Sanduhr',
+          /Das Modell arbeitet/.test(st.textContent) && st.textContent.indexOf('\u23f3') < 0,
+          st.textContent);
 }
 
 // ════════════════════════════════════════════════════════════════════════════
@@ -255,8 +263,17 @@ abschnitt('6. Uebernahme in die Wissensdatenbank');
                   doc.querySelector('.wi-grp-dest').checked === true);
 
             doc.getElementById('wi-dest-takego').click();
+            const tst = doc.getElementById('wi-dest-takestatus');
+            check('Uebernahme laeuft: Drehkreis statt Sanduhr',
+                  !!tst.querySelector('.wi-dest-busy .wi-busy-spin')
+                  && tst.textContent.indexOf('\u23f3') < 0, tst.innerHTML);
+            check('nach dem Lauf: kein Drehkreis mehr in der Destillat-Statuszeile',
+                  !doc.querySelector('#wi-dest-status .wi-busy-spin'),
+                  doc.getElementById('wi-dest-status').innerHTML);
             setTimeout(function () {
                 const letzte = gesendet[gesendet.length - 1];
+                check('nach der Uebernahme: kein Drehkreis mehr',
+                      !tst.querySelector('.wi-busy-spin'), tst.innerHTML);
                 check('mit Gruppe wird gesendet',
                       letzte.pfad === '/api/wissen/destillat/uebernehmen', letzte.pfad);
                 const rumpf = JSON.parse(letzte.opt.body || '{}');
@@ -686,6 +703,10 @@ async function fortschrittProbe() {
         check('neue Texte stehen in DE und EN', fehlt.length === 0, fehlt.join(', '));
         check('kein Sanduhr-Emoji mehr in "Lese Dateien" (der Drehkreis ersetzt es)',
               !/'wissen\.dest_extracting':\s*'⏳/.test(I18N));
+        check('kein Sanduhr-Emoji mehr in "Das Modell arbeitet" / "Lege Entwurf an" (DE+EN)',
+              !/'wissen\.dest_(running|taking)':\s*'⏳/.test(I18N));
+        check('… und die Laufanzeige hat eine CSS-Regel auf der Seite',
+              /\.wi-dest-busy\s*\{/.test(fs.readFileSync(path.join(ROOT, 'frontend/wissen.html'), 'utf8')));
     }
 }
 

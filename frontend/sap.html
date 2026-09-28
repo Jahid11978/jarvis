@@ -4,7 +4,7 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>SAP-Analysen</title>
-    <link rel="stylesheet" href="/static/css/theme.css?v=27">
+    <link rel="stylesheet" href="/static/css/theme.css?v=28">
     <link rel="stylesheet" href="/static/vendor/clippy/clippy.css?v=1">
     <link rel="stylesheet" href="/static/css/avatar.css?v=9">
     <link rel="icon" href="/static/favicon.png?v=6" type="image/png">
@@ -373,7 +373,15 @@
         </div>
     </div>
 
-    <div class="sp-wrap">
+    <div class="sp-wrap" data-jv-breit>
+        <!-- Seite maximieren (Vorbild /wissen, Vorgabe 2026-09-28): der Knopf
+             sitzt AUSSERHALB der Kacheln ganz oben; maximiert nutzen ALLE
+             Kacheln die volle Fensterbreite. Logik in seite_breit.js. -->
+        <div class="jv-max-row">
+            <button type="button" class="jv-max-btn" id="jv-max" data-seite="sap" aria-pressed="false"
+                    data-i18n-title="common.maximize" data-i18n-aria="common.maximize"
+                    title="Maximieren" aria-label="Maximieren">&#9974;</button>
+        </div>
         <!-- ── Analyse starten ── -->
         <div class="sp-card">
             <div class="sp-row">
@@ -641,7 +649,8 @@
 <script src="/static/js/cpubar.js?v=1"></script>
 <script src="/static/js/syspackages.js?v=2"></script>
 <script src="/static/js/sysload.js?v=3"></script>
-<script src="/static/js/i18n.js?v=294"></script>
+<script src="/static/js/i18n.js?v=296"></script>
+<script src="/static/js/seite_breit.js?v=1"></script>
 <script src="/static/js/tabfill.js?v=2"></script>
 <script src="/static/js/theme.js?v=3"></script>
 <script src="/static/js/branding.js?v=26"></script>

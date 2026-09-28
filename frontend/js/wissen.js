@@ -922,52 +922,8 @@
     }
 
     // ── Maximieren der Seite (Knopf ⛶ hinter "Angemeldet als ...") ──────
-    // Vorgabe 2026-09-27 (zweite Fassung): der Knopf sitzt ganz oben in der
-    // Seite, maximiert nutzen ALLE Abschnitte die volle Fensterbreite (die
-    // 900-px-Deckelung von `.wi-wrap` faellt weg). Kein Vollbild eines
-    // einzelnen Abschnitts mehr.
-    //
-    // Der Zustand wird JE BROWSER GEMERKT (Vorgabe 2026-09-27, dritte Fassung
-    // – vorher bewusst nicht, wie /feedback). Gleicher Weg wie die Klapp-
-    // Zustaende der Abschnitte: localStorage, jeder Zugriff im try (privates
-    // Fenster / gesperrter Speicher = einfach nicht gemerkt, kein Fehler).
-    var _MAX_LS = 'jarvis_wissen_breit';
-
-    function maxSetzen(an) {
-        document.body.classList.toggle('wi-breit', !!an);
-        var b = $('wi-max');
-        if (!b) return;
-        // DIESELBEN ZEICHEN wie /feedback, /tracks und der Einstellungs-
-        // Dialog: ⛶ maximieren, 🗗 verkleinern (ausdrueckliche Ausnahme
-        // von der Emoji-Regel, Vorgabe 2026-08-18).
-        b.innerHTML = an ? '&#128471;' : '&#9974;';
-        b.classList.toggle('active', !!an);
-        b.setAttribute('aria-pressed', an ? 'true' : 'false');
-        var k = an ? 'wissen.minimize' : 'wissen.maximize';
-        // Die data-i18n-*-Attribute wandern mit, sonst holt der naechste
-        // Sprachwechsel den Text des ANDEREN Zustands zurueck.
-        b.setAttribute('data-i18n-title', k);
-        b.setAttribute('data-i18n-aria', k);
-        b.title = t(k);
-        b.setAttribute('aria-label', t(k));
-    }
-
-    function maxInit() {
-        var b = $('wi-max');
-        if (!b || b._gebunden) return;
-        b._gebunden = true;
-        var gemerkt = null;
-        try { gemerkt = localStorage.getItem(_MAX_LS); } catch (e) {}
-        if (gemerkt === '1') maxSetzen(true);
-        b.addEventListener('click', function (ev) {
-            ev.preventDefault();
-            var an = !document.body.classList.contains('wi-breit');
-            maxSetzen(an);
-            try { localStorage.setItem(_MAX_LS, an ? '1' : '0'); } catch (e) {}
-        });
-        // KEIN Escape-Kuerzel mehr: die Seite ist kein Overlay, und Escape
-        // schliesst hier Dialoge – das verkleinerte sonst nebenbei die Seite.
-    }
+    // Seit 2026-09-28 der gemeinsame Baustein aller Seiten (seite_breit.js);
+    // der gemerkte Zustand bleibt unter `jarvis_wissen_breit` (data-speicher).
 
     function loadFiles() {
         fetch('/api/wissen/files', { headers: authH() })
@@ -2486,7 +2442,6 @@
             $(id).addEventListener('keydown', function (e) { if (e.key === 'Enter') doLogin(); });
         });
         $('wi-logout').addEventListener('click', logout);
-        maxInit();
 
         var drop = $('wi-drop'), fin = $('wi-file-input');
         drop.addEventListener('click', function () {

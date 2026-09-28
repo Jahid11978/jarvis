@@ -1091,8 +1091,7 @@ check("⚠ bei Hoehe 0 wird NICHTS gesetzt (zugeklappter Container)",
 _ks = fbjs_ok.split("function klappSetzen")
 check("es gibt EINE Funktion fuer den Klapp-Zustand",
       len(_ks) == 2,
-      "`maxUmschalten` braucht sie ebenfalls – zwei Fassungen liefen "
-      "beim naechsten Feinschliff auseinander")
+      "zwei Fassungen liefen beim naechsten Feinschliff auseinander")
 _ks_rumpf = _ks[1][:_ks[1].find("\n    function ")] if len(_ks) == 2 else ""
 check("⚠ und beim Aufklappen wird nachgemessen",
       "hoehenNachziehen()" in _ks_rumpf,

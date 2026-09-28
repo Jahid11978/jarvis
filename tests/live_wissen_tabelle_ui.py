@@ -322,15 +322,15 @@ try:
 
             # ── Maximieren mit echtem Klick (Knopf hinter "Angemeldet als") ─
             check("KEIN Maximieren-Knopf in der Titelleiste oder in 'Mein Wissen'",
-                  js(sock, "!document.querySelector('.wi-topbar .wi-max-btn, #wi-sec-files .wi-max-btn')") is True)
+                  js(sock, "!document.querySelector('.wi-topbar .jv-max-btn, #wi-sec-files .jv-max-btn')") is True)
             js(sock, "window.scrollTo(0,0)")
             time.sleep(0.2)
-            m = mitte(sock, "#wi-max")
+            m = mitte(sock, "#jv-max")
             check("Knopf hat eine Groesse", bool(m) and m["w"] > 15 and m["h"] > 15, str(m))
             if not m:
                 continue
             lg = js(sock, """(function(){var b=document.getElementById('wi-scope-banner').getBoundingClientRect(),
-                k=document.getElementById('wi-max').getBoundingClientRect(),
+                k=document.getElementById('jv-max').getBoundingClientRect(),
                 t=document.querySelector('.wi-topbar').getBoundingClientRect();
                 return {br:Math.round(b.right),bm:Math.round(b.top+b.height/2),bt:Math.round(b.top),
                         kl:Math.round(k.left),km:Math.round(k.top+k.height/2),tb:Math.round(t.bottom),
@@ -342,7 +342,7 @@ try:
                   lg["bt"] >= lg["tb"] and js(sock, "document.querySelector('.wi-section:not([style*=\"none\"])')"
                                               ".getBoundingClientRect().top") > lg["bt"], str(lg))
             treffer = js(sock, f"(function(){{var e=document.elementFromPoint({m['x']},{m['y']});"
-                               "return !!(e&&e.closest('#wi-max'));})()")
+                               "return !!(e&&e.closest('#jv-max'));})()")
             check("Knopf ist per elementFromPoint erreichbar (nichts liegt darueber)", treffer)
             breiten = """(function(){var r=[];[].forEach.call(document.querySelectorAll('#wi-app > .wi-section, #wi-app > .wi-scope-row'),
                 function(x){var q=x.getBoundingClientRect();if(q.width>0)r.push({id:x.id||x.className,l:Math.round(q.left),w:Math.round(q.width)});});
@@ -378,8 +378,8 @@ try:
             check("nach Neuladen: weiterhin maximiert",
                   bool(neu["r"]) and all(x["w"] > 900 for x in neu["r"]), str(neu))
             check("… und der Knopf sagt 'Verkleinern'",
-                  js(sock, "document.getElementById('wi-max').getAttribute('aria-pressed')") == "true")
-            m = mitte(sock, "#wi-max")
+                  js(sock, "document.getElementById('jv-max').getAttribute('aria-pressed')") == "true")
+            m = mitte(sock, "#jv-max")
             mausklick(sock, m["x"], m["y"])
             time.sleep(0.2)
             zur = js(sock, breiten)

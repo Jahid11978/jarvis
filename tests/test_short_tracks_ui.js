@@ -38,6 +38,7 @@ const TR_JS = fs.readFileSync(path.join(ROOT, 'frontend/js/tracks.js'), 'utf8');
 const ADMIN_JS = fs.readFileSync(path.join(ROOT, 'frontend/js/short_tracks_admin.js'), 'utf8');
 const SET_HTML = fs.readFileSync(path.join(ROOT, 'frontend/settings.html'), 'utf8');
 const I18N = fs.readFileSync(path.join(ROOT, 'frontend/js/i18n.js'), 'utf8');
+const SEITE_BREIT = fs.readFileSync(path.join(ROOT, 'frontend/js/seite_breit.js'), 'utf8');
 // icons.js MUSS mitgeladen werden – die echte Seite bindet es als erstes
 // Skript ein, und `tracks.js` ruft `JarvisIcons.trash()` mitten in einem
 // Template-String. Fehlt es, bricht das Rendern hart ab und der Test sieht
@@ -196,6 +197,7 @@ function baue(opt) {
     // FormData/File brauchen jsdom-eigene Klassen – die gibt es dort.
     w.eval(ICONS);
     w.eval(I18N);
+    w.eval(SEITE_BREIT);   // wie die Seite: vor tracks.js
     w.eval(TR_JS);
     // Die Ruf-Liste zusaetzlich am Fenster ablegen, damit auch Bloecke, die nur
     // `w` festhalten, sie pruefen koennen (siehe rufeVon()).
@@ -763,98 +765,58 @@ abschnitt('4. Formular: wandern, Umschalter, Speichern');
 }
 
 /* ═══════════════════════════════════════════════════════════════════════ */
-abschnitt('4b. Maximieren');
+abschnitt('4b. Maximieren (ganze Seite, Knopf ausserhalb der Karten)');
 /* ═══════════════════════════════════════════════════════════════════════ */
+// Vorgabe 2026-09-28: nach dem Vorbild von /wissen sitzt der Knopf NICHT mehr
+// in den Karten "Ablagen"/"Letzte Läufe", sondern EINMAL ganz oben ueber den
+// Karten; maximiert werden ALLE Karten fensterbreit. Die Wirkung auf die
+// Breite (theme.css) misst `test_seite_breit_ui.js` fuer alle Seiten.
 {
     const { w } = baue({});
     await warte(60);
-    const brett = [...w.document.querySelectorAll('.st-card[data-klapp]')]
-        .filter(c => c.getAttribute('data-klapp') === 'board')[0];
-    const log = [...w.document.querySelectorAll('.st-card[data-klapp]')]
-        .filter(c => c.getAttribute('data-klapp') === 'log')[0];
-    const knopf = brett.querySelector('[data-act="max"]');
-    pruefe(knopf !== null, 'die Ablagen-Karte hat einen Maximieren-Knopf');
+    const d = w.document;
+    const wrap = d.querySelector('.st-wrap');
+    const knopf = d.getElementById('jv-max');
+    pruefe(!!knopf, 'die Seite hat den Maximieren-Knopf #jv-max');
+    pruefe(d.querySelectorAll('.st-card [data-act="max"], .st-card .jv-max-btn').length === 0,
+        'KEIN Maximieren-Knopf mehr in einer Karte');
+    pruefe(!!knopf && !knopf.closest('.st-card') && !knopf.closest('.topbar'),
+        'der Knopf steht ausserhalb der Karten und nicht in der Titelleiste');
+    pruefe(!!wrap && wrap.hasAttribute('data-jv-breit'),
+        'der Inhaltsbereich ist als "wird breit" markiert');
+    const erste = wrap && wrap.querySelector('.st-card');
+    pruefe(!!knopf && !!erste
+        && (knopf.compareDocumentPosition(erste) & w.Node.DOCUMENT_POSITION_FOLLOWING) !== 0,
+        'der Knopf steht VOR der ersten Karte (ganz oben)');
     // DIESELBEN ZEICHEN wie der Vollbild-Knopf der Einstellungen – aus DEREN
-    // Quelle gelesen, nicht abgetippt: eine zweite Fassung liefe beim naechsten
-    // Wechsel auseinander (Vorgabe des Nutzers 2026-08-18).
+    // Quelle gelesen, nicht abgetippt (Vorgabe des Nutzers 2026-08-18).
     const symMax = (SET_HTML.match(/id="btn-maximize-settings"[^>]*>(.)</) || [])[1];
-    const EXPAND = fs.readFileSync(path.join(ROOT, 'frontend/js/modal_expand.js'), 'utf8');
-    // `u`-Flag ist Pflicht: 🗗 (U+1F5D7) ist ein Surrogatpaar, ohne das Flag
-    // matcht `.` nur die halbe Einheit und der Vergleich schlaegt fehl.
-    const symMin = (EXPAND.match(/on \? '(.)' : '(.)'/u) || [])[1];
-    pruefe(symMax === '\u26f6', 'die Einstellungen nutzen U+26F6 (⛶)', symMax);
-    pruefe(knopf.textContent.trim() === symMax,
-        'der Knopf hier zeigt dasselbe Zeichen', knopf.textContent.trim());
-    pruefe(knopf.getAttribute('aria-pressed') === 'false', 'er startet auf "nicht gedrückt"');
-    pruefe(brett.querySelector('.st-head-acts') !== null,
-        'Knopf und Klapp-Pfeil stehen in einem gemeinsamen Behälter');
-    // REIHENFOLGE: der Titel bleibt VORNE (space-between) – sonst rutscht er
-    // an den rechten Rand (Fehler vom 2026-08-13 im Add-in).
-    pruefe(brett.querySelector('.st-card-head').firstElementChild.tagName === 'H2',
-        'der Titel ist weiter das erste Kind der Kopfzeile');
-
-    knopf.click();
-    await warte(20);
-    pruefe(brett.classList.contains('is-max'), 'ein Klick maximiert die Karte');
-    pruefe(w.document.body.classList.contains('st-maxed'),
-        'und sperrt das Scrollen der Seite dahinter');
-    pruefe(knopf.getAttribute('aria-pressed') === 'true', 'aria-pressed folgt dem Zustand');
-    pruefe(/Verkleinern|Restore/.test(knopf.title),
-        'der Titel des Knopfes wechselt mit (kein unveränderlicher Text)');
-    pruefe(knopf.textContent.trim() === symMin,
-        'im maximierten Zustand dasselbe Zeichen wie modal_expand.js', knopf.textContent.trim());
-    pruefe(knopf.classList.contains('active'),
-        'und der Knopf traegt `active` – wie .btn-maximize-settings.active');
-    pruefe(knopf.getAttribute('data-i18n-title') === 'tracks.minimize',
-        'und der i18n-Schlüssel ebenfalls');
-    // Der Klick darf die Karte NICHT zuklappen (der Knopf sitzt in der Kopfzeile)
-    pruefe(!brett.classList.contains('is-zu'),
-        'der Klick auf den Knopf klappt die Karte nicht zu');
-    pruefe(w.document.documentElement.style.getPropertyValue('--st-top') !== null,
-        'der Abstand zur Titelleiste wird gesetzt (gemessen, nicht geraten)');
-
-    knopf.click();
-    await warte(20);
-    pruefe(!brett.classList.contains('is-max'), 'ein zweiter Klick verkleinert wieder');
-    pruefe(!w.document.body.classList.contains('st-maxed'), 'die Seite scrollt wieder');
-
-    // Escape verkleinert
-    knopf.click();
-    await warte(20);
-    w.document.dispatchEvent(new w.KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
-    await warte(20);
-    pruefe(!brett.classList.contains('is-max'), 'Escape verkleinert');
-
-    // Eine ZUGEKLAPPTE Karte wird beim Maximieren aufgeklappt – sonst
-    // maximiert man eine leere Fläche.
-    pruefe(log.classList.contains('is-zu'), 'das Protokoll ist zugeklappt');
-    log.querySelector('[data-act="max"]').click();
-    await warte(60);
-    pruefe(log.classList.contains('is-max') && !log.classList.contains('is-zu'),
-        'Maximieren klappt eine zugeklappte Karte auf');
-
-    // Zwei maximierte Karten gleichzeitig gäbe einen Zustand, den niemand
-    // auflösen kann.
-    knopf.click();
-    await warte(20);
-    pruefe(brett.classList.contains('is-max') && !log.classList.contains('is-max'),
-        'es ist immer höchstens EINE Karte maximiert');
-    await schliesse(w);
-}
-{
-    // Sprachwechsel: der Knopf-Titel wird per JS gesetzt und muss mitgehen
-    const { w } = baue({});
-    await warte(60);
-    const brett = [...w.document.querySelectorAll('.st-card[data-klapp]')]
-        .filter(c => c.getAttribute('data-klapp') === 'board')[0];
-    brett.querySelector('[data-act="max"]').click();
-    await warte(20);
-    w.setLang('en');
-    await warte(60);
-    pruefe(/Restore/.test(brett.querySelector('[data-act="max"]').title),
-        'der Titel folgt dem Sprachwechsel (auch im maximierten Zustand)');
-    w.setLang('de');
-    await warte(40);
+    pruefe(symMax === '⛶', 'die Einstellungen nutzen U+26F6 (⛶)', symMax);
+    pruefe(!!knopf && knopf.textContent.trim() === symMax,
+        'der Knopf hier zeigt dasselbe Zeichen', knopf && knopf.textContent.trim());
+    if (knopf) {
+        const brett = [...d.querySelectorAll('.st-card[data-klapp]')]
+            .filter(c => c.getAttribute('data-klapp') === 'board')[0];
+        knopf.click();
+        await warte(20);
+        pruefe(d.body.classList.contains('jv-breit'), 'ein Klick macht die ganze Seite breit');
+        pruefe(knopf.getAttribute('aria-pressed') === 'true' && knopf.classList.contains('active'),
+            'aria-pressed und `active` folgen dem Zustand');
+        pruefe(knopf.textContent.trim() === '\u{1F5D7}', 'maximiert steht 🗗', knopf.textContent.trim());
+        pruefe(!d.querySelector('.st-card.is-max') && !d.body.classList.contains('st-maxed'),
+            'keine Karte wird mehr einzeln ueber die Seite gelegt');
+        pruefe(!!brett && !brett.classList.contains('is-zu'), 'die Ablagen bleiben aufgeklappt');
+        w.setLang('en');
+        await warte(60);
+        pruefe(knopf.title === 'Restore' && knopf.getAttribute('aria-label') === 'Restore',
+            'der Titel folgt dem Sprachwechsel (auch im maximierten Zustand)', knopf.title);
+        w.setLang('de');
+        await warte(40);
+        knopf.click();
+        await warte(20);
+        pruefe(!d.body.classList.contains('jv-breit') && knopf.title === 'Maximieren',
+            'ein zweiter Klick verkleinert wieder');
+    }
     await schliesse(w);
 }
 
@@ -1232,23 +1194,11 @@ abschnitt('8. Verdrahtung, Portal, i18n, CSS');
     // Bereichs-Kaestchen unlesbar (Screenshot vom 2026-08-18).
     pruefe(/\.st-form\b[^}]*grid-column: 1 \/ -1/.test(css),
         'das Formular geht ueber die volle Breite des Rasters');
-    // Maximieren: unter der Titelleiste, deckende Flaeche, Kopf bleibt stehen
-    pruefe(/\.st-card\.is-max\b[^}]*position: fixed/.test(css),
-        'die maximierte Karte ist fixiert');
-    pruefe(/\.st-card\.is-max\b[^}]*top: var\(--st-top/.test(css),
-        'sie beginnt UNTER der Titelleiste (Abmelden/Theme bleiben erreichbar)');
-    pruefe(/\.st-card\.is-max\b[^}]*background: var\(--bg-primary\)/.test(css),
-        'mit DECKENDER Flaeche – darunter liegt die Seite');
-    pruefe(/\.st-card\.is-max > \.st-card-head[^}]*position: sticky/.test(css),
-        'die Kopfzeile bleibt beim Scrollen stehen (sonst ist der Knopf weg)');
-    pruefe(/\.st-card\.is-max > \.st-card-body[^}]*overflow-y: auto/.test(css),
-        'der Inhalt scrollt innen');
-    pruefe(/body\.st-maxed[^}]*overflow: hidden/.test(css),
-        'die Seite dahinter scrollt nicht mit');
-    // z-index: unter der Titelleiste (30), unter der Rueckmeldung (60)
-    const zMax = (css.match(/\.st-card\.is-max\b[^}]*z-index:\s*(\d+)/) || [])[1];
-    pruefe(zMax && Number(zMax) < 30, 'z-index liegt unter der Titelleiste', String(zMax));
-    pruefe(zMax && Number(zMax) < 60, 'und unter der Rueckmeldung', String(zMax));
+    // Das Einzel-Vollbild der Karten ist seit 2026-09-28 weg (ganze Seite
+    // statt einer Karte) – eine Restregel waere toter Code, der beim
+    // naechsten Feinschliff wieder verdrahtet wird.
+    pruefe(!/\.st-card\.is-max\b|body\.st-maxed/.test(css),
+        'keine Regeln mehr fuer das Vollbild einer einzelnen Karte');
     // Klapp-Kopfzeile: Titel ZUERST, Pfeil danach (space-between)
     const kopf = TR_HTML.match(/<div class="st-card-head"[^>]*>([\s\S]*?)<\/div>/)[1];
     pruefe(kopf.indexOf('<h2') < kopf.indexOf('st-caret'),
@@ -1262,7 +1212,7 @@ abschnitt('8. Verdrahtung, Portal, i18n, CSS');
         .filter(c => c !== '\u26f6' && c !== '\u{1F5D7}');
     pruefe(emoji.length === 0, 'keine farbig voreingestellten Emoji (ausser den Vollbild-Zeichen)',
         String(emoji.slice(0, 5)));
-    pruefe(/&#9974;/.test(TR_HTML) && /&#128471;/.test(TR_JS),
+    pruefe(/&#9974;/.test(TR_HTML) && /&#128471;/.test(SEITE_BREIT),
         'die Vollbild-Zeichen stehen als HTML-Entity im Quelltext (nicht als rohes Emoji)');
 
     // Alle aufgerufenen Hilfsfunktionen existieren auch. Ein `?.()` auf einen

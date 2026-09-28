@@ -80,6 +80,7 @@ const HTML = fs.readFileSync(path.join(ROOT, 'frontend/wissen.html'), 'utf8');
 const JS_WISSEN = fs.readFileSync(path.join(ROOT, 'frontend/js/wissen.js'), 'utf8');
 const JS_ICONS = fs.readFileSync(path.join(ROOT, 'frontend/js/icons.js'), 'utf8');
 const JS_I18N = fs.readFileSync(path.join(ROOT, 'frontend/js/i18n.js'), 'utf8');
+const JS_SEITE_BREIT = fs.readFileSync(path.join(ROOT, 'frontend/js/seite_breit.js'), 'utf8');
 
 const G_A = { id: 'a', name: 'Allgemein', color: '#22c55e', folders: ['data/rag/a'] };
 const G_Z = { id: 'z', name: 'Zentrale', color: '#8b5cf6', folders: [] };
@@ -131,6 +132,7 @@ async function seite(dateien, vorher) {
     win.alert = function () {};
     win.eval(JS_ICONS);
     win.eval(JS_I18N);
+    win.eval(JS_SEITE_BREIT);   // wie wissen.html: nach i18n.js, vor wissen.js
     win.eval(JS_WISSEN);
     // ⚠ KEIN eigener DOMContentLoaded-Dispatch: jsdom feuert ihn selbst
     // (readyState steht direkt nach `new JSDOM` auf 'loading', gemessen: 2
@@ -267,12 +269,15 @@ function i18nZahl(key) {
     abschnitt('7 – Maximieren: hinter "Angemeldet als", ganze Seite breit');
     // Vorgabe 2026-09-27 (zweite Fassung): Knopf hinter "Angemeldet als ..."
     // ganz oben auf der Seite; maximiert passen sich ALLE Abschnitte an die
-    // Fensterbreite an.
+    // Fensterbreite an. Seit 2026-09-28 der gemeinsame Baustein (seite_breit.js).
+    // ⚠ DIE BREITE SELBST misst hier niemand mehr: die Regel steht in theme.css,
+    // und jsdom ignoriert die Spezifitaet (Register) – das tun
+    // live_wissen_tabelle_ui.py und live_seite_breit_ui.py im echten Chrome.
     check('KEIN Maximieren-Knopf in der Titelleiste',
-          !doc.querySelector('.wi-topbar [data-i18n-title="wissen.maximize"], .wi-topbar .wi-max-btn'));
+          !doc.querySelector('.wi-topbar [data-i18n-title="common.maximize"], .wi-topbar .jv-max-btn'));
     check('KEIN Maximieren-Knopf mehr in "Mein Wissen"',
-          !doc.querySelector('#wi-sec-files .wi-max-btn, #wi-files-max'));
-    const b = doc.getElementById('wi-max');
+          !doc.querySelector('#wi-sec-files .jv-max-btn, #wi-files-max'));
+    const b = doc.getElementById('jv-max');
     const banner = doc.getElementById('wi-scope-banner');
     const wrap = doc.getElementById('wi-app');
     check('Knopf steht direkt hinter dem Banner "Angemeldet als"',
@@ -289,9 +294,10 @@ function i18nZahl(key) {
         check('vorher: aria-pressed=false, Beschriftung "Maximieren"',
               b.getAttribute('aria-pressed') === 'false' && b.getAttribute('aria-label') === 'Maximieren');
         check('Positivkontrolle: vorher ist die Seite auf 900px gedeckelt', mw() === '900px', mw());
+        check('der Bereich ist als "wird breit" markiert', wrap.hasAttribute('data-jv-breit'));
         const zeichenVor = b.textContent;
         b.click();
-        check('nach Klick: Deckelung weg (alle Abschnitte in Fensterbreite)', mw() === 'none', mw());
+        check('nach Klick: Seite breit (body.jv-breit)', doc.body.classList.contains('jv-breit'));
         check('… kein einzelner Abschnitt ist fixiert',
               ![].some.call(doc.querySelectorAll('.wi-section'),
                   function (x) { return s.win.getComputedStyle(x).position === 'fixed'; }));
@@ -299,12 +305,12 @@ function i18nZahl(key) {
               b.getAttribute('aria-pressed') === 'true' && b.getAttribute('aria-label') === 'Verkleinern'
               && b.textContent === '\u{1F5D7}' && b.textContent !== zeichenVor, JSON.stringify(b.textContent));
         check('… die i18n-Attribute wandern mit',
-              b.getAttribute('data-i18n-title') === 'wissen.minimize');
+              b.getAttribute('data-i18n-title') === 'common.minimize');
         check('… die Tabelle bleibt bedienbar (Sortierkopf-Klick sortiert weiter)',
               klick(doc, 'name') && kopf(doc, 'name').getAttribute('aria-sort') !== 'none');
         b.click();
-        check('zweiter Klick verkleinert wieder', mw() === '900px'
-              && b.getAttribute('aria-label') === 'Maximieren', mw());
+        check('zweiter Klick verkleinert wieder', !doc.body.classList.contains('jv-breit')
+              && b.getAttribute('aria-label') === 'Maximieren');
         // Der Zustand wird JE BROWSER GEMERKT (Vorgabe 2026-09-27, dritte
         // Fassung). ⚠ Jede jsdom-Seite hat ihren EIGENEN localStorage – ein
         // "neue Seite startet nicht maximiert" war darum immer wahr, gleich was
@@ -317,27 +323,26 @@ function i18nZahl(key) {
               s.win.localStorage.getItem('jarvis_wissen_breit'));
         const gemerkt = s.win.localStorage.getItem('jarvis_wissen_breit');
         const s2 = await seite(bestand(), { jarvis_wissen_breit: gemerkt });
-        const b2 = s2.doc.getElementById('wi-max');
+        const b2 = s2.doc.getElementById('jv-max');
         check('neue Seite mit gemerktem "1" startet MAXIMIERT',
-              s2.doc.body.classList.contains('wi-breit')
-              && s2.win.getComputedStyle(s2.doc.querySelector('.wi-wrap')).maxWidth === 'none');
+              s2.doc.body.classList.contains('jv-breit'));
         check('… und der Knopf zeigt "Verkleinern" (Zustand und Knopf stimmen ueberein)',
               !!b2 && b2.getAttribute('aria-pressed') === 'true'
               && b2.getAttribute('aria-label') === 'Verkleinern');
         try { s2.win.close(); } catch (e) {}
         const s3 = await seite(bestand(), { jarvis_wissen_breit: '0' });
         check('neue Seite mit gemerktem "0" startet normal',
-              !s3.doc.body.classList.contains('wi-breit'));
+              !s3.doc.body.classList.contains('jv-breit'));
         try { s3.win.close(); } catch (e) {}
         const s4 = await seite(bestand());
         check('ohne gemerkten Wert: normal (Vorgabe bleibt 900 px)',
-              !s4.doc.body.classList.contains('wi-breit'));
+              !s4.doc.body.classList.contains('jv-breit'));
         try { s4.win.close(); } catch (e) {}
     }
 
     abschnitt('8 – Texte in DE und EN');
     const fehlt = ['wissen.col_name', 'wissen.col_folder', 'wissen.col_groups', 'wissen.col_size',
-                   'wissen.sort_by', 'wissen.size_unknown', 'wissen.maximize', 'wissen.minimize']
+                   'wissen.sort_by', 'wissen.size_unknown', 'common.maximize', 'common.minimize']
         .filter(function (k) { return i18nZahl(k) !== 2; });
     check('alle neuen Schluessel genau zweimal (DE + EN)', fehlt.length === 0, fehlt.join(', '));
 

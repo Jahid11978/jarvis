@@ -11,6 +11,7 @@ gruener Basislauf ist Bedingung, Byte-Gleichheit danach wird nachgesehen.
 """
 from __future__ import annotations
 
+import re
 import shutil
 import subprocess
 import sys
@@ -28,6 +29,7 @@ DATEIEN = [MAIN, HTML, JS, I18N]
 
 PY_W = [sys.executable, str(ROOT / "tests" / "test_wissen_groesse.py")]
 JS_W = ["node", str(ROOT / "tests" / "test_wissen_tabelle_ui.js")]
+SB_UI = ["node", str(ROOT / "tests" / "test_seite_breit_ui.js")]
 PY_D = [sys.executable, str(ROOT / "tests" / "test_wissen_datei_freigabe.py")]
 
 
@@ -60,7 +62,9 @@ def bewerte(cmd) -> tuple[bool, str]:
     """(hat gemeldet?, Kurztext). Ohne Bilanzzeile = Abbruch – zaehlt als
     Meldung, wird aber ausgewiesen."""
     rc, aus = lauf(cmd)
-    bil = [z.strip() for z in aus.splitlines() if "Ergebnis:" in z]
+    # test_seite_breit_ui.js schreibt "N OK, M FAIL" ohne "Ergebnis:".
+    bil = [z.strip() for z in aus.splitlines()
+           if "Ergebnis:" in z or re.match(r"\s*\d+ OK, \d+ FAIL", z)]
     fails = aus.count("✗")
     if not bil:
         return rc != 0, f"KEINE BILANZ (rc={rc}) – Abbruch statt FAIL"
@@ -126,34 +130,26 @@ PROBEN = [
      "", JS_W),
 
     # ── Frontend: Maximieren hinter "Angemeldet als" (ganze Seite breit) ────
+    # Seit 2026-09-28 der gemeinsame Baustein (seite_breit.js); dessen
+    # Verhalten beisst in gegen_seite_breit.py. Hier: was /wissen-EIGEN ist.
     ("⚠ Knopf wieder in der Titelleiste", HTML,
      '        <div class="wi-top-icons">\n',
-     '        <div class="wi-top-icons">\n            <button class="wi-max-btn">&#9974;</button>\n', JS_W),
+     '        <div class="wi-top-icons">\n            <button class="jv-max-btn">&#9974;</button>\n', JS_W),
     ("⚠ Knopf wieder in der Kopfzeile von Mein Wissen", HTML,
      '<span data-i18n="wissen.sec_files">Mein Wissen</span>',
-     '<span data-i18n="wissen.sec_files">Mein Wissen</span><button class="wi-max-btn">&#9974;</button>', JS_W),
+     '<span data-i18n="wissen.sec_files">Mein Wissen</span><button class="jv-max-btn">&#9974;</button>', JS_W),
     ("Knopf fehlt hinter dem Banner", HTML,
-     'class="wi-max-btn" id="wi-max"', 'class="wi-max-btn" id="wi-max-weg"', JS_W),
+     'class="jv-max-btn" id="jv-max"', 'class="jv-max-btn" id="jv-max-weg"', JS_W),
     ("⚠ Knopf IM Banner (renderScope loescht ihn)", HTML,
-     'data-i18n="common.loading">Lade…</div>\n            <button type="button" class="wi-max-btn" id="wi-max" aria-pressed="false"\n                    data-i18n-title="wissen.maximize" data-i18n-aria="wissen.maximize"\n                    title="Maximieren" aria-label="Maximieren">&#9974;</button>\n',
-     'data-i18n="common.loading">Lade…<button type="button" class="wi-max-btn" id="wi-max" aria-pressed="false"\n                    data-i18n-title="wissen.maximize" data-i18n-aria="wissen.maximize"\n                    title="Maximieren" aria-label="Maximieren">&#9974;</button></div>\n', JS_W),
-    ("CSS fuer die volle Breite fehlt", HTML,
-     "        body.wi-breit .wi-wrap { max-width: none; }\n", "", JS_W),
-    ("Knopf nicht verdrahtet", JS, "        maxInit();\n", "", JS_W),
-    ("Klick schaltet die Breite nicht um", JS,
-     "        document.body.classList.toggle('wi-breit', !!an);\n", "", JS_W),
-    ("Beschriftung wechselt nicht mit dem Zustand", JS,
-     "        var k = an ? 'wissen.minimize' : 'wissen.maximize';",
-     "        var k = 'wissen.maximize';", JS_W),
-    ("Zeichen wechselt nicht", JS,
-     "        b.innerHTML = an ? '&#128471;' : '&#9974;';", "        b.innerHTML = '&#9974;';", JS_W),
-    ("gemerkter Zustand wird beim Laden nicht angewandt", JS,
-     "        if (gemerkt === '1') maxSetzen(true);\n", "", JS_W),
-    ("Klick merkt den Zustand nicht", JS,
-     "            try { localStorage.setItem(_MAX_LS, an ? '1' : '0'); } catch (e) {}\n", "", JS_W),
-    ("gemerkt wird nur die Klasse, der Knopf bleibt auf 'Maximieren'", JS,
-     "        if (gemerkt === '1') maxSetzen(true);\n",
-     "        if (gemerkt === '1') document.body.classList.add('wi-breit');\n", JS_W),
+     'data-i18n="common.loading">Lade…</div>\n            <button type="button" class="jv-max-btn" id="jv-max" data-seite="wissen"\n                    data-speicher="jarvis_wissen_breit" aria-pressed="false"\n                    data-i18n-title="common.maximize" data-i18n-aria="common.maximize"\n                    title="Maximieren" aria-label="Maximieren">&#9974;</button>\n',
+     'data-i18n="common.loading">Lade…<button type="button" class="jv-max-btn" id="jv-max" data-seite="wissen"\n                    data-speicher="jarvis_wissen_breit" aria-pressed="false"\n                    data-i18n-title="common.maximize" data-i18n-aria="common.maximize"\n                    title="Maximieren" aria-label="Maximieren">&#9974;</button></div>\n', JS_W),
+    ("Bereich nicht als breit-faehig markiert", HTML,
+     '<div id="wi-app" class="wi-wrap hidden" data-jv-breit>', '<div id="wi-app" class="wi-wrap hidden">', JS_W),
+    ("⚠ gemerkte Breite der Benutzer geht verloren (Schluessel neu)", HTML,
+     '                    data-speicher="jarvis_wissen_breit" aria-pressed="false"\n',
+     '                    aria-pressed="false"\n', JS_W),
+    ("seite_breit.js nicht eingebunden", HTML,
+     '    <script src="/static/js/seite_breit.js?v=1"></script>\n', "", SB_UI),
 
     # ── Oeffnen von Freigabe-Dateien (GET /api/wissen/file) ─────────────────
     ("⚠ Altstand: Schluessel wieder gegen PROJECT_ROOT aufgeloest (89/89 404 auf ECHT)", MAIN,

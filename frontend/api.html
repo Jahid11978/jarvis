@@ -4,7 +4,7 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Jarvis – API-Dokumentation</title>
-    <link rel="stylesheet" href="/static/css/theme.css?v=27">
+    <link rel="stylesheet" href="/static/css/theme.css?v=28">
     <link rel="stylesheet" href="/static/vendor/clippy/clippy.css?v=1">
     <link rel="stylesheet" href="/static/css/avatar.css?v=9">
     <link rel="icon" href="/static/favicon.png?v=6" type="image/png">
@@ -170,12 +170,18 @@
     <div class="ad-controls">
         <input type="text" class="ad-search" id="ad-search" placeholder="Endpunkt suchen (Pfad, Beschreibung)…" data-i18n-placeholder="api.search_ph">
         <div class="ad-mfilter" id="ad-mfilter"></div>
+        <!-- Seite maximieren (Vorbild /wissen, Vorgabe 2026-09-28). NICHT in
+             #ad-wrap: render() schreibt sie per innerHTML neu und loeschte den
+             Knopf. Logik in seite_breit.js. -->
+        <button type="button" class="jv-max-btn" id="jv-max" data-seite="api" aria-pressed="false"
+                data-i18n-title="common.maximize" data-i18n-aria="common.maximize"
+                title="Maximieren" aria-label="Maximieren">&#9974;</button>
     </div>
     <div class="ad-intro" data-i18n="api.intro">Vollständige Übersicht aller REST-Endpunkte dieser {marke}-Instanz – automatisch aus dem live erzeugten OpenAPI-Schema.
         Jeden Eintrag aufklappen für Beschreibung, Parameter, ein Beispiel (cURL) und einen direkten Testaufruf.</div>
     <div class="ad-warn" data-i18n-html="api.warn_html">⚠️ Testaufrufe werden <b>echt</b> ausgeführt (inkl. POST/PUT/DELETE) und nutzen dein Admin-Token. Mit Bedacht verwenden.</div>
 
-    <div class="ad-wrap" id="ad-wrap">
+    <div class="ad-wrap" id="ad-wrap" data-jv-breit>
         <div class="ad-loading" id="ad-loading" data-i18n="api.loading">Lade API-Schema…</div>
     </div>
 
@@ -185,7 +191,8 @@
     <script src="/static/js/cpubar.js?v=1"></script>
     <script src="/static/js/syspackages.js?v=2"></script>
     <script src="/static/js/sysload.js?v=3"></script>
-    <script src="/static/js/i18n.js?v=294"></script>
+    <script src="/static/js/i18n.js?v=296"></script>
+    <script src="/static/js/seite_breit.js?v=1"></script>
     <script src="/static/js/theme.js?v=3"></script>
     <script src="/static/js/branding.js?v=26"></script>
     <!-- sessions.js liefert JarvisSession.logout (Abmeldung MUSS am Server

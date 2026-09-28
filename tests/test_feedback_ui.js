@@ -73,7 +73,8 @@ function seite(opt) {
     }
     return J({ ok: true });
   };
-  for (const f of ['js/icons.js', 'js/i18n.js', 'js/feedback.js']) {
+  // Reihenfolge wie feedback.html: seite_breit.js VOR feedback.js.
+  for (const f of ['js/icons.js', 'js/i18n.js', 'js/seite_breit.js', 'js/feedback.js']) {
     w.eval(fs.readFileSync('frontend/' + f, 'utf8'));
   }
   return { w, doc: w.document, rufe };
@@ -678,102 +679,56 @@ const warte = ms => new Promise(r => setTimeout(r, ms));
     'sonst waere jeder Absatzwechsel eine Abgabe');
 
   // =========================================================================
-  console.log('\n10. Maximieren: der Knopf in „Formular ausfuellen"');
+  console.log('\n10. Maximieren: EIN Knopf fuer die ganze Seite, ausserhalb der Karten');
   // =========================================================================
   //
-  // ⚠ GEMESSEN WIRD DIE WIRKUNG, nicht das Vorkommen: ob ein Klick die Karte
-  // maximiert – und vor allem, ob er sie dabei nicht ZUKLAPPT. Der Knopf sitzt
-  // in der Klapp-Kopfzeile; genau daran ist im Projekt schon ein Bedienelement
-  // gescheitert (AD-Picker: der Klick hob sich auf und tat unterm Strich
-  // nichts).
+  // Vorgabe 2026-09-28: nach dem Vorbild von /wissen sitzt der Knopf NICHT
+  // mehr in „Formular ausfuellen", sondern ganz oben ueber den Karten;
+  // maximiert werden ALLE Karten fensterbreit. Die Breitenwirkung (theme.css)
+  // misst `test_seite_breit_ui.js` fuer alle Seiten.
   ({ w, doc, rufe } = seite({}));
   await warte(60);
 
+  const maxB = doc.getElementById('jv-max');
+  const mainF = doc.querySelector('main.ja-main');
   const karteF = doc.querySelector('.ja-card[data-klapp="form"]');
-  const maxB = karteF && karteF.querySelector('[data-act="max"]');
-  c('der Knopf steht in der Kopfzeile von „Formular ausfuellen"',
-    !!maxB && !!maxB.closest('.ja-card-head'));
-  // Scope: die Vorgabe nennt ausdruecklich NUR dieses Formular.
-  const karteM = doc.querySelector('.ja-card[data-klapp="meine"]');
-  c('„Meine Abgaben" bekommt KEINEN (die Vorgabe nennt nur das Formular)',
-    !!karteM && !karteM.querySelector('[data-act="max"]'));
-  // ⚠ Knopf und Caret muessen EIN Container sein – `.ja-card-head` ist
-  // `space-between` und verteilte drei Kinder sonst gleichmaessig.
-  const caret = karteF && karteF.querySelector('.ja-caret');
-  c('Knopf und Caret liegen in EINEM Container (Gruppe)',
-    !!maxB && !!caret && maxB.parentElement === caret.parentElement
-    && maxB.parentElement.classList.contains('fb-head-acts'));
+  c('die Seite hat den Maximieren-Knopf #jv-max', !!maxB);
+  c('KEIN Maximieren-Knopf mehr in einer Karte',
+    doc.querySelectorAll('.ja-card [data-act="max"], .ja-card .jv-max-btn').length === 0);
+  c('der Knopf steht ausserhalb der Karten und nicht in der Titelleiste',
+    !!maxB && !maxB.closest('.ja-card') && !maxB.closest('.topbar'));
+  c('… VOR der ersten Karte (ganz oben)',
+    !!maxB && !!karteF
+    && (maxB.compareDocumentPosition(karteF) & w.Node.DOCUMENT_POSITION_FOLLOWING) !== 0);
+  c('der Inhaltsbereich ist als "wird breit" markiert',
+    !!mainF && mainF.hasAttribute('data-jv-breit'));
+  c('die Kopfzeile der Formular-Karte ist wieder Titel + Caret (keine Gruppe mehr)',
+    !!karteF && !karteF.querySelector('.fb-head-acts')
+    && karteF.querySelector('.ja-card-head').children.length === 2);
 
-  // ── Der Klick maximiert – und klappt NICHT zu ───────────────────────────
-  const zeichenVorher = maxB.innerHTML;
-  maxB.click();
-  await warte(20);
-  c('nach dem Klick ist die Karte maximiert',
-    karteF.classList.contains('is-max'));
-  c('⚠ und sie ist NICHT zugeklappt',
-    !karteF.classList.contains('is-zu'),
-    'der Knopf sitzt in der Klapp-Kopfzeile – ohne die Ausnahme in klappInit '
-    + 'waere das Vollbild eine leere Flaeche');
-  c('die Seite dahinter scrollt nicht mit (body.fb-maxed)',
-    doc.body.classList.contains('fb-maxed'));
-  c('der Knopf zeigt seinen Zustand (aria-pressed + .active)',
-    maxB.getAttribute('aria-pressed') === 'true' && maxB.classList.contains('active'));
-  c('das Zeichen wechselt', maxB.innerHTML !== zeichenVorher);
-
-  // Beschriftung: das Zeichen allein wird als „square four corners" vorgelesen.
-  c('Titel UND aria-label sind im Vollbild gesetzt',
-    !!maxB.title && !!maxB.getAttribute('aria-label'));
-  c('sie sagen „Verkleinern", nicht mehr „Maximieren"',
-    maxB.title === 'Verkleinern' && maxB.getAttribute('aria-label') === 'Verkleinern',
-    maxB.title);
-  // ⚠ Ohne mitwandernde data-i18n-*-Attribute holt der naechste Sprachwechsel
-  // den Text des ANDEREN Zustands zurueck.
-  c('⚠ die i18n-Attribute wandern mit',
-    maxB.getAttribute('data-i18n-title') === 'feedback.minimize'
-    && maxB.getAttribute('data-i18n-aria') === 'feedback.minimize',
-    maxB.getAttribute('data-i18n-title') + ' / ' + maxB.getAttribute('data-i18n-aria'));
-
-  // ── Zweiter Klick verkleinert ───────────────────────────────────────────
-  maxB.click();
-  await warte(20);
-  c('ein zweiter Klick verkleinert wieder',
-    !karteF.classList.contains('is-max') && !doc.body.classList.contains('fb-maxed'));
-  c('und die Beschriftung steht wieder auf „Maximieren"',
-    maxB.title === 'Maximieren'
-    && maxB.getAttribute('data-i18n-title') === 'feedback.maximize');
-
-  // ── Escape verkleinert ──────────────────────────────────────────────────
-  maxB.click();
-  await warte(20);
-  c('Vollbild an (Positivkontrolle fuer Escape)', karteF.classList.contains('is-max'));
-  doc.dispatchEvent(new w.KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
-  await warte(20);
-  c('Escape verkleinert', !karteF.classList.contains('is-max'));
-
-  // ── Eine ZUGEKLAPPTE Karte wird beim Maximieren aufgeklappt ─────────────
-  //
-  // Sonst fuellt eine leere Flaeche den Bildschirm.
-  ({ w, doc, rufe } = seite({}));
-  await warte(60);
-  const k2 = doc.querySelector('.ja-card[data-klapp="form"]');
-  const b2 = k2.querySelector('[data-act="max"]');
-  k2.querySelector('.ja-card-head').click();          // zuklappen
-  await warte(20);
-  c('die Karte ist zugeklappt (Positivkontrolle)', k2.classList.contains('is-zu'));
-  b2.click();
-  await warte(20);
-  c('⚠ Maximieren klappt sie auf',
-    k2.classList.contains('is-max') && !k2.classList.contains('is-zu'),
-    'ein Vollbild ueber einem zugeklappten Koerper waere eine leere Flaeche');
-
-  // ── Der Zustand wird NICHT gemerkt ──────────────────────────────────────
-  //
-  // Ein Vollbild, das beim naechsten Oeffnen der Seite noch an ist, sieht wie
-  // ein Fehler aus – man sucht die uebrigen Karten.
-  ({ w, doc, rufe } = seite({}));
-  await warte(60);
-  c('⚠ eine frisch geladene Seite ist NICHT maximiert',
-    !doc.querySelector('.ja-card.is-max') && !doc.body.classList.contains('fb-maxed'));
+  if (maxB) {
+    const zeichenVorher = maxB.innerHTML;
+    maxB.click();
+    await warte(20);
+    c('ein Klick macht die Seite breit (body.jv-breit)', doc.body.classList.contains('jv-breit'));
+    c('… keine Karte wird einzeln ueber die Seite gelegt',
+      !doc.querySelector('.ja-card.is-max') && !doc.body.classList.contains('fb-maxed'));
+    c('der Knopf zeigt seinen Zustand (aria-pressed + .active)',
+      maxB.getAttribute('aria-pressed') === 'true' && maxB.classList.contains('active'));
+    c('das Zeichen wechselt', maxB.innerHTML !== zeichenVorher);
+    c('Titel UND aria-label sagen „Verkleinern"',
+      maxB.title === 'Verkleinern' && maxB.getAttribute('aria-label') === 'Verkleinern',
+      maxB.title);
+    c('⚠ die i18n-Attribute wandern mit',
+      maxB.getAttribute('data-i18n-title') === 'common.minimize'
+      && maxB.getAttribute('data-i18n-aria') === 'common.minimize',
+      maxB.getAttribute('data-i18n-title') + ' / ' + maxB.getAttribute('data-i18n-aria'));
+    maxB.click();
+    await warte(20);
+    c('ein zweiter Klick verkleinert wieder',
+      !doc.body.classList.contains('jv-breit') && maxB.title === 'Maximieren'
+      && maxB.getAttribute('data-i18n-title') === 'common.maximize');
+  }
 
   // ── Die Feldhoehen werden nachgezogen ───────────────────────────────────
   //
@@ -787,8 +742,7 @@ const warte = ms => new Promise(r => setTimeout(r, ms));
   let fakeScroll = 40;
   Object.defineProperty(w.HTMLTextAreaElement.prototype, 'scrollHeight',
                         { configurable: true, get() { return fakeScroll; } });
-  const k3 = doc.querySelector('.ja-card[data-klapp="form"]');
-  const b3 = k3.querySelector('[data-act="max"]');
+  const b3 = doc.getElementById('jv-max');
   const ta3 = doc.querySelector('#fb-tabelle textarea');
   c('es gibt ein Antwortfeld (Positivkontrolle)', !!ta3);
   fakeScroll = 123;
@@ -831,39 +785,20 @@ const warte = ms => new Promise(r => setTimeout(r, ms));
   delete w.HTMLTextAreaElement.prototype.scrollHeight;
 
   // ── i18n: beide Schluessel in BEIDEN Sprachen ───────────────────────────
+  // Gemeinsamer Baustein aller Seiten -> `common.*` (nicht mehr `feedback.*`).
   const i18nQ = fs.readFileSync('frontend/js/i18n.js', 'utf8');
-  for (const k of ['feedback.maximize', 'feedback.minimize']) {
+  for (const k of ['common.maximize', 'common.minimize']) {
     c('„' + k + '" gibt es zweimal (DE und EN)',
       (i18nQ.match(new RegExp("'" + k.replace('.', '\\.') + "'", 'g')) || []).length === 2,
       (i18nQ.match(new RegExp("'" + k.replace('.', '\\.') + "'", 'g')) || []).length + 'x');
   }
-  // ⚠ NICHT `tracks.maximize` wiederverwenden: der Bereichs-Praefix ist die
-  // Konvention der Datei, und eine Umformulierung in /tracks darf /feedback
-  // nicht still mitaendern.
-  const fbQ = fs.readFileSync('frontend/js/feedback.js', 'utf8');
-  c('/feedback benutzt keinen tracks-Schluessel',
-    fbQ.indexOf('tracks.maxim') < 0 && fbQ.indexOf('tracks.minim') < 0);
 
-  // ── CSS: die Zusagen, die jsdom nicht rechnen kann ──────────────────────
+  // ── CSS: das Einzel-Vollbild ist weg ────────────────────────────────────
+  // Eine Restregel waere toter Code, der beim naechsten Feinschliff wieder
+  // verdrahtet wird.
   const cssQ = fs.readFileSync('frontend/css/feedback.css', 'utf8');
-  const bodyRegel = (cssQ.match(/\.ja-card\.is-max\s*>\s*\.ja-card-body\s*\{[^}]*\}/) || [''])[0];
-  c('der Karten-Koerper scrollt im Vollbild', /overflow-y:\s*auto/.test(bodyRegel));
-  c('⚠ und traegt `min-height: 0`', /min-height:\s*0/.test(bodyRegel),
-    'ein Flex-Kind schrumpft sonst nicht unter seine Inhaltshoehe – der '
-    + 'Absenden-Knopf stuende ausserhalb des Bildes (Register)');
-  const maxRegel = (cssQ.match(/\.ja-card\.is-max\s*\{[^}]*\}/) || [''])[0];
-  c('die Flaeche ist DECKEND (darunter liegt die Seite)',
-    /background:\s*var\(--bg-primary\)/.test(maxRegel));
-  // Drift-Schranke: die Titelleiste (z-index 30 in jira_addon.css) muss
-  // sichtbar und bedienbar bleiben.
-  const zKarte = parseInt((maxRegel.match(/z-index:\s*(\d+)/) || [])[1], 10);
-  const zBar = parseInt(
-    ((fs.readFileSync('frontend/css/jira_addon.css', 'utf8')
-        .match(/\.topbar\s*\{[^}]*\}/) || [''])[0].match(/z-index:\s*(\d+)/) || [])[1], 10);
-  c('⚠ die Karte liegt UNTER der Titelleiste', zKarte > 0 && zBar > 0 && zKarte < zBar,
-    'Karte ' + zKarte + ' / Titelleiste ' + zBar);
-  c('der Knopf hat eigene Regeln (`.st-icon-btn` steht in tracks.html, '
-    + 'diese Seite laedt sie nicht)', /\.fb-icon-btn\s*\{/.test(cssQ));
+  c('keine Regeln mehr fuer das Vollbild einer einzelnen Karte',
+    !/\.ja-card\.is-max|body\.fb-maxed|\.fb-icon-btn/.test(cssQ));
 
   console.log('\n' + '='.repeat(70));
   console.log(ok + ' OK, ' + fail + ' FAIL');

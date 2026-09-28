@@ -4,7 +4,7 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Jarvis – Support-Agent (Windows)</title>
-    <link rel="stylesheet" href="/static/css/theme.css?v=27">
+    <link rel="stylesheet" href="/static/css/theme.css?v=28">
     <link rel="stylesheet" href="/static/vendor/clippy/clippy.css?v=1">
     <link rel="stylesheet" href="/static/css/avatar.css?v=9">
     <link rel="icon" href="/static/favicon.png?v=6" type="image/png">
@@ -73,7 +73,15 @@
         </div>
     </div>
 
-    <div class="sa-wrap">
+    <div class="sa-wrap" data-jv-breit>
+        <!-- Seite maximieren (Vorbild /wissen, Vorgabe 2026-09-28): der Knopf
+             sitzt AUSSERHALB der Kacheln ganz oben; maximiert nutzen ALLE
+             Kacheln die volle Fensterbreite. Logik in seite_breit.js. -->
+        <div class="jv-max-row">
+            <button type="button" class="jv-max-btn" id="jv-max" data-seite="supportagent" aria-pressed="false"
+                    data-i18n-title="common.maximize" data-i18n-aria="common.maximize"
+                    title="Maximieren" aria-label="Maximieren">&#9974;</button>
+        </div>
         <div class="sa-hero">
             <img src="/static/jira_agent_symbol.png" alt="Support-Agent Symbol">
             <div>
@@ -152,6 +160,7 @@
     <script src="/static/js/syspackages.js?v=2"></script>
     <script src="/static/js/sysload.js?v=3"></script>
     <script src="/static/js/theme.js?v=3"></script>
+    <script src="/static/js/seite_breit.js?v=1"></script>
     <script src="/static/js/branding.js?v=26"></script>
     <script>if (window.refreshBranding) { try { window.refreshBranding(); } catch (e) {} }</script>
 <!-- Avatar-Assistent (nur aktiv, wenn der Avatar-Skill eingeschaltet ist) -->

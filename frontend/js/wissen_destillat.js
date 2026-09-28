@@ -144,8 +144,16 @@
     }
 
     // ── Anzeige ─────────────────────────────────────────────────────────
+    // art 'busy': derselbe Drehkreis wie beim Upload und beim Lesen der
+    // Dateien (`.wi-busy-spin`) statt einer Sanduhr im Text – ein Warte-
+    // zeichen je Seite, nicht zwei (Vorgabe 2026-09-28).
     function status(el, msg, art) {
         var e = $(el); if (!e) return;
+        if (msg && art === 'busy') {
+            e.innerHTML = '<span class="wi-dest-busy"><span class="wi-busy-spin" aria-hidden="true"></span>'
+                + '<span>' + esc(msg) + '</span></span>';
+            return;
+        }
         e.innerHTML = msg
             ? '<span class="' + (art === 'err' ? 'wi-err' : art === 'ok' ? 'wi-ok' : '')
               + '">' + esc(msg) + '</span>' : '';
@@ -575,7 +583,7 @@
         zaehlerZeichnen();
         var run = $('wi-dest-run');
         if (run) { run.disabled = true; run.title = t('wissen.dest_running'); }
-        status('wi-dest-status', t('wissen.dest_running'));
+        status('wi-dest-status', t('wissen.dest_running'), 'busy');
         fortschritt(8);
 
         // Der Balken bewegt sich waehrend des Laufs weiter. Es ist bewusst eine
@@ -707,7 +715,7 @@
         }
         var btn = $('wi-dest-takego');
         if (btn) btn.disabled = true;
-        status('wi-dest-takestatus', t('wissen.dest_taking'));
+        status('wi-dest-takestatus', t('wissen.dest_taking'), 'busy');
         fetch('/api/wissen/destillat/uebernehmen', {
             method: 'POST', headers: authH({ 'Content-Type': 'application/json' }),
             body: JSON.stringify({
