@@ -614,8 +614,11 @@ for _name in ("telemetry.js", "audit.js"):
     _JS_MODULE[_name] = _pfad.read_text(encoding="utf-8") if _pfad.exists() else ""
     check(f"{_name} vorhanden", bool(_JS_MODULE[_name]))
 
-for bid in ("tele-tool-clear-btn", "tele-llm-clear-btn", "tele-errors-clear-btn",
-            "tele-spans-clear-btn", "conv-log-clear-btn", "audit-clear-btn",
+# Tool-/LLM-Statistiken und Spans sind seit 2026-09-28 aus dem Reiter ENTFERNT
+# (Vorgabe) – ihre Leeren-Knoepfe gibt es nicht mehr; die Endpunkte bleiben.
+for bid in ("tele-tool-clear-btn", "tele-llm-clear-btn", "tele-spans-clear-btn"):
+    check(f"{bid} bleibt entfernt", f'id="{bid}"' not in html and bid not in js)
+for bid in ("tele-errors-clear-btn", "conv-log-clear-btn", "audit-clear-btn",
             "tele-retention-run"):
     check(f"{bid} im Markup", f'id="{bid}"' in html)
     check(f"{bid} in telemetry.js oder eigenem Modul verdrahtet",
@@ -642,10 +645,7 @@ check("System-Prompt wird angezeigt", "telemetry.conv_sysprompt" in js)
 check("Kuerzungs-Hinweis vorhanden", "telemetry.truncated" in js)
 check("Altbestands-Abzeichen vorhanden", "telemetry.legacy_badge" in js)
 
-new_keys = ["telemetry.clear_tool_confirm", "telemetry.clear_llm_confirm",
-            "telemetry.clear_errors_confirm", "telemetry.clear_spans_confirm",
-            "telemetry.clear_tool_title", "telemetry.clear_llm_title",
-            "telemetry.clear_errors_title", "telemetry.clear_spans_title",
+new_keys = ["telemetry.clear_errors_confirm", "telemetry.clear_errors_title",
             "telemetry.area_cleared", "telemetry.ret_days", "telemetry.ret_forever",
             "telemetry.ret_convs", "telemetry.ret_oldest", "telemetry.ret_audit",
             "telemetry.ret_last", "telemetry.ret_run", "telemetry.ret_running",
@@ -657,7 +657,7 @@ for k in new_keys:
           str(i18n.count(f"'{k}'")))
 
 check("Cache-Buster von telemetry.js erhoeht",
-      "telemetry.js?v=9" in html, "nicht v=9")
+      "telemetry.js?v=10" in html, "nicht v=10")
 
 # Aufrufer der geaenderten Signaturen: nichts darf noch auf 'messages' oder
 # 'system_prompt_preview' im Index bauen.

@@ -84,7 +84,8 @@ def run_all() -> dict:
                      ("telemetry_errors", _prune_telemetry_errors),
                      ("audit_log", _prune_audit_log),
                      ("email_log", _prune_email_log),
-                     ("short_tracks_log", _prune_short_tracks_log)):
+                     ("short_tracks_log", _prune_short_tracks_log),
+                     ("cron_log", _prune_cron_log)):
         try:
             removed[name] = int(fn(cut) or 0)
         except Exception as e:  # noqa: BLE001
@@ -155,3 +156,13 @@ def _prune_short_tracks_log(cut: float) -> int:
     """
     from backend import short_tracks
     return short_tracks.protokoll_kuerzen(cut)
+
+
+def _prune_cron_log(cut: float) -> int:
+    """Protokoll der zeitgesteuerten Auftraege (data/logs/cron/<id>.jsonl).
+
+    Gleiche Begruendung wie bei E-Mail- und Short-Tracks-Protokoll: derselbe
+    Diagnosespeicher-Typ, dieselbe Frist, AUSDRUECKLICH keine Stueckzahlgrenze.
+    """
+    from backend import cron_log
+    return cron_log.kuerzen(cut)

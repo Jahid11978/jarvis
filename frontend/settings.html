@@ -23,7 +23,7 @@
     <link rel="stylesheet" href="/static/css/theme.css?v=28">
     <link rel="stylesheet" href="/static/vendor/clippy/clippy.css?v=1">
     <link rel="stylesheet" href="/static/css/avatar.css?v=9">
-    <link rel="stylesheet" href="/static/css/style.css?v=191">
+    <link rel="stylesheet" href="/static/css/style.css?v=192">
     <link rel="stylesheet" href="/static/css/chat-bubbles.css?v=6">
     <!-- Feedback-Reiter. EINE Datei fuer /settings und /feedback: Tabelle,
          Sterne und Abgabe-Karte werden an beiden Orten gebraucht, zwei
@@ -4378,7 +4378,6 @@ certutil -d sql:$HOME/.pki/nssdb -A -t "C,," -n "Jarvis CA" -i jarvis-ca.crt
                 <!-- ═══ Tab: Telemetry ═══ -->
                 <div id="settings-tab-telemetry" class="settings-tab-content" style="display:none;">
                     <div class="kb-container">
-                        <div id="tele-stat-cards" style="display:grid;grid-template-columns:repeat(auto-fill,minmax(130px,1fr));gap:10px;margin-bottom:10px;"></div>
                         <div id="tele-reset-info" style="font-size:0.75rem;color:var(--text-muted);margin-bottom:6px;"></div>
                         <!-- Aufbewahrungsfrist: sagt an EINER Stelle fuer alle Abschnitte,
                              wie lange Diagnosedaten ueberhaupt vorliegen. Ohne diese Zeile
@@ -4388,29 +4387,12 @@ certutil -d sql:$HOME/.pki/nssdb -A -t "C,," -n "Jarvis CA" -i jarvis-ca.crt
                             <span id="tele-retention-text"></span>
                             <button id="tele-retention-run" class="kb-hdr-btn" style="display:none;" data-i18n="telemetry.ret_run">Jetzt bereinigen</button>
                         </div>
-                        <div class="sk-openclaw-section" id="tele-tool-section">
-                            <div class="kb-folder-header" style="cursor:pointer;" onclick="(function(h){var b=h.nextElementSibling;b.style.display=b.style.display==='none'?'block':'none';h.querySelector('.kb-folder-arrow').textContent=b.style.display==='none'?'▶':'▼';if(b.style.display!=='none'&&window.telemetryManager)window.telemetryManager._loadStats();})(this)">
-                                <span class="kb-folder-icon">🔧</span>
-                                <span class="kb-folder-path" style="font-weight:600;" data-i18n="telemetry.tool_stats">Tool-Statistiken</span>
-                                <span style="margin-left:auto;margin-right:8px;display:flex;gap:4px;" onclick="event.stopPropagation()">
-                                    <button id="tele-tool-clear-btn" class="kb-hdr-btn is-danger" data-i18n-title="telemetry.clear_tool_title" title="Tool-Statistiken leeren"><svg class="jv-ico jv-ico-trash" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/><line x1="10" y1="11" x2="10" y2="17"/><line x1="14" y1="11" x2="14" y2="17"/></svg></button>
-                                </span>
-                                <span class="kb-folder-arrow">▼</span>
-                            </div>
-                            <div id="tele-tool-body"><div class="kb-loading">Lade…</div></div>
-                        </div>
-                        <div class="sk-openclaw-section" style="margin-top:10px;">
-                            <div class="kb-folder-header" style="cursor:pointer;" onclick="(function(h){var b=h.nextElementSibling;b.style.display=b.style.display==='none'?'block':'none';h.querySelector('.kb-folder-arrow').textContent=b.style.display==='none'?'▶':'▼';if(b.style.display!=='none'&&window.telemetryManager)window.telemetryManager._loadStats();})(this)">
-                                <span class="kb-folder-icon">🧠</span>
-                                <span class="kb-folder-path" style="font-weight:600;" data-i18n="telemetry.llm_stats">LLM-Statistiken</span>
-                                <span style="margin-left:auto;margin-right:8px;display:flex;gap:4px;" onclick="event.stopPropagation()">
-                                    <button id="tele-llm-clear-btn" class="kb-hdr-btn is-danger" data-i18n-title="telemetry.clear_llm_title" title="LLM-Statistiken leeren"><svg class="jv-ico jv-ico-trash" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/><line x1="10" y1="11" x2="10" y2="17"/><line x1="14" y1="11" x2="14" y2="17"/></svg></button>
-                                </span>
-                                <span class="kb-folder-arrow">▼</span>
-                            </div>
-                            <div id="tele-llm-body"><div class="kb-loading">Lade…</div></div>
-                        </div>
-                        <div class="sk-openclaw-section" style="margin-top:10px;">
+                        <!-- Kacheln (Agent-Runs, Tool-Calls, LLM-Calls, Fehler, Dauer), „Tool-Statistiken",
+                             „LLM-Statistiken" und „Letzte Spans" wurden am 2026-09-28 hier ENTFERNT
+                             (Vorgabe des Betreibers). Der Server zaehlt weiter (backend/telemetry.py) –
+                             „Zuruecksetzen" unten leert das mit. Die Endpunkte /api/telemetry/stats|spans|
+                             tool_stats|llm_stats bleiben; /stats liefert weiter die „zuletzt geleert"-Nachweise. -->
+                        <div class="sk-openclaw-section">
                             <div class="kb-folder-header" style="cursor:pointer;" onclick="(function(h){var b=h.nextElementSibling;b.style.display=b.style.display==='none'?'block':'none';h.querySelector('.kb-folder-arrow').textContent=b.style.display==='none'?'▶':'▼';if(b.style.display!=='none'&&window.telemetryManager)window.telemetryManager._loadConvLog();})(this)">
                                 <span class="kb-folder-icon">💬</span>
                                 <span class="kb-folder-path" style="font-weight:600;" data-i18n="telemetry.llm_history">LLM-Verlauf</span>
@@ -4438,17 +4420,6 @@ certutil -d sql:$HOME/.pki/nssdb -A -t "C,," -n "Jarvis CA" -i jarvis-ca.crt
                                 <span class="kb-folder-arrow">▶</span>
                             </div>
                             <div id="tele-errors-body" style="display:none;"><div class="kb-loading">Lade…</div></div>
-                        </div>
-                        <div class="sk-openclaw-section" style="margin-top:10px;">
-                            <div class="kb-folder-header" style="cursor:pointer;" onclick="(function(h){var b=h.nextElementSibling;b.style.display=b.style.display==='none'?'block':'none';h.querySelector('.kb-folder-arrow').textContent=b.style.display==='none'?'▶':'▼';if(b.style.display!=='none'&&window.telemetryManager)window.telemetryManager._loadSpans();})(this)">
-                                <span class="kb-folder-icon">📋</span>
-                                <span class="kb-folder-path" style="font-weight:600;" data-i18n="telemetry.last_spans">Letzte Spans</span>
-                                <span style="margin-left:auto;margin-right:8px;display:flex;gap:4px;" onclick="event.stopPropagation()">
-                                    <button id="tele-spans-clear-btn" class="kb-hdr-btn is-danger" data-i18n-title="telemetry.clear_spans_title" title="Spans leeren"><svg class="jv-ico jv-ico-trash" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/><line x1="10" y1="11" x2="10" y2="17"/><line x1="14" y1="11" x2="14" y2="17"/></svg></button>
-                                </span>
-                                <span class="kb-folder-arrow">▶</span>
-                            </div>
-                            <div id="tele-spans-body" style="display:none;"><div class="kb-loading">Lade…</div></div>
                         </div>
                         <!-- „Kontext / History" wurde am 2026-08-05 hier ENTFERNT.
                              Grund: der Abschnitt zeigte und bediente nicht, was er behauptete.
@@ -5604,9 +5575,9 @@ certutil -d sql:$HOME/.pki/nssdb -A -t "C,," -n "Jarvis CA" -i jarvis-ca.crt
     <script src="/static/js/icons.js?v=5"></script>
     <script src="/static/js/pwreveal.js?v=2"></script>
     <script src="/static/js/dlkey.js?v=2"></script>
-    <script src="/static/js/i18n.js?v=299"></script>
+    <script src="/static/js/i18n.js?v=302"></script>
 <script src="/static/js/tabfill.js?v=2"></script>
-    <script src="/static/js/cron.js?v=23"></script>
+    <script src="/static/js/cron.js?v=24"></script>
     <!-- context.js entfiel 2026-08-05 mit dem Abschnitt „Kontext / History" -->
     <script src="/static/js/audit.js?v=4"></script>
     <script src="/static/js/kbgroups.js?v=4"></script>
@@ -5633,7 +5604,7 @@ certutil -d sql:$HOME/.pki/nssdb -A -t "C,," -n "Jarvis CA" -i jarvis-ca.crt
     <script src="/static/js/feedback_admin.js?v=4"></script>
     <script src="/static/js/kundenverwaltung.js?v=6"></script>
     <script src="/static/js/support_admin.js?v=11"></script>
-    <script src="/static/js/telemetry.js?v=9"></script>
+    <script src="/static/js/telemetry.js?v=10"></script>
     <script src="/static/js/branding.js?v=26"></script>
     <script src="/static/js/theme.js?v=3"></script>
     <script src="/static/js/security_incidents.js?v=34"></script>

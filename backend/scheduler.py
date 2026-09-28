@@ -179,12 +179,16 @@ class CronManager:
         self._jobs = [j for j in self._jobs if j["id"] != job_id]
         self._save()
 
-    async def run_now(self, job_id: str) -> str:
-        """Job sofort ausführen (unabhängig vom Zeitplan)."""
+    async def run_now(self, job_id: str, von: str = "") -> str:
+        """Job sofort ausführen (unabhängig vom Zeitplan).
+
+        ``von`` = wer ausgeloest hat – steht im Protokoll (backend/cron_log.py).
+        Die RECHTE des Laufs haengen weiter am Besitzer (_actor_for), nicht hieran.
+        """
         job = self.get_job(job_id)
         if not job:
             raise ValueError(f"Job {job_id} nicht gefunden")
-        return await self._execute(job_id)
+        return await self._execute(job_id, ausloeser="manuell", von=von)
 
     def claim_job(self, job_id: str, user: str, privileged: bool) -> dict:
         """Auftraggeber-Bindung eines Jobs neu setzen (Admin-Übernahme).
@@ -230,8 +234,12 @@ class CronManager:
         except Exception:
             pass
 
-    async def _execute(self, job_id: str) -> str:
-        """Job ausführen: Agent-Task headless starten."""
+    async def _execute(self, job_id: str, ausloeser: str = "zeitplan",
+                       von: str = "") -> str:
+        """Job ausführen: Agent-Task headless starten.
+
+        ``ausloeser``/``von`` gehen nur ins Protokoll. Der APScheduler ruft mit
+        ``args=[job_id]`` – also immer "zeitplan"."""
         job = self.get_job(job_id)
         if not job:
             return "Job nicht gefunden"
@@ -293,6 +301,17 @@ class CronManager:
         job["last_run"] = int(time.time())
         job["last_result"] = result[:500] if result else ""
         self._save()
+
+        # Protokoll: EIN Eintrag je Lauf (Vorgabe 2026-09-28). last_result
+        # oben kennt nur den LETZTEN Lauf – der naechste ueberschreibt ihn.
+        # ⚠ Wirft nie (cron_log.eintragen) – und steht VOR dem Loeschen eines
+        # Einmal-Jobs, damit auch dessen einziger Lauf nachweisbar bleibt.
+        try:
+            from backend import cron_log
+            cron_log.eintragen(job, t0, time.time(), result or "",
+                               ausloeser=ausloeser, von=von)
+        except Exception as _le:  # noqa: BLE001
+            print(f"[Scheduler] Protokoll nicht geschrieben: {_le}", flush=True)
 
         # Einmalige Jobs nach Ausführung automatisch löschen
         if job.get("once"):

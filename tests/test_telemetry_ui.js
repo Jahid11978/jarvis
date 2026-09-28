@@ -8,6 +8,8 @@
  *      selbst ein Klick-Ziel ist – ohne stopPropagation macht ein Klick beides)
  *   4. Jedes × ruft genau seinen eigenen Endpunkt
  *   5. Alt-Eintraege zeigen die Aufgabe trotz fehlendem task-Feld im Rumpf
+ *   8. Kacheln, Tool-/LLM-Statistiken und Spans sind ENTFERNT (Vorgabe
+ *      2026-09-28) – und werden auch nicht mehr abgerufen
  *
  * WICHTIG (Fallstrick vom 2026-07-30): am Ende window.close() + process.exit(),
  * sonst halten Timer den Node-Prozess fuer immer offen.
@@ -18,7 +20,16 @@
 
 const fs = require('fs');
 const path = require('path');
-const { JSDOM } = require(process.env.JSDOM_PATH || '/tmp/node_modules/jsdom');
+// ⚠ jsdom fehlt -> Exit 2 ("konnte nicht laufen" ist nicht "bestanden").
+// Vorher stand hier nur /tmp/node_modules/jsdom: fehlte es dort, WARF require()
+// mit Exit 1 – ein Absturz, der wie ein roter Test aussah.
+let JSDOM;
+for (const o of [process.env.JSDOM_PATH, path.join(__dirname, '..', 'node_modules/jsdom'),
+                 '/tmp/node_modules/jsdom', 'jsdom']) {
+    if (!o) continue;
+    try { JSDOM = require(o).JSDOM; break; } catch (e) { /* weiter */ }
+}
+if (!JSDOM) { console.error('jsdom nicht gefunden – NICHT PRUEFBAR'); process.exit(2); }
 
 const ROOT = path.resolve(__dirname, '..');
 const results = [];
@@ -40,7 +51,7 @@ const STATS = {
     tool_stats: { shell_execute: { calls: 12, sample: 12, avg_ms: 5, min_ms: 1, max_ms: 9 } },
     llm_stats: { calls: 7, avg_ms: 100, min_ms: 10, max_ms: 300 },
     last_reset_ts: null, last_reset_by: '',
-    area_resets: { spans: { ts: 1785000000, by: 'admin-x' } },
+    area_resets: { errors: { ts: 1785000000, by: 'admin-x' } },
     span_count: 2, span_capacity: 1000,
 };
 const INDEX = [
@@ -201,10 +212,7 @@ function makeFetch() {
     // ── 5) Leeren-Knoepfe ────────────────────────────────────────────────────
     section('5) Jedes × leert genau seinen Abschnitt – und klappt nichts um');
     const CASES = [
-        ['tele-tool-clear-btn', '/api/telemetry/tool_stats', 'tele-tool-body'],
-        ['tele-llm-clear-btn', '/api/telemetry/llm_stats', 'tele-llm-body'],
         ['tele-errors-clear-btn', '/api/telemetry/errors', 'tele-errors-body'],
-        ['tele-spans-clear-btn', '/api/telemetry/spans', 'tele-spans-body'],
         ['conv-log-clear-btn', '/api/conv_log', 'tele-convlog-body'],
     ];
     for (const [btnId, url, bodyId] of CASES) {
@@ -240,14 +248,12 @@ function makeFetch() {
 
     // ── 6) Nachweis "zuletzt geleert" ────────────────────────────────────────
     section('6) Hinweis "zuletzt geleert" je Abschnitt');
-    doc.getElementById('tele-spans-body').style.display = 'block';
-    await mgr._loadSpans();
+    doc.getElementById('tele-errors-body').style.display = 'block';
+    await mgr._loadErrors();
     await sleep(20);
-    check('Span-Abschnitt nennt den Nachweis',
-        /admin-x/.test(doc.getElementById('tele-spans-body').textContent),
-        doc.getElementById('tele-spans-body').textContent.slice(-160));
-    check('Tool-Abschnitt OHNE Nachweis zeigt keinen',
-        !/admin-x/.test(doc.getElementById('tele-tool-body').textContent));
+    check('Fehler-Log nennt den Nachweis (Stats werden dafuer weiter geholt)',
+        /admin-x/.test(doc.getElementById('tele-errors-body').textContent),
+        doc.getElementById('tele-errors-body').textContent.slice(-160));
 
     // ── 7) Mehrfaches init() bindet nicht doppelt ────────────────────────────
     section('7) init() ist idempotent (Reiter-Wechsel)');
@@ -255,12 +261,37 @@ function makeFetch() {
     await mgr.init();
     await sleep(20);
     const b2 = calls.length;
-    doc.getElementById('tele-spans-clear-btn').dispatchEvent(
+    doc.getElementById('tele-errors-clear-btn').dispatchEvent(
         new window.MouseEvent('click', { bubbles: true }));
     await sleep(40);
     const n = calls.slice(b2).filter(c => c.method === 'DELETE'
-        && c.url === '/api/telemetry/spans').length;
+        && c.url === '/api/telemetry/errors').length;
     check('nach dreifachem init() genau EIN DELETE je Klick', n === 1, String(n));
+
+    // ── 8) Entfernte Bereiche ────────────────────────────────────────────────
+    section('8) Kacheln, Tool-/LLM-Statistiken, Letzte Spans: entfernt (Vorgabe 2026-09-28)');
+    const tab = doc.getElementById('settings-tab-telemetry');
+    check('(Positivkontrolle) Telemetrie-Reiter da, LLM-Verlauf und Fehler-Log stehen drin',
+        !!tab && !!doc.getElementById('tele-convlog-body') && !!doc.getElementById('tele-errors-body'));
+    for (const id of ['tele-stat-cards', 'tele-tool-section', 'tele-tool-body', 'tele-tool-clear-btn',
+                      'tele-llm-body', 'tele-llm-clear-btn', 'tele-spans-body', 'tele-spans-clear-btn']) {
+        check(`#${id} gibt es nicht mehr`, !doc.getElementById(id));
+    }
+    const tabTxt = tab ? tab.textContent : '';
+    for (const w of ['Agent-Runs', 'Tool-Calls', 'LLM-Calls', 'Tool-Statistiken', 'LLM-Statistiken', 'Letzte Spans']) {
+        check(`kein sichtbarer Text "${w}"`, tabTxt.indexOf(w) === -1);
+    }
+    const b3 = calls.length;
+    await mgr.refresh();
+    await sleep(30);
+    const neu = calls.slice(b3).map(c => c.url);
+    check('(Positivkontrolle) Aktualisieren holt weiter Stats und Aufbewahrung',
+        neu.some(u => u.startsWith('/api/telemetry/stats')) && neu.some(u => u.startsWith('/api/logs/retention')),
+        JSON.stringify(neu));
+    check('⚠ Aktualisieren holt KEINE Spans mehr', !neu.some(u => u.startsWith('/api/telemetry/spans')),
+        JSON.stringify(neu));
+    check('der Reset-Nachweis im Kopf bleibt (Zuruecksetzen gibt es weiter)',
+        !!doc.getElementById('tele-reset-info') && !!doc.getElementById('btn-tele-clear'));
 
     // ── Ergebnis ─────────────────────────────────────────────────────────────
     const bad = results.filter(r => !r.ok);

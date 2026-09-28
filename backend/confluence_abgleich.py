@@ -131,6 +131,48 @@ def eintrag_staende() -> dict:
         return {}
 
 
+def import_zeiten() -> dict:
+    """Wann jede Seite zuletzt ins Wissen importiert wurde – fuer den Baum.
+
+    Rueckgabe ``{"seiten": {pid: iso}, "bereiche": {key: iso}}``; je Bereich
+    steht der JUENGSTE Import einer seiner Seiten. Es zaehlen nur Seiten, die
+    der Stand fuehrt – also die, die gerade im Wissen liegen; eine abgewaehlte
+    Seite ist dort bereits entfernt.
+
+    ⚠ ALTBESTAND OHNE ``zeit`` (Stand vor 2026-09-28): dann gilt die
+    Aenderungszeit der Datei – sie wurde genau beim Import geschrieben. Fehlt
+    auch die Datei, steht KEIN Datum da (nicht raten).
+
+    Fail-open in die harmlose Richtung wie ``eintrag_staende``: ohne lesbaren
+    Stand stehen eben keine Daten im Baum.
+    """
+    aus: dict = {"seiten": {}, "bereiche": {}}
+    try:
+        with _STAND_SPERRE:
+            seiten = dict(_stand_laden().get("seiten") or {})
+    except Exception as e:  # noqa: BLE001
+        print(f"[CF-Abgleich] {e}", flush=True)
+        return aus
+    for pid, s in seiten.items():
+        if not isinstance(s, dict):
+            continue
+        zeit = str(s.get("zeit") or "")
+        if not zeit and s.get("datei"):
+            try:
+                zeit = datetime.fromtimestamp(_abs(s["datei"]).stat().st_mtime) \
+                    .isoformat(timespec="seconds")
+            except Exception:  # noqa: BLE001 – Datei weg: kein Datum
+                zeit = ""
+        if not zeit:
+            continue
+        aus["seiten"][str(pid)] = zeit
+        key = str(s.get("space") or "")
+        # ISO-Zeiten gleicher Form sind als Text chronologisch sortierbar.
+        if key and zeit > aus["bereiche"].get(key, ""):
+            aus["bereiche"][key] = zeit
+    return aus
+
+
 # ── Aufloesung: welche Seiten gehoeren zu einer Auswahl? ────────────────────
 
 def _nachfahren(kinder: dict, wurzel: str) -> set:
@@ -432,8 +474,12 @@ def _lauf(client) -> dict:
                 kg.set_assignment(rel, g["gruppen"])
             except Exception as ex:  # noqa: BLE001
                 print(f"[CF-Abgleich] Zuordnung {rel}: {ex}", flush=True)
+            # ``zeit`` = letzter WIRKLICHER Import (Inhalt geholt und
+            # geschrieben). Ein Takt ohne Aenderung laesst sie stehen – der
+            # Baum unter /wissen zeigt sie als "(Datum)" an der Zeile.
             seiten_neu[pid] = {"v": ver, "datei": rel, "space": g["space"],
-                               "titel": titel, "gruppen": list(g["gruppen"])}
+                               "titel": titel, "gruppen": list(g["gruppen"]),
+                               "zeit": datetime.now().isoformat(timespec="seconds")}
             if alt:
                 geaendert += 1
             else:

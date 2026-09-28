@@ -1434,6 +1434,7 @@
     var _cfbEdit = null;         // Kennung des Eintrags, der gerade bearbeitet wird
     var _cfbNeu = false;         // Editor fuer die Neuanlage offen ("Neuer Bereich")
     var _cfbBaumFuer = null;     // Bereichsliste, fuer die der Baum gezeichnet ist
+    var _cfbImporte = {};        // Bereich -> juengster Import (ISO), vom Server
 
     function cfbStatus(msg, warn) {
         var el = $('wi-cfb-status');
@@ -1454,6 +1455,7 @@
                 if (!d || !d.ok) { _cfbAktiv = false; cfbRender(); return; }
                 _cfbAktiv = !!d.aktiv;
                 _cfbBereiche = d.bereiche || [];
+                _cfbImporte = d.importe || {};
                 cfbRender();
             })
             // Faellt der Abruf aus, bleibt der Container weg: lieber nichts
@@ -1472,8 +1474,39 @@
         sec.style.display = '';
         cfbRenderGroups();
         cfbRenderBaum();
+        cfbImpBereiche();
         cfbRenderList();
         cfbEditorZeigen();
+    }
+
+    // Datum des letzten Imports ins Wissen (Vorgabe 2026-09-28): in Klammern
+    // HINTER [+]/[-], bei einer Zeile ohne Zeichen hinter dem Namen - also
+    // immer als letztes Element der Zeile. Die volle Zeit steht im Tooltip.
+    function cfbImpHtml(iso) {
+        if (!iso) return '';
+        var d = new Date(iso);
+        if (isNaN(d.getTime())) return '';
+        var tag = d.toLocaleDateString(undefined, { day: '2-digit', month: '2-digit', year: 'numeric' });
+        var voll = d.toLocaleString(undefined, { day: '2-digit', month: '2-digit', year: 'numeric',
+                                                 hour: '2-digit', minute: '2-digit' });
+        return ' <span class="wi-cfb-imp" title="' + esc(t('wissen.cfb_imp_hint', { t: voll })) + '">('
+            + esc(tag) + ')</span>';
+    }
+
+    // ⚠ DIE BEREICHSZEILEN WERDEN NICHT NEU GEZEICHNET (cfbRenderBaum zeichnet
+    // nur einmal, sonst gingen Haken verloren) - das Datum wird deshalb an der
+    // bestehenden Zeile ersetzt, sobald der Bindungs-Abruf neue Zeiten bringt.
+    function cfbImpBereiche() {
+        var tree = $('wi-cfb-tree');
+        if (!tree) return;
+        tree.querySelectorAll('li.wi-cfb-sp').forEach(function (li) {
+            var n = cfbKind(li, 'wi-cf-node');
+            if (!n) return;
+            var alt = cfbKind(n, 'wi-cfb-imp');
+            if (alt) alt.remove();
+            var html = cfbImpHtml(_cfbImporte[li.getAttribute('data-key')]);
+            if (html) n.insertAdjacentHTML('beforeend', html);
+        });
     }
 
     // ⚠ DER EDITOR IST NUR BEI "Neuer Bereich" ODER "Bearbeiten" OFFEN
@@ -1587,6 +1620,7 @@
             + '<span class="wi-cfb-nm"' + (hatKids ? ' role="button" tabindex="0" title="' + esc(t('wissen.cfb_name_hint')) + '"' : '') + '>'
             + esc(n.title) + '</span>'
             + (hatKids ? ' <span class="wi-cf-cnt">(' + cfZahl(n) + ')</span>' + cfbTogHtml(false) : '')
+            + cfbImpHtml(n.importiert)
             + '</div>'
             + (hatKids ? '<ul class="wi-cf-kids" role="group">' + n.kids.map(cfbSeiteHtml).join('') + '</ul>' : '')
             + '</li>';
@@ -2246,7 +2280,8 @@
     function cfBaum(pages) {
         var byId = {}, roots = [];
         pages.forEach(function (p) {
-            if (p && p.id != null) byId[String(p.id)] = { id: String(p.id), title: p.title || '', kids: [] };
+            if (p && p.id != null) byId[String(p.id)] = { id: String(p.id), title: p.title || '',
+                                                          importiert: p.importiert || '', kids: [] };
         });
         pages.forEach(function (p) {
             if (!p || p.id == null) return;

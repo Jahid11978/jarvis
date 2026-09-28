@@ -18894,6 +18894,18 @@ async def wissen_confluence_pages(space: str = "", user: str = Depends(require_a
         # with_parent: der /wissen-Extraktor zeigt die Seiten als Baum
         pages = await asyncio.to_thread(c.pages_in_space, space, 500, True)
         pages.sort(key=lambda p: (p.get("title") or "").lower())
+        # Datum des letzten Imports (Confluence-Abgleich) je Seite – der Baum
+        # der Einbindung zeigt es an der Zeile. Nur fuer Seiten DIESER Liste.
+        try:
+            from backend import confluence_abgleich as _cfa
+            zeiten = _cfa.import_zeiten()["seiten"]
+        except Exception as e:  # noqa: BLE001
+            print(f"[Wissen/CF] Importzeiten nicht ermittelbar: {e}")
+            zeiten = {}
+        for p in pages:
+            z = zeiten.get(str(p.get("id") or ""))
+            if z:
+                p["importiert"] = z
         return JSONResponse({"ok": True, "count": len(pages), "pages": pages})
     except ConfluenceError as e:
         return JSONResponse({"ok": False, "status": e.status, "error": str(e)})
@@ -19046,8 +19058,17 @@ async def wissen_cf_bindung_lesen(user: str = Depends(require_auth)):
     except _cfb.BestandUnlesbar as e:
         # Nicht "keine Eintraege" melden, wenn es nur nicht lesbar ist.
         return JSONResponse({"ok": False, "error": str(e)}, status_code=500)
+    # Juengster Import je Bereich – fuer "(Datum)" hinter [+]/[-] im Baum.
+    importe = {}
+    if skill and conf:
+        try:
+            from backend import confluence_abgleich as _cfa
+            importe = _cfa.import_zeiten()["bereiche"]
+        except Exception as e:  # noqa: BLE001
+            print(f"[Wissen/CF-Bindung] Importzeiten nicht ermittelbar: {e}")
     return JSONResponse({"ok": True, "skill_aktiv": skill, "configured": conf,
-                         "aktiv": skill and conf, "bereiche": bereiche})
+                         "aktiv": skill and conf, "bereiche": bereiche,
+                         "importe": importe})
 
 
 async def _cfb_auswahl_lesen(request: Request, user: str):
@@ -23260,10 +23281,32 @@ async def cron_run_now(job_id: str, user: str = Depends(require_auth)):
     _cron_owned_or_404(job_id, user)
     _require_trigger_admin(user, {}, "POST /api/cron/run")
     try:
-        result = await cron_manager.run_now(job_id)
+        result = await cron_manager.run_now(job_id, von=user)
         return JSONResponse({"ok": True, "result": result[:500] if result else ""})
     except ValueError as e:
         raise HTTPException(404, str(e))
+
+
+@app.get("/api/cron/{job_id}/log")
+async def cron_log_lesen(job_id: str, limit: int = 50, vor: float | None = None,
+                         user: str = Depends(require_auth)):
+    """Protokoll eines Auftrags: seine Laeufe, neueste zuerst (backend/cron_log.py).
+
+    Dieselbe Sichtbarkeit wie die Liste (``_cron_owned_or_404``): wer den
+    Auftrag nicht sieht, sieht auch seine Ergebnisse nicht – sie koennen alles
+    enthalten, was ein Agentenlauf gelesen hat.
+    ``vor`` = Beginn des aeltesten angezeigten Laufs (Nachladen).
+    """
+    _cron_owned_or_404(job_id, user)
+    from backend import cron_log
+    try:
+        eintraege = await asyncio.to_thread(cron_log.lesen, job_id, limit, vor)
+    except Exception as e:  # noqa: BLE001
+        # Nicht als "keine Laeufe" melden, wenn das Protokoll nur nicht lesbar ist.
+        return JSONResponse({"ok": False, "error": f"Protokoll nicht lesbar: {e}"},
+                            status_code=500)
+    return JSONResponse({"ok": True, "eintraege": eintraege,
+                         "mehr": len(eintraege) >= max(1, min(int(limit or 50), 500))})
 
 
 @app.post("/api/cron/{job_id}/claim")

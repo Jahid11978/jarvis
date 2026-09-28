@@ -15,6 +15,12 @@ window.cronManager = new (class JarvisCronManager {
         this._container   = null;
         this._activeSubTab = 'cron';
         this._initialized  = false;
+        // Auftraege, deren Protokoll aufgeklappt ist. ⚠ Die Liste wird nach
+        // JEDEM Lauf neu gezeichnet (cron_event 'finished' -> _loadJobs) - der
+        // Wissensabgleich allein alle fuenf Minuten. Ohne diesen Merker klappte
+        // ein offenes Protokoll unter der Hand wieder zu.
+        this._logOffen = new Set();
+        this._logDaten = {};   // job_id -> {eintraege, mehr}
     }
 
     init() {
@@ -411,6 +417,13 @@ window.cronManager = new (class JarvisCronManager {
     }
 
     _renderJobItems(el) {
+        // Aufgeklappte Protokoll-Eintraege VOR dem Ueberschreiben merken - das
+        // neue Markup kennt sie nicht, und _renderLog liest sonst eine leere Box.
+        this._logAufVorher = {};
+        el.querySelectorAll('.cron-log').forEach(b => {
+            this._logAufVorher[b.dataset.id] = new Set(Array.prototype.map.call(
+                b.querySelectorAll('.cron-log-eintrag[open]'), x => x.dataset.ts));
+        });
         if (!this._jobs.length) {
             el.innerHTML = `<p class="kb-empty" style="text-align:center;padding:16px 0;">${window.t('cron.no_jobs')}</p>`;
             return;
@@ -465,6 +478,7 @@ window.cronManager = new (class JarvisCronManager {
                     <code  class="cron-item-code" data-tip="${this._esc(this._cronToText(job.cron))}">${this._esc(job.cron)}</code>
                     <div   class="cron-item-actions">
                         <button class="kb-btn-run  cron-run-btn"  data-id="${job.id}" title="Jetzt ausführen">▶</button>
+                        <button class="kb-btn-icon cron-log-btn" data-id="${job.id}" aria-expanded="${this._logOffen.has(job.id) ? 'true' : 'false'}" title="${this._esc(window.t('cron.log_hint'))}">${this._esc(window.t('cron.log_btn'))}</button>
                         ${claimBtn}
                         <button class="kb-btn-icon cron-edit-btn" data-id="${job.id}" title="Bearbeiten">✏️</button>
                         <button class="kb-btn-danger cron-del-btn" data-id="${job.id}" title="Löschen">${JarvisIcons.trash()}</button>
@@ -475,6 +489,7 @@ window.cronManager = new (class JarvisCronManager {
                 </div>
                 <div class="cron-item-task">${this._esc(job.task)}</div>
                 <div class="cron-item-meta">${kindBadge}${ownerBadge} ${window.t('cron.last_run')}: ${lastRun}${job.last_result ? ` · ${this._esc(job.last_result.substring(0,80))}${job.last_result.length>80?'…':''}` : ''}</div>
+                <div class="cron-log" data-id="${job.id}"${this._logOffen.has(job.id) ? '' : ' hidden'}></div>
             </div>`;
         }).join('')}</div>`;
 
@@ -483,6 +498,101 @@ window.cronManager = new (class JarvisCronManager {
         el.querySelectorAll('.cron-edit-btn').forEach(btn => { btn.onclick = () => this._editJob(btn.dataset.id); });
         el.querySelectorAll('.cron-run-btn').forEach(btn  => { btn.onclick = () => this._runJobNow(btn.dataset.id, btn); });
         el.querySelectorAll('.cron-toggle').forEach(cb    => { cb.onchange  = () => this._toggleJob(cb.dataset.id, cb.checked); });
+        el.querySelectorAll('.cron-log-btn').forEach(btn  => { btn.onclick = () => this._toggleLog(btn.dataset.id); });
+        // Offene Protokolle nach dem Neuzeichnen wieder fuellen: erst aus dem
+        // Merker (sofort, ohne Flackern), dann frisch vom Server - ein Lauf
+        // hat die Liste ja gerade verlaengert.
+        this._logOffen.forEach(id => {
+            if (!this._jobs.some(j => j.id === id)) { this._logOffen.delete(id); return; }
+            this._renderLog(id);
+            this._loadLog(id);
+        });
+    }
+
+    // ─── Protokoll je Auftrag (Vorgabe 2026-09-28) ─────────────────────────
+    // Ein Eintrag je Lauf (backend/cron_log.py) - last_result oben kennt nur
+    // den LETZTEN, der naechste Lauf ueberschreibt ihn.
+
+    _logBox(id) {
+        return Array.prototype.find.call(document.querySelectorAll('#cron-list .cron-log'),
+                                         b => b.dataset.id === id) || null;
+    }
+
+    _toggleLog(id) {
+        const auf = !this._logOffen.has(id);
+        if (auf) this._logOffen.add(id); else this._logOffen.delete(id);
+        const box = this._logBox(id);
+        if (box) box.hidden = !auf;
+        const btn = Array.prototype.find.call(document.querySelectorAll('#cron-list .cron-log-btn'),
+                                              b => b.dataset.id === id);
+        if (btn) btn.setAttribute('aria-expanded', auf ? 'true' : 'false');
+        if (auf) { this._renderLog(id); this._loadLog(id); }
+    }
+
+    async _loadLog(id, aelter = false) {
+        const alt = this._logDaten[id];
+        let url = `/api/cron/${encodeURIComponent(id)}/log?limit=50`;
+        const letzter = aelter && alt && alt.eintraege.length ? alt.eintraege[alt.eintraege.length - 1] : null;
+        if (letzter) url += `&vor=${encodeURIComponent(letzter.ts)}`;
+        try {
+            const r = await fetch(url, { headers: _authHeaders() });
+            const d = await r.json().catch(() => ({}));
+            if (!r.ok || !d.ok) throw new Error(d.error || d.detail || ('HTTP ' + r.status));
+            const neu = d.eintraege || [];
+            this._logDaten[id] = {
+                eintraege: letzter ? alt.eintraege.concat(neu) : neu,
+                mehr: !!d.mehr, fehler: '',
+            };
+        } catch (e) {
+            // ⚠ Kein "noch keine Laeufe" bei einem Fehler: das waere eine
+            // Falschaussage ueber einen Auftrag, der vielleicht taeglich laeuft.
+            this._logDaten[id] = Object.assign({ eintraege: [], mehr: false }, alt || {},
+                                               { fehler: e.message || String(e) });
+        }
+        if (this._logOffen.has(id)) this._renderLog(id);
+    }
+
+    _renderLog(id) {
+        const box = this._logBox(id);
+        if (!box) return;
+        const d = this._logDaten[id];
+        if (!d) { box.innerHTML = `<div class="cron-log-leer">${this._esc(window.t('common.loading'))}</div>`; return; }
+        const offen = new Set(Array.prototype.map.call(box.querySelectorAll('.cron-log-eintrag[open]'),
+                                                       x => x.dataset.ts));
+        // Einmalig nach einem Neuzeichnen der Liste (siehe _renderJobItems);
+        // danach ist das DOM wieder die Wahrheit - sonst oeffnete sich ein
+        // Eintrag, den jemand inzwischen zugeklappt hat, beim naechsten Mal neu.
+        const merk = (this._logAufVorher || {})[id];
+        if (merk) { merk.forEach(ts => offen.add(ts)); delete this._logAufVorher[id]; }
+        const zeilen = d.eintraege.map(e => {
+            const zeit = e.ts ? new Date(e.ts * 1000).toLocaleString('de-DE') : '—';
+            const wer = e.ausloeser === 'manuell'
+                ? window.t('cron.log_manual') + (e.von ? ' · ' + e.von : '')
+                : window.t('cron.log_schedule');
+            const erg = String(e.ergebnis || '');
+            const kurz = erg.split('\n')[0].slice(0, 140) + (erg.length > 140 || erg.indexOf('\n') !== -1 ? '…' : '');
+            return `<details class="cron-log-eintrag ${e.ok ? 'ok' : 'fehler'}" data-ts="${this._esc(String(e.ts))}"${offen.has(String(e.ts)) ? ' open' : ''}>`
+                + `<summary><span class="cron-log-status">${this._esc(window.t(e.ok ? 'cron.log_ok' : 'cron.log_err'))}</span>`
+                + `<span class="cron-log-zeit">${this._esc(zeit)}</span>`
+                + `<span class="cron-log-wer">${this._esc(wer)}</span>`
+                + `<span class="cron-log-dauer">${this._esc(this._logDauer(e.dauer_s))}</span>`
+                + `<span class="cron-log-kurz">${this._esc(kurz || window.t('cron.log_no_result'))}</span></summary>`
+                + `<pre class="cron-log-voll">${this._esc(erg || window.t('cron.log_no_result'))}</pre>`
+                + (e.gekuerzt ? `<div class="cron-log-hinweis">${this._esc(window.t('cron.log_truncated'))}</div>` : '')
+                + `</details>`;
+        }).join('');
+        box.innerHTML = (d.fehler ? `<div class="cron-log-fehlermeldung">${this._esc(window.t('cron.log_load_err', { e: d.fehler }))}</div>` : '')
+            + (zeilen || (d.fehler ? '' : `<div class="cron-log-leer">${this._esc(window.t('cron.log_none'))}</div>`))
+            + (d.mehr ? `<button class="kb-btn-icon cron-log-mehr" type="button">${this._esc(window.t('cron.log_more'))}</button>` : '');
+        const mehr = box.querySelector('.cron-log-mehr');
+        if (mehr) mehr.onclick = () => { mehr.disabled = true; this._loadLog(id, true); };
+    }
+
+    _logDauer(s) {
+        const n = Number(s);
+        if (!isFinite(n)) return '';
+        if (n >= 60) return (n / 60).toFixed(1).replace('.', ',') + ' min';
+        return n.toFixed(1).replace('.', ',') + ' s';
     }
 
     _showJobForm(job = null) {

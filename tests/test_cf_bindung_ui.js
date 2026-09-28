@@ -804,6 +804,66 @@ section('Einbindung fremder Wissensgruppen: KEINE Knoepfe (Code-Review 2026-09-2
     s.zu();
 }
 
+// ════════════════════════════════════════════════════════════════════════
+section('14. Datum des letzten Imports hinter [+]/[-] bzw. der Zeile (Vorgabe 2026-09-28)');
+{
+    const IMP = '2026-09-28T20:15:00', IMP3 = '2026-09-27T08:00:00';
+    const pages = JSON.parse(JSON.stringify(PAGES));
+    pages.NEXUS[0].importiert = IMP;      // 1 Handbuch (mit Unterseiten)
+    pages.NEXUS[2].importiert = IMP3;     // 3 Kapitel A.1 (Blatt)
+    const ein = { id: 'e1', typ: 'auswahl', name: 'NEXUS Dokumentation',
+        auswahl: [{ key: 'NEXUS', name: 'NEXUS Dokumentation', start: false, ganz: false, seiten: ['1', '3'], zweige: [] }],
+        gruppen: ['g1'], tags: [], gruppen_info: [{ id: 'g1', name: 'Technik', color: '#888' }], abgleich: null };
+    const s = await seite({ pages: pages, bindung: { ok: true, aktiv: true, bereiche: [ein],
+                                                     importe: { NEXUS: IMP } } });
+    const d = s.doc;
+    const tag = (iso) => new s.win.Date(iso).toLocaleDateString(undefined, { day: '2-digit', month: '2-digit', year: 'numeric' });
+    const imp = (li) => { const n = li && li.querySelector(':scope > .wi-cf-node'); return n ? n.querySelector(':scope > .wi-cfb-imp') : null; };
+    const letztes = (li) => { const n = li && li.querySelector(':scope > .wi-cf-node'); return n ? n.lastElementChild : null; };
+    const nx = s.sp('NEXUS');
+    check('(Positivkontrolle) Bereich NEXUS steht im Baum, mit [+]', !!nx && !!s.tog(nx));
+    const i0 = imp(nx);
+    check('⚠ importierter Bereich: Datum in Klammern', !!i0 && i0.textContent === '(' + tag(IMP) + ')',
+          i0 ? i0.textContent : 'fehlt');
+    check('⚠ …HINTER [+] (letztes Element der Zeile)', i0 && letztes(nx) === i0
+          && (s.tog(nx).compareDocumentPosition(i0) & s.win.Node.DOCUMENT_POSITION_FOLLOWING));
+    check('Tooltip nennt Datum und Uhrzeit', i0 && /Zuletzt ins Wissen übernommen: /.test(i0.getAttribute('title') || '')
+          && /2026/.test(i0.getAttribute('title')), i0 ? i0.getAttribute('title') : '');
+    check('⚠ nicht importierter Bereich: KEIN Datum', !imp(s.sp('OPS')) && !imp(s.sp('LEER')));
+
+    await s.klick(s.nm(nx));
+    await warten(40);
+    const p1 = s.pg('1'), p2 = s.pg('2'), p3 = s.pg('3');
+    check('(Positivkontrolle) Seiten geladen', !!p1 && !!p2 && !!p3);
+    const i1 = imp(p1);
+    check('⚠ importierte Seite MIT Unterseiten: Datum hinter [+]',
+          !!i1 && i1.textContent === '(' + tag(IMP) + ')' && letztes(p1) === i1
+          && (s.tog(p1).compareDocumentPosition(i1) & s.win.Node.DOCUMENT_POSITION_FOLLOWING),
+          p1 ? p1.querySelector('.wi-cf-node').innerHTML : 'fehlt');
+    const i3 = imp(p3);
+    check('⚠ importierte Seite OHNE Unterseiten: Datum am Ende der Zeile (hinter dem Namen)',
+          !!i3 && i3.textContent === '(' + tag(IMP3) + ')' && letztes(p3) === i3 && !s.tog(p3),
+          p3 ? p3.querySelector('.wi-cf-node').innerHTML : 'fehlt');
+    check('⚠ nicht importierte Seite: KEIN Datum', !imp(p2) && !imp(s.pg('4')));
+
+    await s.klick(s.tog(nx));   // [-]? der Bereich ist offen -> zu
+    await s.klick(s.tog(nx));   // [+] wieder auf
+    check('[+]/[-] umschalten laesst das Datum stehen (genau eines, weiter hinten)',
+          nx.querySelectorAll(':scope > .wi-cf-node > .wi-cfb-imp').length === 1 && letztes(nx) === imp(nx)
+          && /\[[-+]\]/.test(s.tog(nx).textContent), s.tog(nx).textContent);
+
+    // Nach dem Loeschen zeichnet cfbRender() erneut: das Datum der Bereichszeile
+    // darf dabei nicht verdoppelt werden (die Zeile selbst bleibt stehen).
+    await s.klick(d.querySelector('#wi-cfb-list .wi-item[data-id="e1"] .wi-cfb-del'));
+    await warten(60);
+    check('(Positivkontrolle) Loeschen lief, die Liste wurde neu gezeichnet',
+          s.rufe.some(r => r.m === 'DELETE') && !d.querySelector('#wi-cfb-list .wi-item[data-id="e1"]'));
+    check('⚠ erneutes Zeichnen: das Datum steht GENAU EINMAL da',
+          nx.querySelectorAll(':scope > .wi-cf-node > .wi-cfb-imp').length === 1,
+          String(nx.querySelectorAll('.wi-cfb-imp').length));
+    s.zu();
+}
+
 clearTimeout(wach);
 bilanz = true;
 console.log(`\n\x1b[1mErgebnis: ${OK}/${OK + FAIL}\x1b[0m`);

@@ -5612,6 +5612,34 @@ body.light .kb-cl-spanne { color: #5b6678; }
     opacity: 0.65;
     padding-left: 16px;
 }
+/* Protokoll je Auftrag (Vorgabe 2026-09-28): ein <details> je Lauf.
+   Status steht als TEXT da, nicht nur als Farbe. */
+.cron-log {
+    margin: 6px 0 2px 16px;
+    border-left: 2px solid var(--border);
+    padding-left: 8px;
+    font-size: 0.76rem;
+}
+.cron-log-eintrag { border-bottom: 1px solid rgba(var(--fg-rgb), 0.05); }
+.cron-log-eintrag > summary {
+    display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 10px;
+    padding: 3px 0; cursor: pointer; color: var(--text-secondary);
+}
+.cron-log-status { font-weight: 600; min-width: 5.5em; }
+.cron-log-eintrag.ok .cron-log-status { color: var(--success); }
+.cron-log-eintrag.fehler .cron-log-status { color: var(--danger); }
+.cron-log-zeit { color: var(--text-primary); white-space: nowrap; }
+.cron-log-dauer { white-space: nowrap; }
+.cron-log-kurz { flex: 1 1 200px; min-width: 0; overflow-wrap: anywhere; }
+.cron-log-voll {
+    margin: 2px 0 6px; padding: 6px 8px; max-height: 320px; overflow: auto;
+    white-space: pre-wrap; overflow-wrap: anywhere; font-size: 0.74rem;
+    background: var(--bg-secondary); color: var(--text-primary);
+    border-radius: var(--radius-sm);
+}
+.cron-log-hinweis, .cron-log-leer { color: var(--text-muted); padding: 3px 0; }
+.cron-log-fehlermeldung { color: var(--danger); padding: 3px 0; }
+.cron-log-mehr { margin: 6px 0 2px; }
 .cron-item-path {
     font-size: 0.78rem;
     color: var(--text-secondary);
