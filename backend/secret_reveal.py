@@ -74,7 +74,7 @@ def _reset_fuer_tests() -> None:
 def benutzer_quelle(bereich: str):
     """Die ``klartext``-Funktion des Konten-Moduls – oder None.
 
-    Diese vier Bereiche gehoeren dem BENUTZER: er hat die Zugangsdaten selbst
+    Diese fuenf Bereiche gehoeren dem BENUTZER: er hat die Zugangsdaten selbst
     eingetragen. Der Aufrufer prueft zusaetzlich die Bereichs-Freigabe.
     """
     b = (bereich or "").strip().lower()
@@ -89,6 +89,9 @@ def benutzer_quelle(bereich: str):
         return m.klartext
     if b == "jira":
         from backend import jira_accounts as m
+        return m.klartext
+    if b == "confluence":
+        from backend import confluence_accounts as m
         return m.klartext
     return None
 

@@ -109,6 +109,20 @@ class ConfluenceClient:
             return {}
 
     # ── High-Level ────────────────────────────────────────────────
+    def current_user(self) -> dict:
+        """Wer ist dieser Token in Confluence? (``/rest/api/user/current``)
+
+        Gegenstueck zu ``JiraClient.myself()`` und aus demselben Grund da: ein
+        Token ist ohne diese Auskunft eine Zeichenkette ohne Aussage, und ein
+        versehentlich fremder faellt nie auf. Rueckgabe hat die Felder
+        ``displayName`` und ``username``/``userKey`` (Server/Data-Center).
+
+        Bewusst KEIN Rueckfall auf ``spaces()`` hier drin: diese Methode
+        beantwortet genau eine Frage, und ein Aufrufer, der auch mit einer
+        anonymen Lebendpruefung zufrieden ist, entscheidet das selbst
+        (``confluence_accounts.testen``)."""
+        return self._request("GET", "/rest/api/user/current") or {}
+
     def spaces(self, limit: int = 50) -> list[dict]:
         d = self._request("GET", "/rest/api/space", params={"limit": limit})
         return d.get("results", [])

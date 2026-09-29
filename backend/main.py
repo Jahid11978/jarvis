@@ -1226,6 +1226,14 @@ _ACTIVITY_PAGES = {
     "feedback": "Feedback",
     "claude": "Claude",
     "jira_addon": "Jira",
+    # ⚠ MIT BINDESTRICH, weil activity.js die Kennung aus dem PFAD bildet
+    # (`/confluence-addon` → `confluence-addon`). Die beiden Nachbarn oben
+    # (`jira_addon`, `ai_mouse`) tragen Unterstriche und treffen deshalb nie –
+    # ihre Seiten landen unter dem neutralen "Aktion". Das ist ein
+    # Bestandsfehler und hier nicht mitgeaendert (eine Verhaltensaenderung an
+    # einer Anzeige, die niemand beanstandet hat); der neue Eintrag macht ihn
+    # nicht nach.
+    "confluence-addon": "Confluence",
 }
 
 
@@ -2007,6 +2015,50 @@ async def require_userchat_access(request: Request, user: str = Depends(require_
     raise HTTPException(status_code=403,
         detail="Der Benutzer-Chat ist nicht aktiv – der Skill 'Benutzer-Chat' "
                "muss unter Einstellungen → Skills eingeschaltet werden.")
+
+
+def _user_may_use_confluence_account(user: str) -> bool:
+    """Praedikat: Darf dieser Benutzer einen eigenen Confluence-Token pflegen?
+
+    EINE Instanz der Regel – die Dependency darunter UND die Rechtematrix von
+    ``POST /api/secret/reveal`` fragen dieselbe Funktion. Zwei Fassungen liefen
+    beim naechsten Feinschliff auseinander, und dann duerfte jemand seinen Token
+    setzen, aber nicht mehr ansehen (oder umgekehrt).
+    """
+    return bool((user or "").strip()) and _skill_active("confluence")
+
+
+async def require_confluence_account_access(request: Request,
+                                           user: str = Depends(require_auth)) -> str:
+    """FastAPI Dependency: eigener Confluence-Zugang (→ /api/confluence/account*).
+
+    WIE BEIM BENUTZER-CHAT UND AUS DEMSELBEN GRUND KEINE EIGENE FREIGABELISTE
+    (Entscheidung des Nutzers 2026-09-29): der Skill-Schalter ist die einzige
+    Schranke. Der Token ERWEITERT keine Rechte, er ERSETZT die des
+    Sammelzugangs durch die eigenen – in aller Regel engeren. Wer die
+    ``confluence_*``-Werkzeuge im Chat benutzen darf (also jeder, der den
+    Skill nutzen darf), soll dabei mit SEINEN Berechtigungen arbeiten koennen;
+    eine zusaetzliche Liste waere eine Schranke vor einer offenen Tuer und
+    haette den umgekehrten Effekt: wer nicht darauf steht, liest weiter mit dem
+    Servertoken.
+
+    ⚠ DIE SCHRANKE IST DIE *DES BEREICHS*, NICHT DIE DER `/api/confluence/*`-
+    ENDPUNKTE DANEBEN. Jene sind Administratoren vorbehalten
+    (``require_local_auth``) und beantworten eine andere Frage – naemlich, was
+    der GEMEINSAME Zugang sieht. Wer hier `require_local_auth` einsetzte,
+    machte den persoenlichen Token zum Admin-Feature und liesse damit genau die
+    Benutzer aussen vor, um die es geht.
+
+    Wer spaeter doch eine Liste braucht, ergaenzt ein
+    ``_user_may_use_confluence`` nach dem Muster von ``_user_may_use_email`` –
+    und muss dann ``/api/me`` (permissions.confluence) mitziehen, sonst haengt
+    die Kachel an einer anderen Bedingung als der Zugriff.
+    """
+    if _user_may_use_confluence_account(user):
+        return user
+    raise HTTPException(status_code=403,
+        detail="Confluence ist nicht aktiv – der Skill 'Confluence' muss unter "
+               "Einstellungen → Skills eingeschaltet werden.")
 
 
 def _is_kb_group_editor(user: str, group: dict) -> bool:
@@ -6092,6 +6144,13 @@ async def get_me(user: str = Depends(require_auth)):
             # ist schlimmer als kein Knopf.
             "jira_assist": (_user_may_use_jira_assist(user)
                             and _skill_active("jira")),
+            # Eigener Confluence-Zugang: haengt NUR am Skill-Zustand – eine
+            # eigene Freigabeliste gibt es bewusst nicht (Begruendung in
+            # require_confluence_account_access). Die Kachel /confluence-addon
+            # blendet sich daran ein; ohne den Skill gaebe es dort nichts
+            # einzurichten, und eine Kachel, die in einen 403 fuehrt, ist
+            # schlimmer als keine.
+            "confluence": _skill_active("confluence"),
             # Gleiche Logik wie sap/email/tracks: Freigabe UND aktiver Skill.
             "claudesub": (_user_may_use_claudesub(user)
                           and _skill_active("claude_subagent")),
@@ -6799,7 +6858,8 @@ async def secret_reveal(request: Request, user: str = Depends(require_auth)):
     Bereich       wer darf
     ============= =================================================
     mail/sap/     der EIGENTUEMER; die Bereichs-Freigabe muss stehen
-    vemas/jira    (dieselbe wie fuer den Bereich selbst)
+    vemas/jira/   (dieselbe wie fuer den Bereich selbst – bei
+    confluence    Confluence ist das der Skill-Zustand)
     mount         Wissens-Editor oder Admin
     einstellung   nur Administratoren
     ============= =================================================
@@ -6808,7 +6868,7 @@ async def secret_reveal(request: Request, user: str = Depends(require_auth)):
     deren Formulare laden ihr Geheimnis laengst selbst im Klartext (Begruendung
     in ``backend/secret_reveal.py``).
 
-    **Ein anderer Benutzer ist ueberhaupt nicht adressierbar**: die vier
+    **Ein anderer Benutzer ist ueberhaupt nicht adressierbar**: die fuenf
     Konten-Bereiche nehmen KEINEN Benutzernamen aus dem Rumpf, sie arbeiten mit
     dem angemeldeten. Dieselbe Regel wie beim Empfaenger einer Erinnerung und
     beim Verlaufs-Loeschen – sonst waere der Endpunkt ein Weg in fremde
@@ -6861,6 +6921,10 @@ async def secret_reveal(request: Request, user: str = Depends(require_auth)):
             "sap": _user_may_use_sap,
             "vemas": _user_may_use_vemas,
             "jira": _user_may_use_jira_assist,
+            # Confluence: dieselbe Schranke wie fuer den Bereich selbst, also
+            # der Skill-Zustand (kein Admin-Zweig, keine Liste) – dieselbe
+            # Funktion, die die Dependency benutzt.
+            "confluence": _user_may_use_confluence_account,
         }[bereich]
         try:
             erlaubt = bool(darf(user))
@@ -9825,6 +9889,94 @@ async def confluence_page_api(id: str = "", title: str = "", space: str = "",
                              "text": html_to_text(body, 8000)})
     except ConfluenceError as e:
         return JSONResponse({"ok": False, "status": e.status, "error": str(e)})
+
+
+# ── Mein Confluence-Zugang (persoenlicher Token; Sammelzugang = Rueckfall) ──
+#
+# Die Schranke ist `require_confluence_account_access`, also der Skill-Zustand:
+# wer die confluence_*-Werkzeuge benutzen darf, darf dabei mit SEINEN
+# Berechtigungen arbeiten. Eine zusaetzliche Freigabeliste waere eine Schranke
+# vor einer offenen Tuer – der Token erweitert keine Rechte, er ERSETZT die des
+# Sammelzugangs durch die eigenen (in aller Regel engeren), und er laesst
+# Schreibvorgaenge in Confluence unter dem RICHTIGEN Namen erscheinen.
+#
+# ⚠ BEWUSST NICHT `require_local_auth` wie die fuenf Endpunkte darueber: jene
+# beantworten, was der GEMEINSAME Zugang sieht (Administratorenarbeit beim
+# Einrichten). Hier pflegt ein Benutzer sein eigenes Konto.
+
+@app.get("/api/confluence/account")
+async def confluence_account_get(user: str = Depends(require_confluence_account_access)):
+    """Eigener Confluence-Zugang – OHNE Token (nur ``token_gesetzt``)."""
+    from backend import confluence_accounts  # noqa: PLC0415
+    try:
+        return JSONResponse({"ok": True,
+                             "account": confluence_accounts.zugang_info(user)})
+    except Exception as e:  # noqa: BLE001
+        return JSONResponse({"ok": False, "error": str(e)}, status_code=500)
+
+
+@app.post("/api/confluence/account")
+async def confluence_account_set(request: Request,
+                                 user: str = Depends(require_confluence_account_access)):
+    """Eigenen Confluence-Token anlegen/aendern.
+
+    Der Rumpf geht UNVERAENDERT an ``confluence_accounts.speichern`` – die
+    Feld-Whitelist dort ist die einzige Instanz. Wuerde der Endpunkt vorfiltern,
+    verschwaende ein unbekanntes Feld stillschweigend und die Antwort meldete
+    trotzdem Erfolg (derselbe Fehler, der am 2026-08-12 beim Postfach behoben
+    wurde).
+    """
+    from backend import confluence_accounts  # noqa: PLC0415
+    try:
+        body = await request.json()
+    except Exception:  # noqa: BLE001
+        body = {}
+    if not isinstance(body, dict):
+        return JSONResponse({"ok": False, "error": "Ungueltiger Rumpf."}, status_code=400)
+    try:
+        info = confluence_accounts.speichern(user, body)
+    except confluence_accounts.ConfluenceKontoFehler as e:
+        code = 400 if getattr(e, "kategorie", "eingabe") == "eingabe" else 500
+        return JSONResponse({"ok": False, "error": str(e)}, status_code=code)
+    except Exception as e:  # noqa: BLE001
+        return JSONResponse({"ok": False, "error": str(e)}, status_code=500)
+    return JSONResponse({"ok": True, "account": info})
+
+
+@app.delete("/api/confluence/account")
+async def confluence_account_del(user: str = Depends(require_confluence_account_access)):
+    """Eigenen Confluence-Token entfernen – danach gilt wieder der Sammelzugang."""
+    from backend import confluence_accounts  # noqa: PLC0415
+    try:
+        weg = confluence_accounts.loeschen(user)
+    except Exception as e:  # noqa: BLE001
+        return JSONResponse({"ok": False, "error": str(e)}, status_code=500)
+    return JSONResponse({"ok": True, "removed": bool(weg),
+                         "account": confluence_accounts.zugang_info(user)})
+
+
+@app.post("/api/confluence/account/test")
+async def confluence_account_test(user: str = Depends(require_confluence_account_access)):
+    """Verbindungstest MIT dem eigenen Token (``/rest/api/user/current``).
+
+    Er prueft ausdruecklich den PERSOENLICHEN Zugang, nicht den, der gerade
+    gelten wuerde – sonst meldete der Knopf bei einem kaputten eigenen Token
+    "ok", weil der Sammelzugang antwortet, und der Benutzer haette keinen Weg,
+    seinen Fehler zu finden. Dieselbe Falle wie beim SAP- und beim
+    Jira-Verbindungstest.
+
+    Der Aufruf laeuft im Thread: ``ConfluenceClient`` ist synchron (requests),
+    im Event-Loop wuerde er alle uebrigen Benutzer blockieren.
+    """
+    from backend import confluence_accounts  # noqa: PLC0415
+    try:
+        d = await asyncio.to_thread(confluence_accounts.testen, user)
+    except confluence_accounts.ConfluenceKontoFehler as e:
+        code = 400 if getattr(e, "kategorie", "eingabe") == "eingabe" else 500
+        return JSONResponse({"ok": False, "error": str(e)}, status_code=code)
+    except Exception as e:  # noqa: BLE001
+        return JSONResponse({"ok": False, "error": str(e)}, status_code=500)
+    return JSONResponse({"ok": True, **d})
 
 
 # ─── SAP (Reiter: Read-Only-Zugriff) ─────────────────────────────────
@@ -14108,6 +14260,18 @@ async def jira_addon_seite():
     liegen ausschliesslich hinter `require_jira_assist_access`.
     """
     return FileResponse(FRONTEND_DIR / "jira_addon.html")
+
+
+@app.get("/confluence-addon")
+async def confluence_addon_seite():
+    """Seite fuer den persoenlichen Confluence-Zugang.
+
+    Leere Huelle wie /jira-addon und /sap: eine Navigation traegt keinen
+    Authorization-Header, die Berechtigung kann hier also nicht geprueft werden.
+    Die Seite holt `/api/me` und leitet Unberechtigte aufs Portal; die DATEN
+    liegen ausschliesslich hinter `require_confluence_account_access`.
+    """
+    return FileResponse(FRONTEND_DIR / "confluence_addon.html")
 
 
 # ─── AI Mouse (Bildschirmausschnitt vom Arbeitsplatz) ────────────────

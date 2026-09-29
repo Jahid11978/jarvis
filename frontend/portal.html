@@ -499,6 +499,21 @@
             <div class="pt-card-title" data-i18n="portal.card_jiraassist">Jira</div>
             <div class="pt-card-desc" data-i18n="portal.card_jiraassist_desc">Eigener Jira-Zugang und die Browser-Erweiterung für Ticket-Zusammenfassungen.</div>
         </a>
+        <!-- Confluence: Gegenstueck zur Jira-Kachel, uebernommen 2026-09-29.
+             Traegt NUR den persoenlichen Zugang – eine Browser-Erweiterung gibt
+             es fuer Confluence nicht, der zweite Container der Jira-Seite hat
+             hier also keinen Gegenstand.
+             Haengt allein am aktiven Confluence-Skill (permissions.confluence):
+             eine eigene Freigabeliste gibt es bewusst nicht, der Token erweitert
+             keine Rechte, er ersetzt die des Sammelzugangs durch die eigenen
+             (Begruendung in require_confluence_account_access). Ohne den Skill
+             gaebe es nichts einzurichten – und eine Kachel, die in einen 403
+             fuehrt, ist schlimmer als keine. -->
+        <a class="pt-card hidden" id="pt-card-confluence" href="/confluence-addon">
+            <div class="pt-card-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20"/><path d="M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2z"/><line x1="8" y1="7" x2="16" y2="7"/><line x1="8" y1="11" x2="13" y2="11"/></svg></div>
+            <div class="pt-card-title" data-i18n="portal.card_confluence">Confluence</div>
+            <div class="pt-card-desc" data-i18n="portal.card_confluence_desc">Eigener Confluence-Zugang: Seiten mit deinen Berechtigungen lesen und schreiben.</div>
+        </a>
         <!-- AI-Maus: Freigabe UND aktiver Skill (wie /email, /sap, /tracks).
              Eine Kachel, die in einen 403 fuehrt, ist schlimmer als keine. -->
         <a class="pt-card hidden" id="pt-card-aimouse" href="/ai-mouse">
@@ -673,7 +688,7 @@ sudo update-ca-certificates</code></pre>
 <script src="/static/js/cpubar.js?v=1"></script>
 <script src="/static/js/syspackages.js?v=2"></script>
 <script src="/static/js/sysload.js?v=3"></script>
-<script src="/static/js/i18n.js?v=306"></script>
+<script src="/static/js/i18n.js?v=307"></script>
 <script src="/static/js/theme.js?v=3"></script>
 <script src="/static/js/branding.js?v=26"></script>
 <script src="/static/js/security_incidents.js?v=35"></script>
@@ -816,6 +831,12 @@ sudo update-ca-certificates</code></pre>
         if (d.permissions && d.permissions.jira_assist) {
             var jaCard = document.getElementById('pt-card-jiraassist');
             if (jaCard) jaCard.classList.remove('hidden');
+        }
+        // Confluence: haengt NUR am Skill-Zustand (keine eigene Freigabe) –
+        // gleiche Logik wie beim Benutzer-Chat, Begruendung im Markup oben.
+        if (d.permissions && d.permissions.confluence) {
+            var cfCard = document.getElementById('pt-card-confluence');
+            if (cfCard) cfCard.classList.remove('hidden');
         }
         // Benutzer-Chat: ebenfalls nur am Skill-Zustand. Der Ungelesen-Poll
         // startet ERST hier – bei ausgeschaltetem Skill antwortet

@@ -219,6 +219,14 @@ _APP_DENY_REL = (
     # Jira-PAT traegt die vollen Rechte seines Besitzers; SCHREIBEN waere der
     # Weg, einem fremden Benutzer einen untergeschobenen Token zuzuordnen.
     "data/jira_accounts.json", "data/.jirakey",
+    # Persoenliche Confluence-Zugaenge (backend/confluence_accounts.py): gleiche
+    # Bauart und gleiche Begruendung wie bei Jira – `confluence_accounts.json` +
+    # `.confluencekey` sind zusammen der KLARTEXT-Token jedes hinterlegten
+    # Benutzers. Ein Confluence-PAT traegt die vollen Rechte seines Besitzers,
+    # und weil die confluence_*-Werkzeuge auch SCHREIBEN (Seite anlegen,
+    # kommentieren, Anhang hochladen), waere ein untergeschobener Token der Weg,
+    # unter fremdem Namen in die Hausdokumentation zu schreiben.
+    "data/confluence_accounts.json", "data/.confluencekey",
     # Persoenliche VEMAS-Zugaenge (backend/vemas_accounts.py): dieselbe Bauart
     # und dieselbe Begruendung wie bei SAP und Jira – `vemas_accounts.json` +
     # `.vemaskey` sind zusammen das KLARTEXT-Kennwort jedes hinterlegten
@@ -342,6 +350,7 @@ PRIVATE_FILES = ("data/scheduled_jobs.json", "data/file_watchers.json",
                  "data/email_state.json", "data/email_log.jsonl",
                  "data/addin_links.json", "data/sap_accounts.json",
                  "data/jira_accounts.json", "data/vemas_accounts.json",
+                 "data/confluence_accounts.json",
                  "data/short_tracks.json", "data/short_tracks_log.jsonl",
                  # Feedback: die Abgaben sind personenbezogen (Benutzername +
                  # Aussagen ueber die eigene Arbeit), die Formulare tragen
@@ -396,6 +405,7 @@ def privat_machen(pfad, modus: int = PRIVATE_FILE_MODE) -> None:
 # darin – wer ihn liest, kann Codeauftraege unter fremder Kennung starten.
 PRIVATE_FILES_STRENG = ("data/.mailkey", "data/.sapkey", "data/.jirakey",
                         "data/.vemaskey", "data/.mountkey",
+                        "data/.confluencekey",
                         "data/claude_subagent.json",
                         # Der private Signierschluessel des Hauses und sein
                         # Kennwort – die strengste Stufe ist hier das Mindeste.
@@ -690,6 +700,10 @@ SHELL_SECRET_PATHS = re.compile(
     # Rechte seines Besitzers.
     r'sap_accounts\.json\b|\.sapkey\b|'
     r'jira_accounts\.json\b|\.jirakey\b|'
+    # Dasselbe fuer Confluence: confluence_accounts.json + .confluencekey
+    # ergeben die Klartext-Token, und mit ihnen laesst sich unter fremdem Namen
+    # in die Hausdokumentation schreiben.
+    r'confluence_accounts\.json\b|\.confluencekey\b|'
     # Dasselbe fuer VEMAS: vemas_accounts.json + .vemaskey ergeben die
     # Klartext-Kennwoerter der VEMAS-Benutzer.
     r'vemas_accounts\.json\b|\.vemaskey\b|'

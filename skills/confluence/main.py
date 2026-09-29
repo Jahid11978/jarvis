@@ -15,7 +15,25 @@ from backend.confluence_client import ConfluenceClient, ConfluenceError, html_to
 
 
 def _client() -> ConfluenceClient:
-    return ConfluenceClient()
+    """Der Zugang fuer DIESEN Lauf – persoenlicher Token, sonst Sammelzugang.
+
+    Seit 2026-09-29 ist der in der Skill-Config hinterlegte Token nur noch der
+    RUECKFALL: wer unter *Mein Confluence-Zugang* (``/confluence-addon``) einen
+    eigenen PAT hinterlegt, arbeitet damit – und schreibt in Confluence unter
+    seinem eigenen Namen. Begruendung und Reichweite: Docstring von
+    ``backend.confluence_accounts``.
+
+    Der Benutzer kommt aus einem ContextVar, den der Dispatch je Werkzeug-Aufruf
+    setzt – NIE aus einem Werkzeug-Argument: sonst koennte das Modell waehlen,
+    mit wessen Token es liest und in wessen Namen es schreibt.
+
+    DIES IST DIE EINZIGE Konstruktionsstelle des Skills (auch ``_Base._guard``
+    laeuft darueber). Waere sie nur halb umgestellt, lieferten zwei Werkzeuge
+    desselben Auftrags verschiedene Ergebnisse und niemand koennte erklaeren
+    warum – genau der Fehler, der beim Jira-Zugang vier Stellen gekostet hat.
+    """
+    from backend import confluence_accounts  # noqa: PLC0415 – Zirkelimport
+    return confluence_accounts.client_fuer_lauf()
 
 
 def _as_storage(body: str) -> str:

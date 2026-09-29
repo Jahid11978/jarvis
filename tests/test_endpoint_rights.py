@@ -287,6 +287,27 @@ EXEMPT = {
     # Bereichs-Freigabe und nicht Admin.
     ("get", "/api/jira/account"), ("post", "/api/jira/account"),
     ("delete", "/api/jira/account"), ("post", "/api/jira/account/test"),
+    # ── Mein Confluence-Zugang (2026-09-29) ──
+    # `require_confluence_account_access`, also der Skill-Zustand – bewusst OHNE
+    # eigene Freigabeliste und bewusst NICHT `require_local_auth` wie die fuenf
+    # Lese-Endpunkte unter /api/confluence/ daneben.
+    #
+    # WARUM DAS HIER RICHTIG IST, obwohl es nach "Zugangsdaten" klingt: es ist
+    # dieselbe Einstufung wie /api/jira/account und /api/sap/account – der Token
+    # ERWEITERT keine Rechte, er ERSETZT die des Sammelzugangs durch die
+    # eigenen, in aller Regel engeren. Diese Routen sind der Weg, das Muster
+    # "fremde Zugangsdaten als Vollmacht" loszuwerden, nicht ein neuer Fall
+    # davon: bis dahin las JEDER Chat-Benutzer Confluence mit den Rechten EINES
+    # Servertokens und schrieb unter dessen Namen. Herausgegeben wird NIE ein
+    # Token, auch nicht maskiert (`confluence_accounts.zugang_info`).
+    #
+    # ⚠ WARUM KEINE eigene Freigabeliste: mit einer Liste waere der eigene Token
+    # ein Privileg, und wer nicht darauf steht, liest weiter mit dem Servertoken
+    # – also genau die Lage, die hier beseitigt wird. Die Schranke ist der
+    # Skill-Schalter, wie beim Benutzer-Chat.
+    ("get", "/api/confluence/account"), ("post", "/api/confluence/account"),
+    ("delete", "/api/confluence/account"),
+    ("post", "/api/confluence/account/test"),
     # ── Kennwort im Klartext ansehen (2026-09-04) ──
     # `require_auth` ist hier KEIN Rueckfall, sondern die einzige moegliche
     # Dependency: die Rechte sind JE BEREICH verschieden und stehen deshalb im
@@ -334,6 +355,9 @@ RANK = {"require_local_auth": 3, "require_admin_or_knowledge_editor": 2,
         # Bereichs-Schranke ohne eigene Freigabeliste: prueft NUR, ob der Skill
         # "userchat" an ist. Damit auf der Ebene von require_auth, nicht darueber.
         "require_userchat_access": 1,
+        # Gleiche Ebene und gleiche Begruendung wie der Benutzer-Chat: prueft
+        # NUR, ob der Skill "confluence" an ist – keine eigene Freigabeliste.
+        "require_confluence_account_access": 1,
         "require_auth_pwchange": 1, "require_auth": 1, "require_auth_or_query": 1,
         "require_admin_or_query": 3, "require_auth_or_agent": 1}
 

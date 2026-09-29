@@ -4188,6 +4188,18 @@ KRITISCH – Autonomie-Regeln:
                     _v_token = _vcv.set(_uname or "")
                 except Exception:  # noqa: BLE001
                     _vcv = None
+                # Persoenlicher Confluence-Zugang fuer die confluence_*-Werkzeuge
+                # (seit 2026-09-29). Gleiche Begruendung wie bei Postfach, SAP,
+                # Jira und VEMAS: es ist eine Personen-, keine Rechtefrage, und
+                # der Benutzer darf NIEMALS als Werkzeug-Argument kommen – sonst
+                # koennte das Modell waehlen, mit wessen Token es liest und
+                # unter wessen Namen es eine Seite anlegt oder kommentiert.
+                _c_token = _ccv = None
+                try:
+                    from backend.confluence_accounts import current_confluence_user as _ccv
+                    _c_token = _ccv.set(_uname or "")
+                except Exception:  # noqa: BLE001
+                    _ccv = None
                 try:
                     result = await tool.execute(**exec_args)
                 finally:
@@ -4215,6 +4227,11 @@ KRITISCH – Autonomie-Regeln:
                     if _v_token is not None and _vcv is not None:
                         try:
                             _vcv.reset(_v_token)
+                        except Exception:  # noqa: BLE001
+                            pass
+                    if _c_token is not None and _ccv is not None:
+                        try:
+                            _ccv.reset(_c_token)
                         except Exception:  # noqa: BLE001
                             pass
             _dur_ms = int((_time.monotonic() - _t0) * 1000)

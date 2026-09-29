@@ -47,7 +47,7 @@ const I18N = lies('frontend/js/i18n.js');
 // sind randlose Chat-Oberflaechen ohne Deckelung. /wissen war das Vorbild und
 // nutzt seit 2026-09-28 denselben Baustein.
 const SEITEN = ['wissen', 'feedback', 'tracks', 'support', 'sap', 'vemas', 'email', 'excel',
-                'jira_addon', 'ai_mouse', 'claude', 'supportagent', 'api'];
+                'jira_addon', 'confluence_addon', 'ai_mouse', 'claude', 'supportagent', 'api'];
 
 let ok = 0, fail = 0;
 function c(name, bed, info) {

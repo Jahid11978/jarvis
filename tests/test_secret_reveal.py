@@ -101,6 +101,11 @@ KONTEN = {
     "vemas": _mach_konto("vemas", ("password", "api_token"),
                          {"anna": {"api_token": "Vem!3"}}),
     "jira": _mach_konto("jira", ("api_token",), {"anna": {"api_token": "Jir!4"}}),
+    # Confluence (2026-09-29): fuenfter Konten-Bereich. Seine Schranke ist der
+    # SKILL-Zustand statt einer Benutzerliste – die Matrix unten stellt dieselben
+    # Fragen, nur ueber ein eigenes Praedikat.
+    "confluence": _mach_konto("confluence", ("api_token",),
+                              {"anna": {"api_token": "Cfl!5"}}),
 }
 for n, m in KONTEN.items():
     sys.modules["backend.%s_accounts" % n] = m
@@ -151,7 +156,7 @@ check("… nach dem Zurcksetzen wieder frei", sr.drossel_ok("anna")[0])
 # ══ 2. Quellen ═════════════════════════════════════════════════════════════
 abschnitt("2 – Jede Quelle liefert (wert, fehler), nie beides leer")
 
-for b in ("mail", "sap", "vemas", "jira"):
+for b in ("mail", "sap", "vemas", "jira", "confluence"):
     q = sr.benutzer_quelle(b)
     check("Bereich '%s' hat eine Quelle" % b, callable(q))
 check("⚠ ein unbekannter Bereich hat KEINE Quelle (fail-closed)",
@@ -259,7 +264,7 @@ sys.modules["backend.audit_log"] = _al_mod
 
 
 RECHTE = {"admin": set(), "email": set(), "sap": set(), "vemas": set(),
-          "jira": set(), "kb": set()}
+          "jira": set(), "confluence": set(), "kb": set()}
 WIRFT = set()
 
 
@@ -283,10 +288,58 @@ NS = {
     "_user_may_use_sap": _darf("sap"),
     "_user_may_use_vemas": _darf("vemas"),
     "_user_may_use_jira_assist": _darf("jira"),
+    # ⚠ FEHLTE beim Einbau des Confluence-Bereichs und liess den GANZEN
+    # Abschnitt 4 mit einem nackten NameError abbrechen – 19 Pruefungen, die
+    # nichts mit Confluence zu tun haben, meldeten Fehler, die es nicht gab.
+    # Eine GEPFLEGTE Namensliste ist an dem Tag unvollstaendig, an dem eine
+    # neue Freigabepruefung dazukommt; die Regel darunter prueft das jetzt.
+    "_user_may_use_confluence_account": _darf("confluence"),
     "_may_edit_knowledge": _darf("kb"),
 }
 kopie = ast.parse(ast.unparse(FUNKTIONEN["secret_reveal"])).body[0]
 kopie.decorator_list = []
+
+
+def _freie_namen(fn: ast.AST) -> set:
+    """Namen, die der geschnittene Rumpf von AUSSEN braucht.
+
+    ⚠ DIESE PRUEFUNG GIBT ES, WEIL ``NS`` EINE GEPFLEGTE LISTE IST – und die ist
+    an dem Tag unvollstaendig, an dem der Endpunkt eine weitere Freigabepruefung
+    ruft. Am 2026-09-29 ist genau das passiert
+    (``_user_may_use_confluence_account``): der Lauf brach mit einem nackten
+    NameError ab, **19 Pruefungen meldeten Fehler, die es nicht gab**, und keine
+    davon nannte die Ursache. Jetzt endet der Lauf mit **Exit 2** und benennt den
+    fehlenden Namen – "konnte nicht laufen" muss von "fehlgeschlagen"
+    unterscheidbar sein.
+    """
+    gebunden, gelesen = set(), set()
+    for k in ast.walk(fn):
+        if isinstance(k, ast.arg):
+            gebunden.add(k.arg)
+        elif isinstance(k, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
+            gebunden.add(k.name)
+        elif isinstance(k, ast.ExceptHandler) and k.name:
+            gebunden.add(k.name)
+        elif isinstance(k, ast.alias):
+            gebunden.add((k.asname or k.name).split(".")[0])
+        elif isinstance(k, ast.Name):
+            (gebunden if isinstance(k.ctx, (ast.Store, ast.Del))
+             else gelesen).add(k.id)
+    import builtins
+    return gelesen - gebunden - set(dir(builtins))
+
+
+_FREI = _freie_namen(kopie)
+# Positivkontrolle der Regel SELBST: findet sie keine Namen, ist sie trivial
+# erfuellt und prueft nichts.
+if len(_FREI) < 5:
+    abbruch("Namens-Regel findet nur %d freie Namen – sie misst nichts." % len(_FREI))
+_fehlt = sorted(_FREI - set(NS))
+if _fehlt:
+    abbruch("NS fehlen Namen, die secret_reveal braucht: %s – ohne sie bricht "
+            "der Lauf mit NameError ab und meldet Fehler, die es nicht gibt."
+            % ", ".join(_fehlt))
+
 exec(compile(ast.fix_missing_locations(ast.Module(body=[kopie], type_ignores=[])),
              "<main-schnitt>", "exec"), NS)
 endpunkt = NS["secret_reveal"]
@@ -313,7 +366,8 @@ abschnitt("4 – Die Rechtematrix, je Bereich gemessen")
 for b, sch, feld, wert in (("mail", "email", "passwort", "Post!1"),
                            ("sap", "sap", "password", "Sap!2"),
                            ("vemas", "vemas", "api_token", "Vem!3"),
-                           ("jira", "jira", "api_token", "Jir!4")):
+                           ("jira", "jira", "api_token", "Jir!4"),
+                           ("confluence", "confluence", "api_token", "Cfl!5")):
     RECHTE[sch] = set()
     s, r = ruf("anna", b, feld)
     check("⚠ %-5s ohne Bereichs-Freigabe: 403" % b, s == 403, "%s %s" % (s, r))
