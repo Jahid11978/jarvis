@@ -147,6 +147,12 @@ var _sessions=[
 ];
 function _switchSession(){} function _renameSession(){} function _deleteSession(){}
 function _openSessionPrompt(){}
+/* Auswahlmodus der Verlaufsleiste (seit 2026-09-29): _renderSidebar liest
+   _selMode/_selIds und ruft _renderTools. Ohne diese Deklarationen stirbt die
+   Probeseite an einem nackten ReferenceError – geprueft wird hier ein anderer
+   Teil DESSELBEN Renderers. */
+var _selMode=false, _selIds=new Set();
+function _renderTools(){}
 window.__fehler = '';
 window.addEventListener('error', function (e) { window.__fehler += e.message + ' | '; });
 try {

@@ -1087,6 +1087,9 @@ _ACTION_DETAILS = [
     # Chat
     ("POST",   r"/api/agent/task",                      "Chat-Anfrage"),
     ("POST",   r"/api/chat/sessions",                   "Chat · Unterhaltung begonnen"),
+    # Sammel-Loeschung. Steht VOR dem DELETE-Muster, weil `{_ID}` auch "delete"
+    # trifft – hier zaehlt allein, dass die Methode POST ist.
+    ("POST",   r"/api/chat/sessions/delete",            "Chat · Unterhaltungen gelöscht"),
     ("DELETE", rf"/api/chat/sessions/{_ID}",            "Chat · Unterhaltung gelöscht"),
     ("PATCH",  rf"/api/chat/sessions/{_ID}",            "Chat · Unterhaltung umbenannt"),
     ("POST",   rf"/api/chat/sessions/{_ID}/context/forget", "Chat · Kontext vergessen"),
@@ -7286,23 +7289,75 @@ async def chat_sessions_context_forget(sid: str, request: Request,
     return JSONResponse({"ok": True, "removed": weg})
 
 
-@app.delete("/api/chat/sessions/{sid}")
-async def chat_sessions_delete(sid: str, user: str = Depends(require_auth)):
-    """Sitzung löschen (Ordner + Transkript + Kontext) und RAM-Kontext verwerfen."""
-    from backend import chat_sessions as cs
+def _chat_kontext_vergessen(user: str, sid: str) -> None:
+    """RAM-Kontext einer geloeschten Sitzung verwerfen (falls geladen).
+
+    ⚠ Der HAUPTAGENT haelt die Chat-Verlaeufe, nicht `agent_instance` – das ist
+    ein eigener Agent fuer die Skill-Verwaltung. Bis 2026-08-30 stand hier
+    `agent_instance`, der Eintrag blieb also im Speicher stehen, waehrend die
+    Datei geloescht wurde. (Dieselbe Verwechslung wie beim Skill-Toggle, siehe
+    `_reload_agent_tools`.)
+    """
     from backend.agent import _hist_key as _hk
-    ok = cs.delete_session(user, sid)
-    # RAM-Kontext dieser Sitzung verwerfen (falls geladen).
-    # ⚠ Der HAUPTAGENT haelt die Chat-Verlaeufe, nicht `agent_instance` – das ist
-    # ein eigener Agent fuer die Skill-Verwaltung. Bis 2026-08-30 stand hier
-    # `agent_instance`, der Eintrag blieb also im Speicher stehen, waehrend die
-    # Datei geloescht wurde. (Dieselbe Verwechslung wie beim Skill-Toggle, siehe
-    # `_reload_agent_tools`.)
     try:
         if agent_manager.main_agent is not None:
             agent_manager.main_agent._user_histories.pop(_hk(user, sid), None)
     except Exception:  # noqa: BLE001
         pass
+
+
+# Obergrenze je Sammel-Loeschung. Nicht als Schutz gegen den Benutzer gedacht –
+# er loescht ohnehin nur seine eigenen Sitzungen –, sondern als Deckel auf die
+# Dauer EINER Anfrage: jede Sitzung ist ein `rmtree`.
+_CHAT_DELETE_MAX = 200
+
+
+@app.post("/api/chat/sessions/delete")
+async def chat_sessions_delete_many(request: Request, user: str = Depends(require_auth)):
+    """Mehrere Sitzungen in EINEM Aufruf löschen.
+
+    Teilerfolge werden BENANNT (`deleted`/`failed`), nicht gezaehlt: eine blosse
+    Gesamtzahl liesse offen, welcher Chat noch da ist, und die Oberflaeche
+    koennte ihre Liste nicht richtig nachziehen.
+    """
+    from backend import chat_sessions as cs
+    try:
+        body = await request.json()
+    except Exception:  # noqa: BLE001
+        body = None
+    roh = body.get("ids") if isinstance(body, dict) else None
+    # Typpruefung VOR der Schleife: ueber einen String zu iterieren ist immer
+    # erlaubt und nie gemeint (ergaebe eine Loeschung je Zeichen).
+    if not isinstance(roh, list):
+        return JSONResponse({"ok": False, "error": "ids fehlt"}, status_code=400)
+    ids, gesehen = [], set()
+    for x in roh:
+        if isinstance(x, str) and x and x not in gesehen:
+            gesehen.add(x)
+            ids.append(x)
+    if not ids:
+        return JSONResponse({"ok": False, "error": "ids fehlt"}, status_code=400)
+    if len(ids) > _CHAT_DELETE_MAX:
+        return JSONResponse({"ok": False, "error": f"hoechstens {_CHAT_DELETE_MAX} auf einmal"},
+                            status_code=400)
+    geloescht, fehler = [], []
+    for sid in ids:
+        if cs.delete_session(user, sid):
+            geloescht.append(sid)
+            _chat_kontext_vergessen(user, sid)
+        else:
+            fehler.append(sid)
+    print(f"[chat] {len(geloescht)} Sitzung(en) geloescht, {len(fehler)} fehlgeschlagen "
+          f"(Benutzer {user})", flush=True)
+    return JSONResponse({"ok": not fehler, "deleted": geloescht, "failed": fehler})
+
+
+@app.delete("/api/chat/sessions/{sid}")
+async def chat_sessions_delete(sid: str, user: str = Depends(require_auth)):
+    """Sitzung löschen (Ordner + Transkript + Kontext) und RAM-Kontext verwerfen."""
+    from backend import chat_sessions as cs
+    ok = cs.delete_session(user, sid)
+    _chat_kontext_vergessen(user, sid)
     return JSONResponse({"ok": ok})
 
 

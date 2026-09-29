@@ -246,7 +246,92 @@ body {
     transition: opacity .15s;
 }
 .cs-new:hover { opacity: 0.88; }
+/* ─── Werkzeugzeile der Verlaufsleiste (Auswahlmodus) ───────────────────────
+   ⚠ HIER KEINE .btn-*-KLASSEN. Die stehen in style.css, und /chat laedt nur
+   theme.css + chat.css – ein `.btn-secondary` waere dort ein nackter
+   Browser-Standardknopf (Register: derselbe Fehler traf /ai-mouse und
+   /jira-addon gleich dreimal). Die Zeile bringt ihre eigenen Klassen mit.
+   `flex-wrap` ist Pflicht: die Leiste ist ab 180px schmal, und "Löschen (12)"
+   neben "Abbrechen" laeuft dort sonst ueber den Rand hinaus. */
+.cs-tools {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    justify-content: flex-end;
+    gap: 6px;
+    flex-shrink: 0;
+    min-height: 24px;
+}
+.cs-tools .cs-all {
+    display: flex;
+    align-items: center;
+    gap: 5px;
+    margin-right: auto;          /* "Alle" links, Aktionen rechts */
+    color: var(--text-secondary);
+    font-size: 0.78rem;
+    cursor: pointer;
+    user-select: none;
+}
+/* ⚠ `.modal-card input` macht Kaestchen zeilenbreit (Anmeldefelder). Hier gilt
+   das nicht – die Zeile liegt nicht in einem Dialog –, die feste Groesse steht
+   trotzdem da, damit ein spaeterer Umzug in einen Dialog nichts quetscht. */
+.cs-tools .cs-all input[type="checkbox"] {
+    flex: 0 0 auto; width: 13px; height: 13px; margin: 0; cursor: pointer;
+    accent-color: var(--accent);
+}
+.cs-tool {
+    flex: 0 0 auto;
+    display: inline-flex; align-items: center; gap: 4px;
+    padding: 3px 8px;
+    border-radius: 7px;
+    border: 1px solid var(--outline);
+    background: transparent;
+    color: var(--text-secondary);
+    font-family: inherit;
+    font-size: 0.78rem;
+    line-height: 1.4;
+    cursor: pointer;
+    transition: color .12s, border-color .12s, background .12s, opacity .12s;
+}
+.cs-tool:hover { color: var(--text-primary); border-color: var(--accent); background: rgba(var(--accent-rgb), 0.10); }
+/* ⚠ SIGNALROT IST NICHT AUTOMATISCH LESBAR – gemessen, nicht geschaetzt
+   (tests/live_chat_sammel_ui_dev.py, an den wirklichen Farben):
+     weisse Schrift auf --danger (#ef4444)   = 3,76:1  ← unter der Textgrenze
+     --danger auf der hellen Leiste          = 3,70:1  ← ebenfalls darunter
+     --danger auf der dunklen Leiste         = 4,92:1  ✓
+   Die Grenze fuer Text liegt bei 4,5:1. Abgedunkelt auf 78 % Rot sind es
+   5,66 bzw. 5,76:1 – dieselbe Abdunklung benutzt theme.css schon fuer die
+   SAP-Zertifikatsbefunde. Die FLAECHE beim Ueberfahren ist deshalb in BEIDEN
+   Themen das dunklere Rot, und im hellen Thema auch die ruhende Schrift.
+
+   ⚠ Die vierte Regel ist keine Dopplung: `body.light .cs-tool-del` (0,2,0)
+   steht SPAETER als `.cs-tool-del:hover` (0,2,0) und gewinnt bei gleicher
+   Spezifitaet – ohne sie faerbte sie beim Ueberfahren die Schrift wieder
+   dunkelrot, auf dunkelroter Flaeche. */
+.cs-tool-del { color: var(--danger); border-color: var(--danger); }
+.cs-tool-del:hover {
+    color: #fff;
+    background: color-mix(in srgb, var(--danger) 78%, #000);
+    border-color: color-mix(in srgb, var(--danger) 78%, #000);
+}
+body.light .cs-tool-del {
+    color: color-mix(in srgb, var(--danger) 78%, #000);
+    border-color: color-mix(in srgb, var(--danger) 78%, #000);
+}
+body.light .cs-tool-del:hover { color: #fff; }
+.cs-tool:disabled { opacity: .45; cursor: default; pointer-events: none; }
+.cs-tool .cs-tool-ico { display: inline-flex; width: 13px; height: 13px; }
+.cs-tool .cs-tool-ico svg { width: 13px; height: 13px; }
+
 .cs-list { display: flex; flex-direction: column; gap: 4px; }
+/* Auswahlmodus: das Kaestchen ersetzt die Aktionsknoepfe der Zeile. Ein
+   angehakter Eintrag bleibt auch ohne Mauszeiger erkennbar – Farbe allein
+   waere keine Information, die Aussage traegt das gesetzte Kaestchen. */
+.cs-item .cs-check {
+    flex: 0 0 auto; width: 13px; height: 13px; margin: 0; cursor: pointer;
+    accent-color: var(--accent);
+}
+.cs-item.cs-picked { background: rgba(var(--accent-rgb), 0.10); color: var(--text-primary); }
 .cs-item {
     display: flex;
     align-items: center;

@@ -169,6 +169,12 @@ const gewechselt = [], umbenannt = [], geloescht = [];
  * nackten ReferenceError ab (Register, im Projekt mehrfach bezahlt). */
 const prolog = `
 var _sessions = [], _activeSid = null, _spSid = null, _spLaeuft = false;
+// Auswahlmodus der Verlaufsleiste (seit 2026-09-29): _renderSidebar liest
+// _selMode/_selIds. Ohne die Deklarationen bricht der Lauf hier mit einem
+// nackten ReferenceError ab – der Renderer ist derselbe, dieser Waechter
+// prueft nur einen anderen Teil von ihm.
+var _selMode = false, _selIds = new Set();
+function _renderTools() {}
 var gewechselt = [], umbenannt = [], geloescht = [];
 var $ = function (id) { return document.getElementById(id); };
 function escapeHtml(s) { var d = document.createElement('div'); d.textContent = s == null ? '' : s; return d.innerHTML; }

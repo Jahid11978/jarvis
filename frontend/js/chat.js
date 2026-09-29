@@ -57,6 +57,11 @@
     let _sessions  = [];
     let _activeSid = null;
     const _CS_DEFAULT_TITLE = 'Neuer Chat';   // Backend-Standardtitel (chat_sessions._DEFAULT_TITLE)
+    // Auswahlmodus der Verlaufsleiste (mehrere Chats zusammen loeschen).
+    // `_selIds` haelt Ids, keine Indizes: ein Index verschiebt sich beim
+    // Loeschen aus der Mitte und zeigt danach auf den Nachbarn.
+    let _selMode = false;
+    let _selIds  = new Set();
 
     // ─── DOM ────────────────────────────────────────────────────
     const $ = id => document.getElementById(id);
@@ -337,6 +342,15 @@
         _initSessions();
         const _csNewBtn = $('cs-new');
         if (_csNewBtn && !_csNewBtn._wired) { _csNewBtn._wired = true; _csNewBtn.addEventListener('click', _newSession); }
+        // Auswahlmodus der Verlaufsleiste (mehrere Chats zusammen loeschen)
+        const _csSelBtn = $('cs-selmode');
+        if (_csSelBtn && !_csSelBtn._wired) { _csSelBtn._wired = true; _csSelBtn.addEventListener('click', () => _selModus(!_selMode)); }
+        const _csSelDel = $('cs-seldel');
+        if (_csSelDel && !_csSelDel._wired) { _csSelDel._wired = true; _csSelDel.addEventListener('click', _deleteSelected); }
+        // Nur auf 'change' hoeren – im <label> schaltet der Browser das
+        // Kaestchen bereits selbst um.
+        const _csSelAll = $('cs-all');
+        if (_csSelAll && !_csSelAll._wired) { _csSelAll._wired = true; _csSelAll.addEventListener('change', () => _selAlle(_csSelAll.checked)); }
         const _csWelBtn = $('cs-welcome');
         if (_csWelBtn && !_csWelBtn._wired) { _csWelBtn._wired = true; _csWelBtn.addEventListener('click', _restoreWelcome); }
         const _csSetBtn = $('cs-settings');
@@ -2476,11 +2490,42 @@
     function _renderSidebar() {
         const list = document.getElementById('cs-list');
         if (!list) return;
+        // Ids, die es nicht mehr gibt, fallen aus der Auswahl – sonst schickte
+        // "Löschen (3)" Ids mit, die laengst weg sind, und die Zahl am Knopf
+        // behauptete eine Auswahl, die die Liste gar nicht zeigt.
+        if (_selIds.size) {
+            const da = new Set(_sessions.map(x => x.id));
+            Array.from(_selIds).forEach(id => { if (!da.has(id)) _selIds.delete(id); });
+        }
+        _renderTools();
         if (!_sessions.length) { list.innerHTML = '<div class="cs-empty">' + escapeHtml(window.t('chat.no_sessions')) + '</div>'; return; }
         list.innerHTML = '';
         _sessions.forEach(s => {
             const item = document.createElement('div');
-            item.className = 'cs-item' + (s.id === _activeSid ? ' active' : '');
+            item.className = 'cs-item' + (s.id === _activeSid ? ' active' : '')
+                           + (_selMode && _selIds.has(s.id) ? ' cs-picked' : '');
+            // Im Auswahlmodus ersetzt das Kaestchen die Aktionsknoepfe: ein
+            // Muelleimer je Zeile NEBEN einer Mehrfachauswahl liesse offen,
+            // welche der beiden Loeschungen ein Klick ausloest.
+            if (_selMode) {
+                const cb = document.createElement('input');
+                cb.type = 'checkbox'; cb.className = 'cs-check';
+                cb.checked = _selIds.has(s.id);
+                cb.setAttribute('aria-label', s.title || window.t('chat.untitled'));
+                const titleSel = document.createElement('span');
+                titleSel.className = 'cs-title'; titleSel.textContent = s.title || window.t('chat.untitled');
+                item.appendChild(cb); item.appendChild(titleSel);
+                // NUR auf 'change' hoeren und im Klick der Zeile den Knopf
+                // auslassen: ein zusaetzliches `cb.checked = !cb.checked` hebt
+                // die Umschaltung des Browsers wieder auf.
+                cb.addEventListener('change', () => _selSetze(s.id, cb.checked));
+                item.addEventListener('click', (e) => {
+                    if (cb.contains(e.target)) return;
+                    _selSetze(s.id, !_selIds.has(s.id));
+                });
+                list.appendChild(item);
+                return;
+            }
             const title = document.createElement('span');
             title.className = 'cs-title'; title.textContent = s.title || window.t('chat.untitled');
             const ren = document.createElement('button'); ren.type = 'button'; ren.className = 'cs-act cs-ren'; ren.textContent = '✎'; ren.title = window.t('chat.rename');
@@ -2509,6 +2554,121 @@
             list.appendChild(item);
         });
     }
+
+    /* ─── Auswahlmodus: mehrere Chats zusammen loeschen ────────────────────
+       Der Modus ist bewusst ein eigener Zustand und nicht Strg-Klick: ein
+       unsichtbarer Handgriff findet niemand, und der Muelleimer je Zeile soll
+       weiter genau EINEN Chat meinen.                                        */
+    function _renderTools() {
+        const bar = $('cs-tools');
+        if (!bar) return;
+        // Ohne Chats gibt es nichts auszuwaehlen – dann verschwindet die Zeile
+        // ganz, samt eines etwa noch offenen Auswahlmodus.
+        if (!_sessions.length && _selMode) { _selMode = false; _selIds.clear(); }
+        bar.hidden = !_sessions.length;
+        const modus = $('cs-selmode');
+        if (modus) {
+            // Der Umschalter wechselt seine BESCHRIFTUNG mit dem Zustand –
+            // gleichbleibender Text saehe beim Zurueckschalten wie ein
+            // wirkungsloser Klick aus. Der i18n-Schluessel wandert im Attribut
+            // mit, damit applyLang() nach einem Sprachwechsel den Text des
+            // AKTUELLEN Zustands setzt und nicht den der Vorgabe.
+            const k  = _selMode ? 'chat.select_cancel' : 'chat.select_many';
+            const kt = _selMode ? 'chat.select_cancel_title' : 'chat.select_many_title';
+            modus.setAttribute('data-i18n', k);
+            modus.textContent = window.t(k);
+            modus.setAttribute('data-i18n-title', kt);
+            modus.title = window.t(kt);
+        }
+        const allWrap = $('cs-all-wrap'), all = $('cs-all');
+        if (allWrap) allWrap.hidden = !_selMode;
+        if (all) {
+            const voll = _selIds.size > 0 && _selIds.size === _sessions.length;
+            all.checked = _selMode && voll;
+            all.indeterminate = _selMode && _selIds.size > 0 && !voll;
+        }
+        const del = $('cs-seldel');
+        if (del) {
+            del.hidden = !_selMode;
+            del.disabled = _selIds.size === 0;
+            const ico = $('cs-seldel-ico');
+            if (ico && !ico.firstChild) JarvisIcons.setTrash(ico);
+            const txt = $('cs-seldel-txt');
+            // Die Zahl steht IM Knopf: sie ist die einzige Stelle, an der vor
+            // dem Klick steht, wie viele Chats gleich verschwinden.
+            if (txt) txt.textContent = window.t('chat.delete_selected').replace('{n}', String(_selIds.size));
+        }
+    }
+
+    function _selSetze(id, an) {
+        if (an) _selIds.add(id); else _selIds.delete(id);
+        _renderSidebar();
+    }
+
+    function _selModus(an) {
+        _selMode = !!an;
+        _selIds.clear();       // ein neuer Durchgang beginnt leer
+        _renderSidebar();
+    }
+
+    function _selAlle(an) {
+        _selIds.clear();
+        if (an) _sessions.forEach(s => _selIds.add(s.id));
+        _renderSidebar();
+    }
+
+    // Ausgewaehlte Chats in EINEM Aufruf loeschen. Teilerfolge werden benannt:
+    // der Server sagt, welche Ids weg sind – nur die fallen aus der Liste,
+    // sonst verschwaende die Oberflaeche einen Chat, den es noch gibt.
+    async function _deleteSelected() {
+        const ids = _sessions.filter(s => _selIds.has(s.id)).map(s => s.id);
+        if (!ids.length) return;
+        if (!window.confirm(window.t('chat.delete_many_confirm').replace('{n}', String(ids.length)))) return;
+        let d = null;
+        try {
+            const r = await fetch('/api/chat/sessions/delete', {
+                method: 'POST', headers: _csHeaders({ 'Content-Type': 'application/json' }),
+                body: JSON.stringify({ ids })
+            });
+            d = await r.json();
+        } catch (e) { d = null; }
+        if (!d || !Array.isArray(d.deleted)) { showToast(window.t('chat.delete_many_failed')); return; }
+        const weg = new Set(d.deleted);
+        _sessions = _sessions.filter(x => !weg.has(x.id));
+        _selMode = false; _selIds.clear();
+        if (weg.size) showToast(window.t('chat.delete_many_done').replace('{n}', String(weg.size)));
+        const offen = (d.failed || []).length;
+        // Ein Fehlschlag darf nicht still bleiben – sonst steht der Chat wieder
+        // in der Liste und niemand weiss, warum.
+        if (offen) showToast(window.t('chat.delete_many_partial').replace('{n}', String(offen)));
+        await _nachLoeschen(weg.has(_activeSid));
+    }
+
+    // Gemeinsamer Nachlauf von Einzel- und Sammel-Loeschung: war die AKTIVE
+    // Sitzung dabei, muss eine andere geoeffnet werden – und ist keine mehr da,
+    // eine neue entstehen, sonst steht der Chat ohne `session_id` da.
+    async function _nachLoeschen(aktiveWeg) {
+        if (!aktiveWeg) { _renderSidebar(); return; }
+        _activeSid = _sessions[0] ? _sessions[0].id : null;
+        if (!_activeSid) {
+            const ns = await _csCreate('');
+            if (ns) { _sessions.unshift(ns); _activeSid = ns.id; }
+        }
+        try { localStorage.setItem(_sidKey(), _activeSid || ''); } catch (e) {}
+        _renderSidebar();
+        await _restoreHistory();
+        _updateContextIndicator();
+    }
+
+    // Die Verlaufsleiste wird aus JS gebaut, applyLang() erreicht sie nur ueber
+    // die data-i18n-Attribute der Werkzeugzeile – die Zahl am Loeschknopf
+    // ("Löschen (3)") und der Platzhalter "(ohne Titel)" haengen dagegen am
+    // Aufruf von window.t(). Ohne diesen Zuhoerer blieben sie nach einem
+    // Sprachwechsel in der alten Sprache stehen. `_renderSidebar` ruft selbst
+    // KEIN applyLang – sonst baute sich die Leiste endlos neu auf.
+    window.addEventListener('jarvis-lang-changed', function () {
+        try { _renderSidebar(); } catch (e) { /* egal */ }
+    });
 
     // Sicherstellen, dass eine Sitzung aktiv IST, bevor gesendet wird.
     // Fenster, in dem das fehlen konnte: zwischen Seitenaufbau und dem Ende von
@@ -2919,16 +3079,9 @@
     async function _deleteSession(s) {
         if (!window.confirm(window.t('chat.delete_confirm').replace('{name}', s.title || ''))) return;
         try { await fetch('/api/chat/sessions/' + encodeURIComponent(s.id), { method: 'DELETE', headers: _csHeaders() }); } catch (e) {}
+        const warAktiv = (_activeSid === s.id);
         _sessions = _sessions.filter(x => x.id !== s.id);
-        if (_activeSid === s.id) {
-            _activeSid = _sessions[0] ? _sessions[0].id : null;
-            if (!_activeSid) { const ns = await _csCreate(''); if (ns) { _sessions.unshift(ns); _activeSid = ns.id; } }
-            try { localStorage.setItem(_sidKey(), _activeSid || ''); } catch (e) {}
-            _renderSidebar();
-            await _restoreHistory();            _updateContextIndicator();
-        } else {
-            _renderSidebar();
-        }
+        await _nachLoeschen(warAktiv);
     }
     // Nach der ersten Antwort den vom Backend automatisch gesetzten Titel
     // (erster Nachrichtentext) in die Sidebar uebernehmen.

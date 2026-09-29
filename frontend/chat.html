@@ -8,7 +8,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, interactive-widget=resizes-content">
     <title>Jarvis Chat</title>
     <link rel="stylesheet" href="/static/css/theme.css?v=28">
-    <link rel="stylesheet" href="/static/css/chat.css?v=57">
+    <link rel="stylesheet" href="/static/css/chat.css?v=58">
     <link rel="stylesheet" href="/static/css/chat-bubbles.css?v=6">
     <link rel="stylesheet" href="/static/vendor/clippy/clippy.css?v=1">
     <link rel="stylesheet" href="/static/css/avatar.css?v=9">
@@ -79,6 +79,28 @@
                 <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>
             </button>
             <button id="cs-collapse" class="cs-collapse" type="button" data-i18n-title="chat.collapse_history" title="Verlauf einklappen" aria-label="Verlauf einklappen">«</button>
+        </div>
+        <!-- Werkzeugzeile der Verlaufsleiste: Auswahlmodus zum Loeschen mehrerer
+             Chats. Sie steht bewusst UNTER dem Kopf und nicht darin – der traegt
+             schon "+ Neuer Chat" und zwei Knoepfe und quetscht ab 180px. Im
+             Normalzustand ist nur "Auswählen" sichtbar; der Umschalter wechselt
+             seine Beschriftung mit dem Zustand (Auswählen / Abbrechen), sonst
+             saehe das Zurueckschalten wie ein wirkungsloser Klick aus. -->
+        <div id="cs-tools" class="cs-tools" hidden>
+            <label id="cs-all-wrap" class="cs-all" hidden>
+                <input type="checkbox" id="cs-all">
+                <span data-i18n="chat.select_all">Alle</span>
+            </label>
+            <!-- Muelleimer = LOESCHEN. Die Zahl dahinter kommt aus der Auswahl,
+                 traegt also keinen festen i18n-Schluessel – chat.js setzt sie
+                 und zeichnet die Zeile bei 'jarvis-lang-changed' neu. -->
+            <button id="cs-seldel" class="cs-tool cs-tool-del" type="button" hidden
+                    data-i18n-title="chat.delete_selected_title" title="Ausgewählte Chats löschen">
+                <span id="cs-seldel-ico" class="cs-tool-ico"></span><span id="cs-seldel-txt"></span>
+            </button>
+            <button id="cs-selmode" class="cs-tool" type="button"
+                    data-i18n="chat.select_many"
+                    data-i18n-title="chat.select_many_title" title="Mehrere Chats auswählen, um sie zusammen zu löschen">Auswählen</button>
         </div>
         <div id="cs-list" class="cs-list"></div>
         <!-- Fuss der Verlaufsleiste: Weg zurueck zum Willkommens-Chat. Der wird pro
@@ -405,7 +427,7 @@ sudo update-ca-certificates</code></pre>
 <script src="/static/js/cpubar.js?v=1"></script>
 <script src="/static/js/syspackages.js?v=2"></script>
 <script src="/static/js/sysload.js?v=3"></script>
-<script src="/static/js/i18n.js?v=304"></script>
+<script src="/static/js/i18n.js?v=305"></script>
 <script src="/static/js/tabfill.js?v=2"></script>
 <!-- Gemeinsame Chat-Helfer (escapeHtml, renderMarkdown, History, Edit-Workflow) -->
 <script src="/static/js/chatlib.js?v=19"></script>
@@ -418,7 +440,7 @@ sudo update-ca-certificates</code></pre>
 <script src="/static/js/profile_switcher.js?v=5"></script>
 <script src="/static/js/sessions.js?v=8"></script>
 <script src="/static/js/logo_home.js?v=1"></script>
-<script src="/static/js/chat.js?v=115"></script>
+<script src="/static/js/chat.js?v=116"></script>
 <!-- Interaktive Charts (```chartjs) – Chart.js lokal gevendort (CSP: kein CDN) -->
 <script src="/static/js/vendor/chart.umd.min.js?v=1"></script>
 <!-- Chart.js-Plugins (MIT). MUESSEN nach chart.umd.min.js kommen – ihre
