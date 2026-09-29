@@ -449,28 +449,61 @@
             });
         },
 
+        // Freigabe-Code fuer Erlauben/Loeschen (Befund K2, 2026-09-29): der Broker
+        // prueft ihn selbst, das Backend reicht ihn nur durch. null = abgebrochen.
+        _freigabeCode: function () {
+            var code = window.prompt(T('security.broker_code_prompt',
+                'Freigabe-Code (6 Ziffern aus der Authenticator-App für Root-Freigaben dieses Servers):'), '');
+            if (code === null) return null;
+            return String(code).replace(/\D/g, '');
+        },
+
+        // Antwort des Brokers auswerten: eine abgewiesene Freigabe MUSS der Admin
+        // sehen – sonst sieht der Klick wirkungslos aus.
+        _brokerAntwort: function (r) {
+            return r.json().then(function (d) {
+                if (d && d.ok === false && d.grund) {
+                    var text = {
+                        'nicht_eingerichtet': T('security.broker_code_setup',
+                            'Auf diesem Server ist noch kein Freigabe-Code eingerichtet. Als root: jarvis-broker-admin totp-einrichten – oder die Freigabe dort direkt erteilen: jarvis-broker-admin erlauben <Eintrag>'),
+                        'nachweis_fehlt': T('security.broker_code_missing', 'Bitte den 6-stelligen Freigabe-Code eingeben.'),
+                        'nachweis_falsch': T('security.broker_code_wrong', 'Der Freigabe-Code ist falsch oder abgelaufen.'),
+                        'nachweis_verbraucht': T('security.broker_code_used', 'Dieser Freigabe-Code wurde schon verwendet – bitte den nächsten abwarten.')
+                    }[d.grund] || d.error || '';
+                    window.alert(text);
+                }
+                Mgr.loadBroker();
+            });
+        },
+
         decideBroker: function (key, decision) {
             if (!key) return;
             if (decision === 'allow' && key.indexOf('shell_root:') === 0
                 && !window.confirm(T('security.broker_allow_confirm',
                     'Diesen Befehl mit ROOT-Rechten erlauben?\n\n%s\n\nEr darf danach jederzeit erneut ausgeführt werden.')
                     .replace('%s', key.substring(11)))) return;
+            var body = { key: key, decision: decision };
+            if (decision === 'allow') {
+                var code = Mgr._freigabeCode();
+                if (code === null) return;
+                body.nachweis = code;
+            }
             fetch('/api/broker/ops/decide', {
                 method: 'POST', headers: authHeaders({ 'Content-Type': 'application/json' }),
-                body: JSON.stringify({ key: key, decision: decision })
-            }).then(function (r) { return r.json(); })
-              .then(function () { Mgr.loadBroker(); })
+                body: JSON.stringify(body)
+            }).then(Mgr._brokerAntwort)
               .catch(function () {});
         },
 
         removeBrokerOp: function (key) {
             if (!key) return;
             if (!window.confirm(T('security.broker_remove_confirm', 'Eintrag wirklich löschen?'))) return;
+            var code = Mgr._freigabeCode();
+            if (code === null) return;
             fetch('/api/broker/ops/remove', {
                 method: 'POST', headers: authHeaders({ 'Content-Type': 'application/json' }),
-                body: JSON.stringify({ key: key })
-            }).then(function (r) { return r.json(); })
-              .then(function () { Mgr.loadBroker(); })
+                body: JSON.stringify({ key: key, nachweis: code })
+            }).then(Mgr._brokerAntwort)
               .catch(function () {});
         },
 

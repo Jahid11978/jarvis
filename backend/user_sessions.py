@@ -74,6 +74,10 @@ def _write_unlocked() -> None:
         tmp = STORE_PATH.with_suffix(".tmp")
         tmp.write_text(json.dumps({"users": _users}, ensure_ascii=False, indent=1),
                        encoding="utf-8")
+        # Die tmp-Datei entsteht mit der umask (0644) und WIRD die Datei – ohne
+        # das hier setzt jeder Flush die Start-Haertung zurueck (sandbox.py).
+        from backend.sandbox import privat_machen
+        privat_machen(tmp)
         # Atomar ersetzen: ein Absturz mitten im Schreiben darf keine halbe
         # Datei hinterlassen (die naechste Lesung faellt sonst auf "leer" zurueck).
         os.replace(tmp, STORE_PATH)

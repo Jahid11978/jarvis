@@ -308,8 +308,22 @@ _APP_DENY_REL = (
 # Chat-Auftraegen und Bildschirmausschnitten der AI-Maus.
 # Es ist dieselbe Fehlerklasse wie /tmp/jarvis-anhaenge am 2026-09-15: die
 # Eigentuemer-Trennung hielt, die Enumeration eine Ebene hoeher nicht.
+#
+# ⚠ ZWEITER ORT DER CHAT-VERLAEUFE (2026-09-29, auf ECHT gemessen): die
+# ANZEIGE-History liegt NICHT in data/chats, sondern in data/chat_history
+# (backend/chat_history.py) – 0755 mit <benutzer>.json 0644, also fuer
+# jarvis_sandbox lesbar. Dieselbe Fehlerklasse wie data/generated_images: der
+# eine Ordner war zu, der Nachbar mit demselben Inhalt nicht. Ebenso je Benutzer
+# abgelegt und damit personenbezogen: destillat_filter/, issue_attachments/
+# (Anhaenge der Meldungen), backups/ (die Sicherung der Benutzer-Migration
+# enthaelt Chats und Gedaechtnisse ALLER), learnings/ und erfahrung/ (aus
+# Werkzeug-Ergebnissen extrahierte Fakten). Keiner davon steht in READ_ROOTS –
+# die Shell darf sie ohnehin nicht lesen, das OS-Recht zieht nur nach.
 PRIVATE_DIRS = ("data/documents", "data/chats", "data/logs",
-                "data/generated_images")
+                "data/generated_images",
+                "data/chat_history", "data/destillat_filter",
+                "data/issue_attachments", "data/backups",
+                "data/learnings", "data/erfahrung")
 PRIVATE_MODE = 0o750
 
 # Einzelne Dateien direkt in data/, die kein Domain-Nutzer lesen darf. Das
@@ -340,8 +354,38 @@ PRIVATE_FILES = ("data/scheduled_jobs.json", "data/file_watchers.json",
                  # Aussteller, Laufzeit) und das VERSCHLUESSELTE Kennwort. Das
                  # Zertifikat selbst und seine Schluesseldatei sind strenger,
                  # siehe PRIVATE_FILES_STRENG.
-                 "data/ai_mouse_signatur.json")
+                 "data/ai_mouse_signatur.json",
+                 # Personenbezogen, direkt in data/ und bis 2026-09-29 0644 (ECHT):
+                 # Userchat-Nachrichten, Support-Anfragen, wer wann von wo
+                 # angemeldet war, Meldungen, Bewertungen samt Frage/Antwort,
+                 # Token-Widerrufe, Fehler-Tracebacks mit Auftragstexten.
+                 "data/userchat_history.json", "data/support_history.json",
+                 "data/user_sessions.json", "data/issues.json",
+                 "data/issues_admin_seen.json", "data/feedback.json",
+                 "data/auth_revocations.json", "data/telemetry_errors.json",
+                 "data/memory.json")
 PRIVATE_FILE_MODE = 0o640
+
+# Dateien mit Benutzernamen im Namen – eine feste Liste kann sie nicht kennen.
+# Das Gedaechtnis je Benutzer (tools/memory.py) liegt als data/memory_<name>.json
+# direkt in data/, das begehbar bleiben muss (Wissen). Der Name ist erratbar
+# (vorname.nachname), ein 0711 auf data/ wuerde also nicht helfen.
+PRIVATE_FILE_GLOBS = ("data/memory_*.json", "data/memory_*.json.bak",
+                      "data/memory.json.bak")
+
+
+def privat_machen(pfad, modus: int = PRIVATE_FILE_MODE) -> None:
+    """Setzt eine einzelne Datei auf ``modus`` (Vorgabe 0640), still bei Fehler.
+
+    Fuer Schreibwege, die der Start-Haertung davonlaufen: ``tmp`` + ``replace``
+    legt bei JEDEM Speichern eine neue Datei mit der umask des Dienstes (0644)
+    an, und ein Gedaechtnis fuer einen neuen Benutzer entsteht ebenso. Aufrufen
+    VOR dem ``replace`` (auf die tmp-Datei), sonst bleibt ein Fenster offen.
+    """
+    try:
+        os.chmod(pfad, modus)
+    except Exception:  # noqa: BLE001 – Rechte sind Haertung, kein Grund zum Abbruch
+        pass
 
 # Die Schluesseldateien der E-Mail-/SAP-Zugangsdaten sind strenger als 0640: sie
 # entschluesseln die Kennwoerter. 0600 heisst, dass nicht einmal die Gruppe
@@ -384,7 +428,14 @@ def harden_data_dirs() -> list[str]:
             # Kein harter Fehler: laeuft das Backend nicht als Eigentuemer, bleibt
             # es beim alten Modus – dann muss ein Admin es einmal setzen.
             geaendert.append(f"{rel}: FEHLER {e}")
-    for rel in PRIVATE_FILES:
+    glob_treffer = []
+    for muster in PRIVATE_FILE_GLOBS:
+        try:
+            glob_treffer += [str(p.relative_to(PROJECT_ROOT))
+                             for p in sorted(PROJECT_ROOT.glob(muster))]
+        except Exception as e:  # noqa: BLE001
+            geaendert.append(f"{muster}: FEHLER {e}")
+    for rel in tuple(PRIVATE_FILES) + tuple(glob_treffer):
         f = PROJECT_ROOT / rel
         try:
             if not f.is_file():

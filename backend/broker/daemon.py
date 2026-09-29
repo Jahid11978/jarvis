@@ -10,21 +10,26 @@ Antwort als NDJSON: beliebig viele {"type":"stream","line": "..."}-Zeilen
 (Live-Ausgabe fuer shell-artige Ops), abgeschlossen mit
 {"type":"result", "ok": ..., "decision": ..., ...}.
 
-Meta-Operationen (nicht policy-gesteuert, fuer die Admin-UI):
-- broker.ping           – Erreichbarkeits-/Versionscheck
+Meta-Operationen (Admin-UI), Regeln in backend/broker/meta.py:
+- broker.ping           – Erreichbarkeits-/Versionscheck (+ Herkunft des Codes)
 - broker.policy_list    – alle Policy-Eintraege
-- broker.policy_decide  – {key, decision, by} setzen
-- broker.policy_remove  – {key} loeschen
+- broker.policy_decide  – {key, decision, by[, nachweis]}; 'allow' nur mit Freigabe-Code
+- broker.policy_remove  – {key, nachweis} loeschen
 - broker.audit_tail     – {n} letzte Audit-Eintraege
 
-Start: /opt/jarvis/venv/bin/python -m backend.broker.daemon
+Start (seit 2026-09-29, Befund K1): aus der root-eigenen Kopie mit dem
+System-Python – /usr/local/lib/jarvis-broker/start_jarvis_root.sh. Nie mehr
+aus /opt/jarvis und nie mit dessen venv: beides gehoert dem Dienstbenutzer.
 """
 
 import asyncio
 import grp
 import json
 import os
+import pwd
 import signal
+import socket
+import struct
 import sys
 
 # Projekt-Root in sys.path (Start via `python -m backend.broker.daemon` aus
@@ -34,37 +39,47 @@ _ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__
 if _ROOT not in sys.path:
     sys.path.insert(0, _ROOT)
 
-from backend.broker import SOCKET_PATH, ops, policy  # noqa: E402
+from backend.broker import SOCKET_PATH, meta, ops, policy  # noqa: E402
 
 SOCKET_GROUP = os.environ.get("JARVIS_BROKER_GROUP", "jarvis")
+# Wer ueberhaupt verbinden darf: root und der Dienstbenutzer. Die Socket-Rechte
+# (0660, Gruppe jarvis) sagen dasselbe – hier steht es ein zweites Mal, weil
+# ein weiteres Mitglied der Gruppe sonst stillschweigend mitreden duerfte.
+SERVICE_USER = os.environ.get("JARVIS_BROKER_SERVICE_USER", SOCKET_GROUP)
 MAX_REQUEST_BYTES = 512 * 1024
 DEFAULT_TIMEOUT = 120
 MAX_TIMEOUT = 900
 
 
-def _meta(op: str, args: dict) -> dict | None:
-    """Meta-Operationen (Policy-Verwaltung/Audit) – immer erlaubt, kein Root-Effekt."""
-    if op == "broker.ping":
-        return {"ok": True, "pid": os.getpid(), "euid": os.geteuid()}
-    if op == "broker.policy_list":
-        return {"ok": True, "ops": policy.list_ops()}
-    if op == "broker.policy_decide":
-        entry = policy.decide(str(args.get("key", "")), str(args.get("decision", "")),
-                              str(args.get("by", "")))
-        if entry is None:
-            return {"ok": False, "error": "Unbekannter Key oder ungueltige Entscheidung"}
-        policy.audit(str(args.get("by", "")), "broker.policy_decide",
-                     str(args.get("key", "")), str(args.get("decision", "")))
-        return {"ok": True, "entry": entry}
-    if op == "broker.policy_remove":
-        ok = policy.remove(str(args.get("key", "")))
-        if ok:
-            policy.audit(str(args.get("by", "")), "broker.policy_remove",
-                         str(args.get("key", "")), "removed")
-        return {"ok": ok}
-    if op == "broker.audit_tail":
-        return {"ok": True, "entries": policy.audit_tail(int(args.get("n") or 100))}
-    return None
+def _peer(writer) -> tuple[int | None, str]:
+    """(uid, Beschreibung) des Aufrufers laut KERNEL (SO_PEERCRED).
+
+    Der Aufrufer schreibt ``user`` und ``by`` selbst in die Anfrage – das ist
+    eine Angabe, kein Nachweis. SO_PEERCRED stammt vom Kernel.
+    """
+    try:
+        sock = writer.get_extra_info("socket")
+        roh = sock.getsockopt(socket.SOL_SOCKET, socket.SO_PEERCRED, struct.calcsize("3i"))
+        pid, uid, gid = struct.unpack("3i", roh)
+        try:
+            name = pwd.getpwuid(uid).pw_name
+        except KeyError:
+            name = str(uid)
+        return uid, f"uid={uid}({name}) pid={pid}"
+    except Exception:  # noqa: BLE001
+        return None, "unbekannt"
+
+
+def _zugelassen(uid: int | None) -> bool:
+    """Fail-closed: unbekannter Aufrufer ist nicht zugelassen."""
+    if uid is None:
+        return False
+    if uid == 0:
+        return True
+    try:
+        return uid == pwd.getpwnam(SERVICE_USER).pw_uid
+    except KeyError:
+        return False
 
 
 async def _handle(reader: asyncio.StreamReader, writer: asyncio.StreamWriter):
@@ -74,7 +89,14 @@ async def _handle(reader: asyncio.StreamReader, writer: asyncio.StreamWriter):
         writer.write((json.dumps(obj, ensure_ascii=False) + "\n").encode())
         await writer.drain()
 
+    peer_uid, peer = _peer(writer)
     try:
+        if not _zugelassen(peer_uid):
+            print(f"[Broker] Verbindung abgewiesen: {peer}", flush=True)
+            policy.audit("", "broker.verbindung", "", "abgewiesen", peer=peer)
+            await send({"type": "result", "ok": False,
+                        "error": "Aufrufer nicht zugelassen"})
+            return
         raw = await asyncio.wait_for(reader.readline(), timeout=30)
         if not raw or len(raw) > MAX_REQUEST_BYTES:
             await send({"type": "result", "ok": False, "error": "Leere/zu grosse Anfrage"})
@@ -91,9 +113,9 @@ async def _handle(reader: asyncio.StreamReader, writer: asyncio.StreamWriter):
         timeout = min(int(req.get("timeout") or DEFAULT_TIMEOUT), MAX_TIMEOUT)
 
         # Meta-Operationen direkt beantworten
-        meta = _meta(op, args)
-        if meta is not None:
-            await send({"type": "result", **meta})
+        antwort = meta.behandeln(op, args, peer=peer)
+        if antwort is not None:
+            await send({"type": "result", **antwort})
             return
 
         # Streaming-Callback: aus dem Worker-Thread thread-sicher in den Loop
@@ -101,10 +123,10 @@ async def _handle(reader: asyncio.StreamReader, writer: asyncio.StreamWriter):
             asyncio.run_coroutine_threadsafe(
                 send({"type": "stream", "line": str(line)[:4000]}), loop)
 
-        print(f"[Broker] op={op} user={user} args={ops.redact_args(op, args)}", flush=True)
+        print(f"[Broker] op={op} user={user} {peer} args={ops.redact_args(op, args)}", flush=True)
         try:
             result = await asyncio.wait_for(
-                asyncio.to_thread(ops.dispatch, op, args, user, stream_cb),
+                asyncio.to_thread(ops.dispatch, op, args, user, stream_cb, peer),
                 timeout=timeout + 30,   # Puffer: Op-interne Timeouts greifen zuerst
             )
         except asyncio.TimeoutError:
@@ -129,6 +151,13 @@ async def _handle(reader: asyncio.StreamReader, writer: asyncio.StreamWriter):
 async def main():
     if os.geteuid() != 0:
         print("[Broker] WARNUNG: laeuft nicht als root – Root-Ops werden scheitern.", flush=True)
+
+    # Ops, die ihre Automatik verloren haben: bestehende auto-Eintraege
+    # zuruecksetzen, sonst bliebe die Registry-Aenderung wirkungslos.
+    for key in policy.herabstufen(ops.OHNE_AUTOMATIK):
+        print(f"[Broker] Freigabe zurueckgesetzt (braucht jetzt Admin-Freigabe): {key}", flush=True)
+    from backend.broker import CODE_ROOT, PROJECT_ROOT
+    print(f"[Broker] Code aus {CODE_ROOT}, Daten in {PROJECT_ROOT}", flush=True)
 
     # Alten Socket entfernen (Neustart)
     try:

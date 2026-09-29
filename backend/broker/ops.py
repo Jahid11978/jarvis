@@ -9,12 +9,13 @@ dispatch() wird sowohl vom Broker-Daemon (Socket) als auch vom root-Fallback
 des Clients (Alt-Installationen, Backend laeuft noch als root) genutzt.
 """
 
+import os
 import re
 import shlex
 import subprocess
 import time
 
-from backend.broker import policy
+from backend.broker import CODE_ROOT, PROJECT_ROOT, policy
 
 # ── Whitelists ───────────────────────────────────────────────────────────────
 SYSTEMCTL_UNITS = {
@@ -25,6 +26,10 @@ SYSTEMCTL_ACTIONS = {"start", "stop", "restart", "reload", "enable", "disable",
                      "is-active", "is-enabled", "daemon-reload"}
 SANDBOX_USER_PREFIX = "jarvis_sandbox"      # harte Grenze: nur Sandbox-User
 MOUNT_PREFIX = "/mnt/"                      # Mounts nur unterhalb /mnt/
+# Wissens-Freigaben sind DATEN. Ohne nosuid wuerde eine SUID-root-Datei auf einem
+# NFS-Server, den der Absender einer Freigabe kontrolliert, hier als root laufen
+# (Befund K2-d, 2026-09-29). noexec/nodev aus demselben Grund.
+MOUNT_OPTS = "ro,nosuid,nodev,noexec"
 # Automatische/interne Wartungs- und Status-Ops OHNE forensischen Wert: werden
 # WEDER in der Freigabeliste registriert NOCH auditiert, sonst fluten sie beides
 # mit inhaltslosen "executed (rc=0)"-Eintraegen (UI-Status-Polls, die im Takt
@@ -227,12 +232,72 @@ def _op_vnc_restart(args, stream):
     return {"ok": True, "rc": 0, "stdout": out or "x11vnc neu gestartet", "stderr": ""}
 
 
+# Gruppen, deren Mitglieder root werden koennen. Ein Kennwort fuer ein solches
+# Konto zu setzen hiesse: das unprivilegierte Backend bestimmt ein sudo-Kennwort.
+_ROOT_GRUPPEN = {"root", "sudo", "wheel", "admin"}
+
+
+def _kann_root_werden(username: str) -> str:
+    """Grund, warum ``username`` root-faehig ist – oder '' (fail-closed bei Fehlern)."""
+    import grp
+    import pwd
+    try:
+        pw = pwd.getpwnam(username)
+    except KeyError:
+        return "kein lokales Konto"
+    if pw.pw_uid < 1000:
+        return f"Systemkonto (uid {pw.pw_uid})"
+    try:
+        gids = os.getgrouplist(username, pw.pw_gid)
+        namen = {grp.getgrgid(g).gr_name for g in gids}
+    except Exception as e:  # noqa: BLE001
+        return f"Gruppen nicht lesbar ({e})"
+    treffer = sorted(namen & _ROOT_GRUPPEN)
+    if treffer:
+        return "Mitglied von " + ", ".join(treffer)
+    # sudoers kann Rechte auch ohne Gruppe vergeben (Eintrag fuer den Namen).
+    # Massgeblich sind nur Regeln, die das KENNWORT verlangen – eine
+    # NOPASSWD-Regel wirkt ohnehin, mit oder ohne gesetztes Kennwort. (Gemessen
+    # 2026-09-29: auf dem Entwicklerrechner darf JEDES Konto ein Update-Skript
+    # per NOPASSWD starten; die erste Fassung hielt deshalb alle fuer root-faehig.)
+    r = _run(["sudo", "-n", "-l", "-U", username], timeout=10, neutrale_sprache=True)
+    if r.get("ok"):
+        text = r.get("stdout") or ""
+        if "may run the following commands" in text:
+            regeln = text.split("may run the following commands", 1)[1].splitlines()[1:]
+            mit_kennwort = [z.strip() for z in regeln
+                            if z.strip().startswith("(") and "NOPASSWD:" not in z]
+            if mit_kennwort:
+                return f"hat sudo-Rechte mit Kennwort ({mit_kennwort[0][:60]})"
+    return ""
+
+
 def _op_chpasswd(args, stream):
+    """Linux-Kennwort setzen – NUR fuer das Desktop-/Anmeldekonto und nur, wenn
+    es NICHT root werden kann.
+
+    Befund K2 (2026-09-29): die Op war automatisch erlaubt und prueste nur das
+    Zeichenmuster. Das unprivilegierte Backend konnte damit das Kennwort von
+    root setzen – oder das eines sudo-Mitglieds. Genutzt wird sie ausschliesslich
+    fuer den Kennwortwechsel des lokalen Kontos ``jarvis`` (main.py,
+    ALLOWED_USERS); alles andere ist hier fehl am Platz.
+    """
     from backend import desktop_control
     username = str(args.get("username", "")).strip()
     password = str(args.get("password", ""))
     if not re.fullmatch(r"[A-Za-z0-9_][A-Za-z0-9_.\-]{0,31}", username):
         return {"ok": False, "rc": -1, "stdout": "", "stderr": "Ungueltiger Benutzername"}
+    if username not in _DESKTOP_USERS:
+        return {"ok": False, "rc": -1, "stdout": "",
+                "stderr": f"Kennwortwechsel ueber Jarvis ist nur fuer "
+                          f"{'/'.join(sorted(_DESKTOP_USERS))} vorgesehen, nicht fuer '{username}'."}
+    grund = _kann_root_werden(username)
+    if grund:
+        return {"ok": False, "rc": -1, "stdout": "",
+                "stderr": f"Das Konto '{username}' kann root werden ({grund}). Sein "
+                          f"Kennwort laesst sich deshalb nicht ueber Jarvis setzen – "
+                          f"das waere ein sudo-Kennwort in der Hand des Dienstes. "
+                          f"Als root: passwd {username}"}
     ok = desktop_control.change_linux_password(username, password)
     return {"ok": ok, "rc": 0 if ok else 1,
             "stdout": "Kennwort gesetzt" if ok else "", "stderr": "" if ok else "chpasswd fehlgeschlagen"}
@@ -402,15 +467,18 @@ def _op_tika_setup(args, stream):
     Soll-Zustand her, ist idempotent und jederzeit widerrufbar (Sicherheit →
     Root-Freigaben).
     """
-    from pathlib import Path as _P
-    jdir = _P(__file__).resolve().parent.parent.parent
-    script = jdir / "deploy" / "tika_setup.sh"
+    # Das SKRIPT kommt aus dem Code des Brokers (root-eigene Kopie, Befund K1),
+    # das ZIEL (vendor/) aus dem Datenbaum. Aus /opt/jarvis wird als root nichts
+    # ausgefuehrt – dort koennte der Dienstbenutzer das Skript vorher ersetzen.
+    script = CODE_ROOT / "deploy" / "tika_setup.sh"
     if not script.is_file():
         return {"ok": False, "rc": -1, "stdout": "",
                 "stderr": f"Setup-Skript fehlt: {script}"}
     # 900 s: apt-get install default-jre-headless (~199 MB) plus 65 MB
     # Download von Maven Central. Der Daemon deckelt ohnehin bei MAX_TIMEOUT.
-    return _stream_shell(f"bash {shlex.quote(str(script))}", str(jdir), 900, stream)
+    befehl = (f"JARVIS_DIR={shlex.quote(str(PROJECT_ROOT))} "
+              f"bash {shlex.quote(str(script))}")
+    return _stream_shell(befehl, str(CODE_ROOT), 900, stream)
 
 
 def _op_tika_status(args, stream):
@@ -565,7 +633,7 @@ def _cifs_anmeldung(username: str, password: str):
     """
     user = (username or "").strip()
     if not user:
-        return "ro,guest", None, ""
+        return f"{MOUNT_OPTS},guest", None, ""
     domain = ""
     for trenner in ("\\", "/"):
         if trenner in user:
@@ -578,7 +646,7 @@ def _cifs_anmeldung(username: str, password: str):
     if "," in user or "," in domain:
         return "", None, ("Benutzername und Domaene duerfen kein Komma "
                           "enthalten.")
-    opts = f"ro,username={user}"
+    opts = f"{MOUNT_OPTS},username={user}"
     if domain:
         opts += f",domain={domain}"
     if not password:
@@ -628,7 +696,7 @@ def _op_mount_share(args, stream):
             return {"ok": False, "rc": -1, "stdout": "", "stderr": fehler}
         cmd = ["mount", "-t", "cifs", source, mp, "-o", opts]
     elif mount_type == "nfs":
-        cmd = ["mount", "-t", "nfs", "-o", "ro", source, mp]
+        cmd = ["mount", "-t", "nfs", "-o", MOUNT_OPTS, source, mp]
     elif mount_type == "webdav":
         # davfs2: Credentials in root-eigene Secrets-Datei schreiben
         secrets = Path("/etc/davfs2/secrets")
@@ -641,7 +709,7 @@ def _op_mount_share(args, stream):
         else:
             secrets.write_text(line)
         secrets.chmod(0o600)
-        cmd = ["mount", "-t", "davfs", "-o", "ro", source, mp]
+        cmd = ["mount", "-t", "davfs", "-o", MOUNT_OPTS, source, mp]
     else:
         return {"ok": False, "rc": -1, "stdout": "", "stderr": f"Unbekannter Typ: {mount_type}"}
     # Sprachneutral, weil main.py::_mount_fehler_deuten die Ausgabe deutet.
@@ -1024,7 +1092,7 @@ def _op_certbot_obtain(args, stream):
     except KeyError:
         uid = gid = 0
     copied = []
-    for certs_dir in [Path("/opt/jarvis/certs")]:
+    for certs_dir in [PROJECT_ROOT / "certs"]:
         if not certs_dir.parent.exists():
             continue
         certs_dir.mkdir(parents=True, exist_ok=True)
@@ -1056,7 +1124,7 @@ def _op_certbot_obtain(args, stream):
             "#!/bin/bash\n"
             "# Auto-generiert von Jarvis (backend/broker/ops.py): kopiert erneuerte\n"
             "# Let's-Encrypt-Zertifikate ins Jarvis-certs/-Verzeichnis.\n"
-            f"for D in /opt/jarvis/certs; do\n"
+            f"for D in {shlex.quote(str(PROJECT_ROOT / 'certs'))}; do\n"
             f"  [ -d \"$D\" ] || continue\n"
             f"  cp -L /etc/letsencrypt/live/{domain}/fullchain.pem \"$D/server.crt\"\n"
             f"  cp -L /etc/letsencrypt/live/{domain}/privkey.pem \"$D/server.key\"\n"
@@ -1079,9 +1147,9 @@ def _op_broker_mode(script_name: str, unit: str, args):
     Skript jarvis.service/jarvis-broker.service neu startet – ein Kind-Prozess
     in deren cgroup wuerde beim Restart mitgekillt. Rueckgabe sofort
     ('gestartet'); Fortschritt via journalctl -u <unit> bzw. Status-Polling."""
-    from pathlib import Path as _P
-    jdir = _P(__file__).resolve().parent.parent.parent
-    script = jdir / "deploy" / "security" / script_name
+    # Skript aus dem Broker-Code (root-eigen), Zielbaum = Datenbaum (Befund K1).
+    jdir = PROJECT_ROOT
+    script = CODE_ROOT / "deploy" / "security" / script_name
     if not script.exists():
         return {"ok": False, "rc": -1, "stdout": "",
                 "stderr": f"Skript fehlt: {script}"}
@@ -1135,7 +1203,8 @@ _REGISTRY = {
         _op_broker_teardown,
         lambda a: "broker_teardown",
         lambda a: "Alt-Betrieb wiederherstellen (Backend als root, Broker-Dienst deaktivieren)",
-        True, (),
+        # NICHT automatisch (K2-b): die Op macht das Backend wieder zu root.
+        False, (),
     ),
     "systemctl": (
         _op_systemctl,
@@ -1268,6 +1337,11 @@ _REGISTRY = {
 }
 
 
+# Ops ohne default_allow, deren Bestands-Eintraege beim Start zurueckgesetzt
+# werden (policy.herabstufen) – abgeleitet, nicht gepflegt.
+OHNE_AUTOMATIK = {name for name, e in _REGISTRY.items() if not e[3]}
+
+
 def redact_args(op: str, args: dict) -> dict:
     """Sensible Felder (Passwoerter) fuer Audit/Anzeige maskieren."""
     entry = _REGISTRY.get(op)
@@ -1298,7 +1372,7 @@ def _args_info(op: str, args: dict) -> str:
     return " ".join(parts)[:300]
 
 
-def dispatch(op: str, args: dict, user: str = "", stream=None) -> dict:
+def dispatch(op: str, args: dict, user: str = "", stream=None, peer: str = "") -> dict:
     """Operation ausfuehren: Policy pruefen (Eintrag beim ersten Auftauchen
     anlegen), bei 'allow' ausfuehren, sonst pending/denied zurueckgeben."""
     args = args or {}
@@ -1335,11 +1409,11 @@ def dispatch(op: str, args: dict, user: str = "", stream=None) -> dict:
 
     decision = policy.check(key, op, desc, user, default_allow)
     if decision == policy.DENY:
-        policy.audit(user, op, key, "denied", context=context, info=info)
+        policy.audit(user, op, key, "denied", context=context, info=info, peer=peer)
         return {"ok": False, "decision": "denied", "key": key,
                 "error": "Vom Administrator abgelehnt"}
     if decision == policy.PENDING:
-        policy.audit(user, op, key, "pending", context=context, info=info)
+        policy.audit(user, op, key, "pending", context=context, info=info, peer=peer)
         return {"ok": False, "decision": "pending", "key": key,
                 "error": "Wartet auf Admin-Freigabe"}
 
@@ -1353,7 +1427,7 @@ def dispatch(op: str, args: dict, user: str = "", stream=None) -> dict:
     # damit auch rc=0-Eintraege aussagen, WAS passiert ist.
     detail = (result.get("stderr") or result.get("stdout") or "")[:200]
     policy.audit(user, op, key, "executed", rc=result.get("rc"),
-                 duration_ms=dur, detail=detail, context=context, info=info)
+                 duration_ms=dur, detail=detail, context=context, info=info, peer=peer)
     result.setdefault("ok", False)
     result["decision"] = "allowed"
     result["key"] = key

@@ -4,12 +4,18 @@ import os
 import json
 import uuid
 from pathlib import Path
-from dotenv import load_dotenv
+try:
+    from dotenv import load_dotenv
+except ImportError:   # Root-Broker: System-Python ohne python-dotenv, braucht .env nicht
+    def load_dotenv(*_a, **_k):
+        return False
 
 from backend.secret_key import aufloesen as _secret_aufloesen
 
 # .env aus Projektverzeichnis laden
-PROJECT_ROOT = Path(__file__).parent.parent
+# JARVIS_PROJECT_ROOT setzt nur der Root-Broker: er laeuft aus einer root-eigenen
+# Kopie des Codes, die Daten liegen weiter im Projektbaum (backend/broker/__init__.py).
+PROJECT_ROOT = Path(os.environ.get("JARVIS_PROJECT_ROOT") or Path(__file__).parent.parent)
 load_dotenv(PROJECT_ROOT / ".env")
 
 
@@ -177,7 +183,7 @@ class Config:
     # data/.secret_key (siehe backend/secret_key.py, Vorfall 2026-09-28).
     SECRET_KEY: str = _secret_aufloesen(
         os.getenv("SECRET_KEY", ""),
-        Path(__file__).parent.parent / "data" / ".secret_key")
+        PROJECT_ROOT / "data" / ".secret_key")
     AGENT_API_KEY: str = os.getenv("AGENT_API_KEY", "")  # API-Key für externen Agent-Task-Zugriff
     SERVER_HOST: str = os.getenv("SERVER_HOST", "0.0.0.0")
     SERVER_PORT: int = int(os.getenv("SERVER_PORT", "443"))

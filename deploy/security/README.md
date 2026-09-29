@@ -29,11 +29,38 @@ Alt-Betrieb (nicht migriert, Backend als root) funktioniert weiter: der
 Broker-Client führt Operationen dann lokal aus – inklusive Policy + Audit,
 nur ohne Prozess-Trennung.
 
-**Vertrauensmodell / bekannte Grenze:** Die Admin-Entscheidungen kommen über
-das Backend (Web-UI) zum Broker. Ein vollständig kompromittiertes Backend
-könnte sich Freigaben selbst erteilen – die Trennung schützt primär davor,
-dass Agent-/Prompt-Injection-Code *direkt* mit root läuft, und macht jede
-Root-Aktion auditierbar. Policy/Audit-Dateien selbst sind root-only.
+**Vertrauensmodell (seit 2026-09-29, Befunde K1/K2 des BSI-Abgleichs):**
+
+- **Root-eigene Laufzeit.** Der Broker laeuft NICHT mehr aus `/opt/jarvis` (gehoert
+  dem Dienstbenutzer), sondern aus `/usr/local/lib/jarvis-broker` (root:root) mit dem
+  System-Python. Vorher genuegte eine geaenderte Zeile in `backend/broker/`, im venv
+  oder in `start_jarvis_root.sh`, um beim naechsten Neustart root zu sein. Aus dem
+  Projektbaum startet root nichts mehr (kein Skript, kein venv, kein git).
+- **Quelle der Kopie** steht in `/etc/jarvis/broker.conf` (root-eigen):
+  `QUELLE=github` (Vorgabe) – root holt den Stand bei jedem Broker-Start selbst aus
+  dem oeffentlichen Repository; der Dienstbenutzer kann ein Auffrischen ausloesen,
+  aber nicht bestimmen, WAS installiert wird. `QUELLE=lokal` kopiert aus
+  `/opt/jarvis` – nur fuer Entwicklungsrechner, jeder Start warnt im Journal.
+  Von Hand: `bash deploy/security/broker_installieren.sh [--quelle lokal]`.
+- **Bestandssysteme stellen sich selbst um:** laeuft `start_jarvis_root.sh` noch aus
+  dem Projektbaum (alte Unit), legt es die Kopie an, schreibt die Unit um und wechselt
+  hinein. Dabei wird auch eine als root laufende `whatsapp-bridge.service` auf den
+  Dienstbenutzer umgestellt.
+- **Freigaben brauchen einen Nachweis, den nur der Broker pruefen kann.** `allow` und
+  das Loeschen eines Eintrags verlangen einen TOTP-Code (Schluessel root-eigen in
+  `/etc/jarvis/broker-freigabe.key`). Einrichten als root:
+  `jarvis-broker-admin totp-einrichten`. Ohne Code geht es nur ueber die root-Konsole:
+  `jarvis-broker-admin liste | erlauben <key> | ablehnen <key> | audit`.
+  `deny`/`pending` brauchen keinen Code (sie schraenken nur ein).
+- Der Broker prueft den Aufrufer per `SO_PEERCRED` (nur root und der Dienstbenutzer)
+  und schreibt dessen uid ins Audit (`peer`) – `user`/`by` sind Angaben des Aufrufers.
+- Nicht mehr automatisch erlaubt: `broker_teardown` (macht das Backend wieder zu root).
+  `chpasswd` nur noch fuer das Anmeldekonto `jarvis` und nur, wenn es nicht root werden
+  kann (sudo-Gruppe/sudoers mit Kennwort). Netzwerk-Mounts mit `nosuid,nodev,noexec`.
+- **Bekannte Grenze:** ein Backend, das GENAU in dem Moment kompromittiert ist, in dem
+  ein Administrator einen Code eintippt, kann diesen einen Code fuer eine andere
+  Entscheidung verwenden (Wiederholschutz: genau eine). Ohne anwesenden Administrator
+  – der Fall einer Prompt-Injection – gibt es keine Freigabe.
 
 # Internet-Egress-Sperre für Benutzer ohne Internet-Freigabe
 

@@ -42,7 +42,9 @@ TIKA_SHA1="2161b5b56682f543035d328eeeb230717e07f446"
 TIKA_SHA256="0e8ee9795ac4244feab466f4a5a9c3b94675af392848243842cb6e1e69d27103"
 TIKA_URL="https://repo1.maven.org/maven2/org/apache/tika/tika-app/${TIKA_VERSION}/tika-app-${TIKA_VERSION}.jar"
 
-PROJEKT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+# JARVIS_DIR setzt der Root-Broker: das Skript laeuft dort aus seiner root-eigenen
+# Code-Kopie, das Ziel (vendor/) liegt aber im Projektbaum (Befund K1, 2026-09-29).
+PROJEKT="${JARVIS_DIR:-$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)}"
 VENDOR="$PROJEKT/vendor"
 ZIEL="$VENDOR/tika-app.jar"
 DIENST_USER="${JARVIS_SERVICE_USER:-jarvis}"

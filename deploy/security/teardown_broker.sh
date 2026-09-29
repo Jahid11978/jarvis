@@ -22,10 +22,14 @@ step() { echo ""; echo "── $*"; }
 
 [ "$(id -u)" = "0" ] || fail "Bitte als root ausfuehren."
 [ -d "$JARVIS_DIR" ] || fail "Verzeichnis $JARVIS_DIR fehlt."
-[ -f "$JARVIS_DIR/jarvis.service" ] || fail "Alt-Unit fehlt: $JARVIS_DIR/jarvis.service"
+# Die Unit kommt aus dem Code DIESES Skripts (root-eigene Broker-Kopie), nicht
+# aus $JARVIS_DIR: dort koennte der Dienstbenutzer sie vorher umschreiben, und
+# systemd fuehrte das Ergebnis als root aus (Befund K1, 2026-09-29).
+CODE_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
+[ -f "$CODE_DIR/jarvis.service" ] || fail "Alt-Unit fehlt: $CODE_DIR/jarvis.service"
 
 step "1/3 Alt-Unit installieren (User=root)"
-cp "$JARVIS_DIR/jarvis.service" "$UNIT_DIR/jarvis.service"
+cp "$CODE_DIR/jarvis.service" "$UNIT_DIR/jarvis.service"
 if [ "$JARVIS_DIR" != "/opt/jarvis" ]; then
     sed -i "s|/opt/jarvis|$JARVIS_DIR|g" "$UNIT_DIR/jarvis.service"
 fi

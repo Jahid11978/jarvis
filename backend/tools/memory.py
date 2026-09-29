@@ -9,6 +9,7 @@ from pathlib import Path
 from typing import Any
 
 from backend.benutzer import norm_user, pfad_teil
+from backend.sandbox import privat_machen
 from backend.tools.base import BaseTool
 
 # Memory-Verzeichnis
@@ -78,6 +79,7 @@ def _load_memory_dict(username: str = "") -> dict:
                     data = json.loads(bak.read_text(encoding="utf-8"))
                     print(f"[MEMORY] Backup geladen ({len(data)} Eintraege)", flush=True)
                     mem_file.write_text(json.dumps(data, indent=2, ensure_ascii=False), encoding="utf-8")
+                    privat_machen(mem_file)
                     _user_caches[cache_key] = data
                     if cache_key == "jarvis":
                         _cache = data
@@ -99,7 +101,12 @@ def _save_memory_dict(memory: dict, username: str = ""):
     mem_file.parent.mkdir(parents=True, exist_ok=True)
     if mem_file.exists():
         shutil.copy2(mem_file, mem_file.with_suffix(".json.bak"))
+        privat_machen(mem_file.with_suffix(".json.bak"))
     mem_file.write_text(json.dumps(memory, indent=2, ensure_ascii=False), encoding="utf-8")
+    # Ein NEUER Benutzer bekommt die Datei hier zum ersten Mal – mit der umask des
+    # Dienstes waere sie 0644 und bis zum naechsten Neustart fuer die Sandbox
+    # lesbar (ECHT 2026-09-29: 27 Gedaechtnisse so). Siehe sandbox.PRIVATE_FILE_GLOBS.
+    privat_machen(mem_file)
     _user_caches[cache_key] = memory
     if cache_key == "jarvis":
         _cache = memory

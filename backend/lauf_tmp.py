@@ -105,7 +105,10 @@ import time
 import uuid
 from pathlib import Path
 
-PROJECT_ROOT = Path(__file__).resolve().parent.parent
+# Im Root-Broker zeigt __file__ auf dessen root-eigene Code-Kopie – die
+# Verwaltungswurzel, die hier ausgeschlossen wird, ist aber der PROJEKTBAUM.
+PROJECT_ROOT = Path(os.environ.get("JARVIS_PROJECT_ROOT")
+                    or Path(__file__).resolve().parent.parent)
 
 # Alles liegt unter /tmp: es ist auf beiden Servern ein tmpfs (schnell, wird
 # beim Reboot geleert) und der einzige Ort, den der Sandbox-Benutzer sicher

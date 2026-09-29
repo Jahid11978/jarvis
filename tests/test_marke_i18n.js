@@ -45,6 +45,7 @@ const AUSNAHMEN = {
     'security.broker_setup_confirm':    'Dienstnamen jarvis-broker*',
     'security.broker_teardown_confirm': 'Dienstnamen jarvis-broker*',
     'security.broker_mode_timeout':     'journalctl -u jarvis-broker-migrate',
+    'security.broker_code_setup':       'Befehlsname jarvis-broker-admin (root-Konsole)',
     'security.pw_change_hint':          'das Linux-Konto heisst jarvis',
     'security.ad_warn_none':            'der lokale Rueckweg ist das Konto jarvis',
     'security.ad_group_warning':        'nennt denselben lokalen Rueckweg: das Konto jarvis',

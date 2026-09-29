@@ -35,25 +35,14 @@ def mode() -> str:
 
 def _local_dispatch(op: str, args: dict, user: str, stream_cb) -> dict:
     """Fallback: direkte Ausfuehrung im eigenen (root-)Prozess."""
-    from backend.broker import ops, policy
+    from backend.broker import ops
 
-    # Meta-Ops auch lokal bedienen (Admin-UI auf Alt-Installationen)
-    if op == "broker.ping":
-        return {"ok": True, "pid": os.getpid(), "euid": os.geteuid(), "local": True}
-    if op == "broker.policy_list":
-        return {"ok": True, "ops": policy.list_ops()}
-    if op == "broker.policy_decide":
-        entry = policy.decide(str(args.get("key", "")), str(args.get("decision", "")),
-                              str(args.get("by", "")))
-        if entry is None:
-            return {"ok": False, "error": "Unbekannter Key oder ungueltige Entscheidung"}
-        policy.audit(str(args.get("by", "")), "broker.policy_decide",
-                     str(args.get("key", "")), str(args.get("decision", "")))
-        return {"ok": True, "entry": entry}
-    if op == "broker.policy_remove":
-        return {"ok": policy.remove(str(args.get("key", "")))}
-    if op == "broker.audit_tail":
-        return {"ok": True, "entries": policy.audit_tail(int(args.get("n") or 100))}
+    # Meta-Ops ueber DIESELBE Fassung wie der Daemon (backend/broker/meta.py) –
+    # hier stand bis 2026-09-29 eine zweite, die beim Loeschen nicht protokollierte.
+    from backend.broker import meta
+    antwort = meta.behandeln(op, args or {}, peer=f"lokal uid={os.geteuid()}")
+    if antwort is not None:
+        return antwort
     return ops.dispatch(op, args or {}, user, stream_cb)
 
 

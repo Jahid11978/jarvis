@@ -10,6 +10,7 @@ diesen Benutzer unlesbar sind – das prueft/erzwingt setup().
 Laeuft als root (jarvis.service). Fest verdrahtete Kommandos, kein
 benutzergesteuerter Shell-Input -> keine Injection.
 """
+import os
 import pwd
 import shlex
 import shutil
@@ -58,7 +59,8 @@ def _secret_files():
         files.append(Path(config.SETTINGS_FILE))
     except Exception:  # noqa: BLE001
         pass
-    root = Path(__file__).resolve().parent.parent
+    # Projektbaum, nicht die Code-Kopie des Brokers (backend/broker/__init__.py)
+    root = Path(os.environ.get("JARVIS_PROJECT_ROOT") or Path(__file__).resolve().parent.parent)
     for name in (".env",):
         p = root / name
         if p.exists():

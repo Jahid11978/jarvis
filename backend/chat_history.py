@@ -50,7 +50,7 @@ def replace(user: str, messages: list) -> list:
         messages = []
     messages = messages[-_MAX:]
     with _LOCK:
-        _DIR.mkdir(parents=True, exist_ok=True)
+        _DIR.mkdir(mode=0o750, parents=True, exist_ok=True)  # Chats: sandbox.PRIVATE_DIRS
         _path(user).write_text(json.dumps(messages, ensure_ascii=False), encoding="utf-8")
     return messages
 
@@ -61,7 +61,7 @@ def append(user: str, message: dict) -> list:
         return load(user)
     p = _path(user)
     with _LOCK:
-        _DIR.mkdir(parents=True, exist_ok=True)
+        _DIR.mkdir(mode=0o750, parents=True, exist_ok=True)  # Chats: sandbox.PRIVATE_DIRS
         try:
             cur = json.loads(p.read_text(encoding="utf-8")) if p.exists() else []
             if not isinstance(cur, list):

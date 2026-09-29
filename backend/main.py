@@ -5177,6 +5177,14 @@ async def startup_benutzer_ablagen():
                 print(f"[Benutzer-Ablagen] ⚠ FEHLER {f}", flush=True)
             if erg.get("sicherung"):
                 print(f"[Benutzer-Ablagen] Sicherung: {erg['sicherung']}", flush=True)
+            # Die Zusammenfuehrung schreibt NACH startup_harden_data_dirs neue
+            # Gedaechtnis-/Verlaufsdateien (umask 0644) – Rechte hier nachziehen.
+            try:
+                from backend import sandbox as _sbx
+                for a in _sbx.harden_data_dirs():
+                    print(f"[security] Verzeichnisrechte {a}", flush=True)
+            except Exception as e:  # noqa: BLE001
+                print(f"[security] Verzeichnisrechte nach Migration: {e}", flush=True)
             print(f"[Benutzer-Ablagen] ✓ {len(erg['vorgaenge'])} Vorgang/Vorgaenge "
                   f"in {time.time() - t0:.2f}s", flush=True)
         # Unzuordenbares wird GEMELDET und nicht geraten: ein falscher
@@ -6503,46 +6511,65 @@ async def broker_ops_list(user: str = Depends(require_local_auth)):
     if not res.get("ok"):
         return JSONResponse({"ok": False, "error": res.get("error", "Broker nicht erreichbar")},
                             status_code=502)
-    return JSONResponse({"ok": True, "ops": res.get("ops") or []})
+    # freigabe_code: ist auf dem Server ein Code fuer Freigaben eingerichtet?
+    # Fehlt das Feld (alter Broker), ist die Antwort "unbekannt", nicht "nein".
+    return JSONResponse({"ok": True, "ops": res.get("ops") or [],
+                         "freigabe_code": res.get("freigabe_code")})
 
 
 @app.post("/api/broker/ops/decide")
 async def broker_ops_decide(request: Request, user: str = Depends(require_local_auth)):
     """Admin-Entscheidung fuer eine Root-Operation setzen (Admin).
 
-    Body: {key, decision} mit decision in allow|deny|pending.
+    Body: {key, decision[, nachweis]} mit decision in allow|deny|pending.
     'allow' schaltet die Operation frei (der Agent kann sie danach erneut
     ausfuehren), 'deny' sperrt sie dauerhaft, 'pending' setzt sie zurueck auf
     'wartet auf Freigabe'. Jede Entscheidung wird im Broker-Audit-Log
-    protokolliert."""
+    protokolliert.
+
+    'allow' braucht seit 2026-09-29 den Freigabe-Code (``nachweis``), den der
+    BROKER prueft (backend/broker/freigabe.py) – das Backend reicht ihn nur
+    durch. Ohne ihn konnte jeder Prozess des Dienstbenutzers sich Root-Befehle
+    selbst freigeben (Befund K2)."""
     body = await request.json()
     key = (body.get("key") or "").strip()
     decision = (body.get("decision") or "").strip()
+    nachweis = str(body.get("nachweis") or "").strip()[:12]
     if not key or decision not in ("allow", "deny", "pending"):
         return JSONResponse({"ok": False, "error": "key und decision (allow|deny|pending) erforderlich"},
                             status_code=400)
     from backend import broker_client
     res = await broker_client.call("broker.policy_decide",
-                                   {"key": key, "decision": decision, "by": user},
+                                   {"key": key, "decision": decision, "by": user,
+                                    "nachweis": nachweis},
                                    user=user, timeout=15)
     if not res.get("ok"):
-        return JSONResponse({"ok": False, "error": res.get("error", "Unbekannter Eintrag")},
-                            status_code=404)
+        grund = res.get("grund") or ""
+        return JSONResponse({"ok": False, "grund": grund,
+                             "error": res.get("error", "Unbekannter Eintrag")},
+                            status_code=403 if grund else 404)
     return JSONResponse({"ok": True, "entry": res.get("entry")})
 
 
 @app.post("/api/broker/ops/remove")
 async def broker_ops_remove(request: Request, user: str = Depends(require_local_auth)):
-    """Eintrag aus der Broker-Policy loeschen (Admin). Body: {key}.
+    """Eintrag aus der Broker-Policy loeschen (Admin). Body: {key, nachweis}.
     Die Operation erscheint beim naechsten Auftauchen wieder (Systemoperationen
-    als 'allow', Root-Shell-Befehle als 'pending')."""
+    als 'allow', Root-Shell-Befehle als 'pending') – deshalb braucht das Loeschen
+    denselben Freigabe-Code wie 'allow': eine geloeschte Ablehnung waere sonst
+    eine Freigabe durch die Hintertuer (K2-c)."""
     body = await request.json()
     key = (body.get("key") or "").strip()
+    nachweis = str(body.get("nachweis") or "").strip()[:12]
     if not key:
         return JSONResponse({"ok": False, "error": "key erforderlich"}, status_code=400)
     from backend import broker_client
-    res = await broker_client.call("broker.policy_remove", {"key": key, "by": user},
+    res = await broker_client.call("broker.policy_remove",
+                                   {"key": key, "by": user, "nachweis": nachweis},
                                    user=user, timeout=15)
+    if not res.get("ok") and res.get("grund"):
+        return JSONResponse({"ok": False, "grund": res.get("grund"),
+                             "error": res.get("error", "")}, status_code=403)
     return JSONResponse({"ok": bool(res.get("ok"))})
 
 

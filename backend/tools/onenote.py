@@ -59,7 +59,8 @@ import time
 import unicodedata
 from pathlib import Path
 
-PROJECT_ROOT = Path(__file__).parent.parent.parent
+# Datenbaum (vendor/) – im Root-Broker nicht dessen Code-Kopie
+PROJECT_ROOT = Path(os.environ.get("JARVIS_PROJECT_ROOT") or Path(__file__).parent.parent.parent)
 
 # Die Datei ist 65 MB und gehoert damit NICHT in ein oeffentliches Repo –
 # ``deploy/tika_setup.sh`` legt sie ab. Reihenfolge: ausdrueckliche Angabe des

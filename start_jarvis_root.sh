@@ -11,12 +11,91 @@
 # unprivilegierte Backend (jarvis.service, User=jarvis) Root-Operationen
 # anfordert. Siehe deploy/security/README.md.
 
-JARVIS_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# ZWEI VERZEICHNISSE (Befund K1, BSI-Abgleich 2026-09-29):
+#   CODE_DIR   – woher DIESES Skript und der Broker-Code kommen. Regulaer die
+#                root-eigene Kopie /usr/local/lib/jarvis-broker.
+#   JARVIS_DIR – der Projektbaum mit den Daten (/opt/jarvis). Er gehoert dem
+#                Dienstbenutzer; als root wird daraus NICHTS ausgefuehrt, kein
+#                Skript, kein venv, kein git. Frueher lief genau das – und wer
+#                als jarvis eine Zeile darin aenderte, hatte beim naechsten
+#                Broker-Start root.
+CODE_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+BROKER_INSTALL_DIR="${JARVIS_BROKER_INSTALL_DIR:-/usr/local/lib/jarvis-broker}"
+if [ -z "${JARVIS_DIR:-}" ]; then
+    # Aus der Kopie heraus kennt das Skript den Projektbaum nicht aus seinem
+    # eigenen Ort; die Unit setzt JARVIS_DIR, sonst die Vorgabe.
+    if [ "$CODE_DIR" = "$BROKER_INSTALL_DIR" ]; then JARVIS_DIR="/opt/jarvis"; else JARVIS_DIR="$CODE_DIR"; fi
+fi
+export JARVIS_DIR
 cd "$JARVIS_DIR"
 
 if [ "$(id -u)" != "0" ]; then
     echo "FEHLER: start_jarvis_root.sh muss als root laufen (jarvis-broker.service)." >&2
     exit 1
+fi
+
+# 0. Broker-Code root-eigen halten
+#
+# a) Laeuft dieses Skript noch aus dem PROJEKTBAUM (alte Unit), wird die Kopie
+#    angelegt, die Unit umgestellt und in die Kopie gewechselt – EINMAL, danach
+#    startet systemd direkt von dort. Das macht jede Bestandsinstallation beim
+#    naechsten Broker-Neustart selbst sicher, gleich wie der Code kam.
+# b) Laeuft es aus der Kopie, wird sie aus der Quelle in /etc/jarvis/broker.conf
+#    aufgefrischt (Vorgabe: das oeffentliche Repository, von root selbst
+#    geholt). Scheitert das, laeuft der bisherige Stand weiter.
+# JARVIS_BROKER_FRISCH=1 verhindert eine Schleife nach dem Wechsel.
+INSTALLER_REL="deploy/security/broker_installieren.sh"
+if [ "${JARVIS_BROKER_FRISCH:-0}" != "1" ] && [ -f "$CODE_DIR/$INSTALLER_REL" ]; then
+    if [ "$CODE_DIR" != "$BROKER_INSTALL_DIR" ]; then
+        echo "[Broker] laeuft aus dem Projektbaum $CODE_DIR – stelle auf root-eigene Kopie um."
+        bash "$CODE_DIR/$INSTALLER_REL" --jarvis-dir "$JARVIS_DIR"; RC=$?
+        if [ "$RC" != "0" ] && [ "$RC" != "3" ] && [ ! -f "$BROKER_INSTALL_DIR/STAND" ]; then
+            # Erstinstallation ohne Netzweg: einmalig aus dem Baum, der ohnehin
+            # gerade als root laeuft – schlechter wird es dadurch nicht, und beim
+            # naechsten Start versucht es die Quelle erneut.
+            echo "[Broker] WARNUNG: Quelle nicht erreichbar – Erstinstallation aus dem Projektbaum." >&2
+            bash "$CODE_DIR/$INSTALLER_REL" --jarvis-dir "$JARVIS_DIR" --quelle lokal; RC=$?
+        fi
+        if [ -x "$BROKER_INSTALL_DIR/start_jarvis_root.sh" ]; then
+            UNIT=/etc/systemd/system/jarvis-broker.service
+            if [ -f "$BROKER_INSTALL_DIR/deploy/security/jarvis-broker.service" ]; then
+                sed -e "s|^Environment=JARVIS_DIR=.*|Environment=JARVIS_DIR=$JARVIS_DIR|" \
+                    "$BROKER_INSTALL_DIR/deploy/security/jarvis-broker.service" > "$UNIT.tmp" \
+                    && mv "$UNIT.tmp" "$UNIT" && systemctl daemon-reload \
+                    && echo "[Broker] Unit zeigt jetzt auf $BROKER_INSTALL_DIR."
+            fi
+            export JARVIS_BROKER_FRISCH=1
+            exec "$BROKER_INSTALL_DIR/start_jarvis_root.sh"
+        fi
+        echo "[Broker] WARNUNG: root-eigene Kopie nicht verfuegbar – laeuft weiter aus dem Projektbaum (unsicher)." >&2
+    else
+        bash "$CODE_DIR/$INSTALLER_REL" --jarvis-dir "$JARVIS_DIR"; RC=$?
+        if [ "$RC" = "0" ]; then
+            export JARVIS_BROKER_FRISCH=1
+            exec "$BROKER_INSTALL_DIR/start_jarvis_root.sh"
+        fi
+    fi
+fi
+
+# 0b. WhatsApp-Bridge nicht als root (K1-a, auf ECHT gemessen: User=root)
+#
+# Die Bridge startet `node index.js` aus dem Projektbaum. Als root waere jede
+# Aenderung daran durch den Dienstbenutzer ein Weg zu root – und der Broker darf
+# die Unit starten (systemctl-Whitelist). Idempotent, greift nur bei User=root
+# bzw. fehlendem User und nur, wenn die Unit in den Projektbaum zeigt.
+WA_UNIT=/etc/systemd/system/whatsapp-bridge.service
+if [ -f "$WA_UNIT" ] && grep -q "$JARVIS_DIR" "$WA_UNIT" && id jarvis >/dev/null 2>&1; then
+    WA_USER="$(grep -E '^User=' "$WA_UNIT" | head -1 | cut -d= -f2)"
+    if [ -z "$WA_USER" ] || [ "$WA_USER" = "root" ]; then
+        if [ -n "$WA_USER" ]; then
+            sed -i 's|^User=.*|User=jarvis|' "$WA_UNIT"
+        else
+            sed -i 's|^\[Service\]|[Service]\nUser=jarvis|' "$WA_UNIT"
+        fi
+        systemctl daemon-reload
+        systemctl is-active --quiet whatsapp-bridge.service && systemctl restart whatsapp-bridge.service
+        echo "[Broker] whatsapp-bridge.service laeuft jetzt als jarvis (vorher: ${WA_USER:-root})."
+    fi
 fi
 
 # 1. Display-Erkennung (Prioritaet: LightDM :1, dann :0, dann :10)
@@ -250,7 +329,8 @@ fi
 #
 # Abschaltbar mit JARVIS_SANDBOX_PY_AUTO=0 (z.B. auf Servern ohne Netzzugang
 # oder wenn der Paketstand bewusst von Hand gepflegt wird).
-SANDBOX_PY="$JARVIS_DIR/deploy/sandbox_python.sh"
+# Skript aus dem Broker-Code (root-eigen), nie aus dem Projektbaum (K1).
+SANDBOX_PY="$CODE_DIR/deploy/sandbox_python.sh"
 if [ "${JARVIS_SANDBOX_PY_AUTO:-1}" != "0" ] && [ -f "$SANDBOX_PY" ]; then
     (
         if bash "$SANDBOX_PY" --pruefen >/dev/null 2>&1; then
@@ -338,7 +418,8 @@ fi
 # Abschaltbar mit JARVIS_TIKA_AUTO=0 – fuer Server ohne Netzzugang oder wenn
 # die jar bewusst von Hand gepflegt wird (dann sagt JARVIS_TIKA_JAR, wo sie
 # liegt).
-TIKA_SETUP="$JARVIS_DIR/deploy/tika_setup.sh"
+# Skript aus dem Broker-Code, Ziel (vendor/) im Projektbaum – per JARVIS_DIR.
+TIKA_SETUP="$CODE_DIR/deploy/tika_setup.sh"
 if [ "${JARVIS_TIKA_AUTO:-1}" != "0" ] && [ -f "$TIKA_SETUP" ]; then
     (
         if bash "$TIKA_SETUP" --pruefen >/dev/null 2>&1; then
@@ -383,9 +464,12 @@ fi
 # Abschaltbar mit JARVIS_AIMOUSE_AUTO=0 – fuer Server ohne Netzzugang oder wenn
 # die Datei von Hand gepflegt wird (dann sagt JARVIS_AIMOUSE_EXE, wo sie liegt).
 AIMOUSE_BUILD="$JARVIS_DIR/deploy/ai_mouse_build.sh"
-if [ "${JARVIS_AIMOUSE_AUTO:-1}" != "0" ] && [ -f "$AIMOUSE_BUILD" ]; then
+if [ "${JARVIS_AIMOUSE_AUTO:-1}" != "0" ] && [ -f "$AIMOUSE_BUILD" ] && id jarvis >/dev/null 2>&1; then
     (
-        if bash "$AIMOUSE_BUILD" --pruefen >/dev/null 2>&1; then
+        # Das Bauskript liegt im PROJEKTBAUM (es baut dessen Quellen) und laeuft
+        # deshalb auch beim Pruefen als Dienstbenutzer – als root waere es ein
+        # Skript, das jarvis vorher umschreiben kann (K1).
+        if runuser -u jarvis -- bash "$AIMOUSE_BUILD" --pruefen >/dev/null 2>&1; then
             :   # liegt bereit – nichts melden, sonst rauscht jeder Start
         else
             echo "[AI-Mouse] Anwendung fehlt – baue sie (etwa 30 s)..."
@@ -396,11 +480,7 @@ if [ "${JARVIS_AIMOUSE_AUTO:-1}" != "0" ] && [ -f "$AIMOUSE_BUILD" ]; then
             fi
             # Ausgabe erst einsammeln, DANN filtern: eine Pipeline liefert den
             # Exit-Code des LETZTEN Glieds, der Fehlschlag waere unsichtbar.
-            if id jarvis >/dev/null 2>&1; then
-                AUSGABE="$(runuser -u jarvis -- bash "$AIMOUSE_BUILD" 2>&1)"
-            else
-                AUSGABE="$(bash "$AIMOUSE_BUILD" 2>&1)"
-            fi
+            AUSGABE="$(runuser -u jarvis -- bash "$AIMOUSE_BUILD" 2>&1)"
             RC=$?
             printf '%s\n' "$AUSGABE" | sed 's/^/[AI-Mouse] /'
             if [ "$RC" -ne 0 ]; then
@@ -443,7 +523,8 @@ if [ "${JARVIS_EGRESS_AUTOFIX:-1}" != "0" ] && command -v nft >/dev/null 2>&1; t
             NACKT="$(printf '%s\n' "$KETTE" | grep -E '\bdrop\b' | grep -vE '\bskuid\b' | head -3)"
             if [ -n "$NACKT" ]; then
                 echo "[Egress] Die laufende Sperre enthaelt ein 'drop' ohne Benutzerbindung – ziehe nach (SMB/NFS waeren sonst tot)."
-                AUSGABE="$(./venv/bin/python -c 'from backend import egress_guard as e; r=e.setup(); print("OK" if r.get("ok") else "FEHLER"); [print(" ", s["name"], "ok" if s["ok"] else "FEHLER", s.get("detail","")[:120]) for s in r.get("steps",[])]' 2>&1)"
+                # System-Python aus dem Broker-Code, nicht das venv des Dienstes (K1).
+                AUSGABE="$(cd "$CODE_DIR" && JARVIS_PROJECT_ROOT="$JARVIS_DIR" /usr/bin/python3 -c 'from backend import egress_guard as e; r=e.setup(); print("OK" if r.get("ok") else "FEHLER"); [print(" ", s["name"], "ok" if s["ok"] else "FEHLER", s.get("detail","")[:120]) for s in r.get("steps",[])]' 2>&1)"
                 RC=$?
                 printf '%s\n' "$AUSGABE" | sed 's/^/[Egress] /'
                 # ⚠ MASSGEBLICH IST DER ZUSTAND, NICHT DER RUECKGABEWERT: ein
@@ -461,6 +542,11 @@ if [ "${JARVIS_EGRESS_AUTOFIX:-1}" != "0" ] && command -v nft >/dev/null 2>&1; t
 fi
 
 # 7. Root-Broker starten (Vordergrund-Prozess dieses Dienstes)
-echo "Starte Root-Broker..."
+echo "Starte Root-Broker (Code: $CODE_DIR, Daten: $JARVIS_DIR)..."
 export JARVIS_BROKER_GROUP="${JARVIS_BROKER_GROUP:-jarvis}"
-exec ./venv/bin/python -m backend.broker.daemon
+export JARVIS_PROJECT_ROOT="$JARVIS_DIR"
+# System-Python (root-eigen) und das Arbeitsverzeichnis im Broker-Code: `-m`
+# setzt das Arbeitsverzeichnis an den Anfang von sys.path – in /opt/jarvis
+# gestartet, kaeme `backend` wieder aus dem Baum des Dienstbenutzers.
+cd "$CODE_DIR"
+exec /usr/bin/python3 -m backend.broker.daemon

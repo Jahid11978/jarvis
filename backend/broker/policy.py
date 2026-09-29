@@ -100,6 +100,31 @@ def decide(key: str, decision: str, by: str) -> dict | None:
         return dict(entry)
 
 
+def herabstufen(ops_ohne_automatik: set[str]) -> list[str]:
+    """Automatisch erlaubte Eintraege dieser Ops auf 'pending' zuruecksetzen.
+
+    Noetig, sobald eine Op ihr ``default_allow`` verliert (K2, 2026-09-29:
+    ``broker_teardown``): ``check()`` legt einen Eintrag nur beim ERSTEN
+    Auftauchen an. Ein bestehender "auto/allow"-Eintrag bliebe sonst fuer immer
+    erlaubt, und die Aenderung an der Registry waere auf jedem Bestandssystem
+    wirkungslos. Eine bewusste Admin-Entscheidung (auto=False) bleibt stehen.
+    """
+    geaendert = []
+    with _lock:
+        data = _load()
+        for key, entry in data["ops"].items():
+            if entry.get("op") in ops_ohne_automatik and entry.get("auto") \
+                    and entry.get("decision") == ALLOW:
+                entry["decision"] = PENDING
+                entry["auto"] = False
+                entry["decided_by"] = "Herabstufung (Freigabe erforderlich)"
+                entry["decided_at"] = int(time.time())
+                geaendert.append(key)
+        if geaendert:
+            _save(data)
+    return geaendert
+
+
 def remove(key: str) -> bool:
     """Eintrag loeschen (taucht beim naechsten Aufruf ggf. neu auf)."""
     with _lock:
@@ -123,7 +148,7 @@ def list_ops() -> list[dict]:
 
 def audit(user: str, op: str, key: str, decision: str, rc=None,
           duration_ms=None, detail: str = "", context: str = "",
-          info: str = "") -> None:
+          info: str = "", peer: str = "") -> None:
     """Audit-Eintrag anhaengen (JSON-Lines, root-eigene Datei).
 
     context: kurzer, rein informativer Ausloeser-Kontext (z.B. Agent-Task-Auszug),
@@ -142,6 +167,10 @@ def audit(user: str, op: str, key: str, decision: str, rc=None,
         "context": (context or "")[:300],
         "info": (info or "")[:300],
     }
+    if peer:
+        # Vom KERNEL festgestellter Aufrufer (SO_PEERCRED) – im Gegensatz zu
+        # `user`, das der Aufrufer selbst angibt.
+        rec["peer"] = str(peer)[:80]
     try:
         AUDIT_FILE.parent.mkdir(parents=True, exist_ok=True)
         with open(AUDIT_FILE, "a") as f:

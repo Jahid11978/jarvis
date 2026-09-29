@@ -31,6 +31,7 @@ import uuid
 from pathlib import Path
 
 from backend.benutzer import norm_user
+from backend.sandbox import privat_machen
 from typing import Any
 
 from backend.config import config, PROJECT_ROOT
@@ -43,7 +44,7 @@ ISSUES_FILE = _DATA_DIR / "issues.json"
 # Issues anderer). {norm_login: created_iso}
 ADMIN_SEEN_FILE = _DATA_DIR / "issues_admin_seen.json"
 ATTACH_DIR = _DATA_DIR / "issue_attachments"
-ATTACH_DIR.mkdir(parents=True, exist_ok=True)
+ATTACH_DIR.mkdir(mode=0o750, parents=True, exist_ok=True)  # sandbox.PRIVATE_DIRS
 
 # ─── Konstanten ─────────────────────────────────────────────────────────
 JARVIS_USER = "jarvis"
@@ -84,6 +85,8 @@ def _save_all(issues: list[dict]) -> None:
     tmp = ISSUES_FILE.with_suffix(".json.tmp")
     with tmp.open("w", encoding="utf-8") as f:
         json.dump(issues, f, ensure_ascii=False, indent=2)
+    # tmp + replace: die neue Datei traegt sonst die umask (0644), siehe sandbox.py
+    privat_machen(tmp)
     tmp.replace(ISSUES_FILE)
 
 
@@ -103,6 +106,7 @@ def _save_admin_seen(d: dict) -> None:
     tmp = ADMIN_SEEN_FILE.with_suffix(".json.tmp")
     with tmp.open("w", encoding="utf-8") as f:
         json.dump(d, f, ensure_ascii=False, indent=2)
+    privat_machen(tmp)
     tmp.replace(ADMIN_SEEN_FILE)
 
 
