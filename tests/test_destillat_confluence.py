@@ -435,6 +435,26 @@ check("⚠ Elternseite wird gegen die Seiten DIESES Bereichs geprueft",
       "pages_in_space" in _ruf
       and _ruf["pages_in_space"] < _ruf.get("create_page", 10 ** 9))
 
+# ⚠ EIGENER TOKEN VOR SAMMELZUGANG: auf ECHT darf der Sammel-Token in 25 von
+# 26 Bereichen nur lesen (gemessen 2026-09-29) – mit ihm scheitert das Anlegen.
+_cfa_ruf = [x for x in ast.walk(_ep) if isinstance(x, ast.Call)
+            and isinstance(x.func, ast.Attribute) and x.func.attr == "aufloesen"]
+check("⚠ Zugang ueber `confluence_accounts.aufloesen` (eigener Token vor Sammelzugang)",
+      bool(_cfa_ruf))
+check("⚠ `aufloesen` bekommt den ANGEMELDETEN Benutzer",
+      any(len(x.args) == 1 and isinstance(x.args[0], ast.Name) and x.args[0].id == "user"
+          for x in _cfa_ruf))
+check("⚠ nicht der Sammelzugang (`_confluence_client()` ohne Benutzer)",
+      "_confluence_client" not in _ruf)
+check("⚠ der Zugang steht VOR der Sichtbarkeitspruefung",
+      _ruf.get("aufloesen", 10 ** 9) < _ruf.get("_wissen_visible_spaces", 0))
+# Schreibrecht VOR dem Anlegen – sonst liest der Benutzer nur "Could not create
+# content with type page" (so am 2026-09-29 auf ECHT gemeldet).
+check("⚠ Schreibrecht (`space_permissions`) wird VOR `create_page` geprueft",
+      _ruf.get("space_permissions", 10 ** 9) < _ruf.get("create_page", 0))
+check("Klartext bei fehlendem Schreibrecht (`_cf_kein_schreibrecht`)",
+      "_cf_kein_schreibrecht" in _ruf)
+
 check("es wird ANGELEGT (`create_page`)", "create_page" in _ruf)
 # ⚠ NIE UEBERSCHREIBEN: ein stilles `update_page` waere der kuerzeste Weg,
 # eine fremde Seite zu ersetzen – und das hat niemand bestellt.

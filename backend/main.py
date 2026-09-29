@@ -9784,9 +9784,23 @@ async def regenerate_branding_pptx_template(user: str = Depends(require_local_au
 
 # ─── Confluence (für den Confluence-Reiter; teilt sich Client mit dem Skill) ──
 
-def _confluence_client():
-    from backend.confluence_client import ConfluenceClient
-    return ConfluenceClient()
+def _confluence_client(user: str = ""):
+    """Confluence-Client fuer einen Aufruf.
+
+    ⚠ MIT ``user``: der PERSOENLICHE Zugang hat Vorrang, wenn er hinterlegt
+    und aktiv ist (Vorgabe des Betreibers 2026-09-29: "in jedem Jarvis-
+    Bereich"); sonst der Sammelzugang (``confluence_accounts.aufloesen``).
+    Gemessen auf ECHT: der Sammel-Token darf in 25 von 26 Bereichen nur
+    lesen – wer mit ihm schreibt, bekommt "Could not create content".
+
+    OHNE ``user`` gilt der Sammelzugang: fuer Serveraufgaben ohne Person
+    dahinter (Wissensabgleich im Cron, Avatar-Quellen) und fuer den
+    Verbindungstest der Skill-Konfiguration, der genau DIESEN Zugang prueft.
+    """
+    from backend import confluence_accounts as _cfa
+    if user:
+        return _cfa.client_fuer_lauf(user)
+    return _cfa.sammel_client()
 
 
 # Referenzen auf laufende Bereichs-Import-Jobs halten (sonst GC durch asyncio)
@@ -9815,7 +9829,7 @@ async def confluence_test(user: str = Depends(require_local_auth)):
 async def confluence_spaces_api(user: str = Depends(require_local_auth)):
     """Listet alle Confluence-Bereiche (Spaces) mit Link – fuer den Wissen-Reiter."""
     from backend.confluence_client import ConfluenceError
-    c = _confluence_client()
+    c = _confluence_client(user)
     if not c.configured:
         return JSONResponse({"ok": False, "configured": False,
                              "error": "Nicht konfiguriert (URL/Token fehlen)."})
@@ -9833,7 +9847,7 @@ async def confluence_spaces_api(user: str = Depends(require_local_auth)):
 async def confluence_pages_api(space: str = "", user: str = Depends(require_local_auth)):
     """Listet die Seiten eines Bereichs (Space) – fuer die Auswahl im Extraktor."""
     from backend.confluence_client import ConfluenceError
-    c = _confluence_client()
+    c = _confluence_client(user)
     if not c.configured:
         return JSONResponse({"ok": False, "error": "Nicht konfiguriert."}, status_code=400)
     if not space.strip():
@@ -9851,7 +9865,7 @@ async def confluence_search_api(q: str = "", space: str = "", label: str = "",
                                 limit: int = 20, user: str = Depends(require_local_auth)):
     """Suche fuer den Reiter – liefert Treffer mit Link."""
     from backend.confluence_client import ConfluenceError
-    c = _confluence_client()
+    c = _confluence_client(user)
     if not c.configured:
         return JSONResponse({"ok": False, "error": "Nicht konfiguriert."}, status_code=400)
     try:
@@ -9875,7 +9889,7 @@ async def confluence_page_api(id: str = "", title: str = "", space: str = "",
                               user: str = Depends(require_local_auth)):
     """Seiteninhalt fuer den Reiter (als Text)."""
     from backend.confluence_client import ConfluenceError, html_to_text
-    c = _confluence_client()
+    c = _confluence_client(user)
     if not c.configured:
         return JSONResponse({"ok": False, "error": "Nicht konfiguriert."}, status_code=400)
     try:
@@ -15974,7 +15988,7 @@ async def _support_run_query(body: dict, user: str) -> dict:
     if use_conf and _skill_active("confluence"):
         from backend.confluence_client import ConfluenceError as _CErr, html_to_text as _cf_html
         try:
-            cc = _confluence_client()
+            cc = _confluence_client(user)
             if cc.configured:
                 _sa = config.get_skill_states().get("support_assistant", {}).get("config", {}) or {}
                 _mode = _sa.get("conf_filter_mode") or "off"
@@ -19307,7 +19321,7 @@ async def wissen_confluence_spaces(user: str = Depends(require_auth)):
     if not _editable_groups_for(user):
         return JSONResponse({"ok": False, "error": "Dir ist kein Wissensbereich zugewiesen."}, status_code=403)
     from backend.confluence_client import ConfluenceError
-    c = _confluence_client()
+    c = _confluence_client(user)
     if not c.configured:
         return JSONResponse({"ok": False, "configured": False,
                              "error": "Confluence ist nicht konfiguriert."})
@@ -19326,7 +19340,7 @@ async def wissen_confluence_pages(space: str = "", user: str = Depends(require_a
     if not _editable_groups_for(user):
         return JSONResponse({"ok": False, "error": "Dir ist kein Wissensbereich zugewiesen."}, status_code=403)
     from backend.confluence_client import ConfluenceError
-    c = _confluence_client()
+    c = _confluence_client(user)
     if not c.configured:
         return JSONResponse({"ok": False, "error": "Nicht konfiguriert."}, status_code=400)
     space = space.strip()
@@ -19557,7 +19571,7 @@ async def _cfb_auswahl_lesen(request: Request, user: str):
         tags = _cfb._tags_pruefen(body.get("tags"))
     except _cfb.BindungFehler as e:
         return (JSONResponse({"ok": False, "error": str(e)}, status_code=400), None, None, None, None)
-    c = _confluence_client()
+    c = _confluence_client(user)
     try:
         sichtbar = await _wissen_visible_spaces(c)
     except ConfluenceError as e:
@@ -19705,7 +19719,7 @@ async def wissen_extract_confluence(request: Request, user: str = Depends(requir
     qa_n = body.get("qa_count") if "qa_count" in body else None
     _prof = config.profile_for_user(user)
     me = _norm_login(user)
-    c = _confluence_client()
+    c = _confluence_client(user)
     if not c.configured:
         return JSONResponse({"error": "Confluence ist nicht konfiguriert."}, status_code=400)
 
@@ -20080,6 +20094,20 @@ async def wissen_destillat_uebernehmen(request: Request,
                         status_code=201)
 
 
+def _cf_kein_schreibrecht(quelle: str, space: str) -> str:
+    """Klartext, wenn der benutzte Confluence-Zugang im Bereich nicht schreiben
+    darf. Nennt den ZUGANG: beim Sammelzugang ist der Ausweg ein eigener
+    Token, beim eigenen sind es die Rechte in Confluence."""
+    from backend import confluence_accounts as _cfa
+    if quelle == _cfa.QUELLE_PERSOENLICH:
+        return (f"Mit deinem persönlichen Confluence-Zugang darfst du im Bereich "
+                f"„{space}“ keine Seiten anlegen. Die Rechte dafür vergibt der "
+                f"Bereichsverwalter in Confluence.")
+    return (f"Mit dem gemeinsamen Confluence-Zugang dürfen im Bereich „{space}“ "
+            f"keine Seiten angelegt werden. Hinterlege unter „Mein Confluence-Zugang“ "
+            f"deinen eigenen Zugang – dann wird mit deinen Rechten angelegt.")
+
+
 @app.post("/api/wissen/destillat/confluence")
 async def wissen_destillat_confluence(request: Request,
                                       user: str = Depends(require_auth)):
@@ -20141,7 +20169,15 @@ async def wissen_destillat_confluence(request: Request,
         return JSONResponse({"ok": False, "error": f"Der Titel ist zu lang (max. {_wd.TITEL_MAX} Zeichen)."},
                             status_code=400)
 
-    c = _confluence_client()
+    # EIGENER TOKEN VOR DEM SAMMELZUGANG (Vorgabe 2026-09-29): angelegt wird
+    # unter dem Namen dessen, der den Knopf drueckt. Gemessen auf ECHT: der
+    # Sammel-Token darf in 25 von 26 Bereichen nur LESEN – mit ihm scheitert
+    # das Anlegen an "Could not create content with type page". Faellt ohne
+    # persoenlichen Zugang auf den Sammelzugang zurueck (`aufloesen`).
+    from backend import confluence_accounts as _cfa
+    _zugang = _cfa.aufloesen(user)
+    c = _zugang["client"]
+    _wer = _zugang["quelle"]
     try:
         sichtbar = {s.get("key") for s in await _wissen_visible_spaces(c)}
         if space not in sichtbar:
@@ -20156,6 +20192,13 @@ async def wissen_destillat_confluence(request: Request,
             if parent not in {str(p.get("id") or "") for p in seiten}:
                 return JSONResponse({"ok": False, "error": "Die gewählte übergeordnete Seite gehört nicht zu diesem Bereich."},
                                     status_code=403)
+        # Schreibrecht VOR dem Anlegen: Confluence meldet sonst nur "Could not
+        # create content with type page" – wahr und nutzlos. ``None`` (nicht
+        # ermittelbar) ist KEIN Nein: dann entscheidet Confluence selbst.
+        _rechte = await asyncio.to_thread(c.space_permissions, space)
+        if _rechte is not None and "modify" not in _rechte:
+            return JSONResponse({"ok": False, "error": _cf_kein_schreibrecht(_wer, space)},
+                                status_code=403)
 
         # Bilder werden VOR dem Anlegen aufbereitet: nur so stehen die
         # Anhang-Namen schon im Rumpf, und die Seite ist ab dem ersten Aufruf
@@ -20183,7 +20226,12 @@ async def wissen_destillat_confluence(request: Request,
                 misslungen.append(f"{name}: {e}")
                 print(f"[Destillat/CF] Anhang {name} fehlgeschlagen: {e}", flush=True)
     except ConfluenceError as e:
-        return JSONResponse({"ok": False, "status": e.status, "error": str(e)},
+        _text = str(e)
+        # Rechtepruefung nicht ermittelbar oder zwischendurch entzogen: die
+        # Meldung von Confluence in Klartext, samt Zugang, der es versucht hat.
+        if _text.startswith("Could not create content"):
+            _text = _cf_kein_schreibrecht(_wer, space) + " (Confluence: " + _text + ")"
+        return JSONResponse({"ok": False, "status": e.status, "error": _text},
                             status_code=400 if e.status < 500 else 502)
     except Exception as e:  # noqa: BLE001
         from backend.llm import scrub_secrets
@@ -20691,7 +20739,7 @@ async def knowledge_extract_confluence(request: Request, user: str = Depends(req
     job_id = (body.get("job_id") or "").strip()
     audit = body.get("audit", True)  # False = auditloser Direkt-Import
     qa_n = body.get("qa_count") if "qa_count" in body else None   # 0 = keine Fragen
-    c = _confluence_client()
+    c = _confluence_client(user)
     if not c.configured:
         return JSONResponse({"error": "Confluence ist nicht konfiguriert."}, status_code=400)
 

@@ -17,21 +17,21 @@ Rechte seines Besitzers; mit eigenem Token sieht jeder genau die Bereiche, fuer
 die er in Confluence berechtigt ist – und **schreibt unter seinem eigenen
 Namen**, was in der Confluence-Historie sichtbar bleibt.
 
-**NICHT betroffen und das ist Absicht:**
+**⚠ VORGABE DES BETREIBERS 2026-09-29: IN JEDEM JARVIS-BEREICH.** Wo ein
+angemeldeter Benutzer hinter dem Aufruf steht, hat sein Zugang Vorrang – auch im
+Destiller, im ``/wissen``-Import, in der Confluence-Einbindung, im
+Support-Assistenten und in den ``/api/confluence/*``-Endpunkten
+(``main._confluence_client(user)``). Anlass: der Sammel-Token durfte auf ECHT in
+25 von 26 Bereichen nur lesen, das Anlegen aus dem Destiller scheiterte daran.
 
-* ``backend/confluence_abgleich.py`` (der Wissensabgleich) und der
-  Confluence-Import in ``/wissen``. Beide fuellen die **gemeinsame**
-  Wissensdatenbank; liefe das mit einem persoenlichen Token, haenge der INHALT
-  des geteilten Index davon ab, wer den Lauf zuletzt angestossen hat – und
-  niemand koennte erklaeren, warum eine Seite fehlt.
-* ``backend/avatar.py`` – holt Profilbilder fuer ALLE Benutzer, also eine
-  Serveraufgabe ohne Person dahinter.
-* Die ``/api/confluence/*``-Endpunkte des Confluence-Reiters. Die sind
-  Administratoren vorbehalten (``require_local_auth``) und beantworten die
-  Frage "funktioniert der HINTERLEGTE Zugang und was sieht er" – genau das,
-  was der Administrator beim Einrichten der gemeinsamen Bereiche wissen muss.
-  Mit einem persoenlichen Token wuerde der Reiter etwas anderes behaupten, als
-  der Server spaeter kann.
+**Sammelzugang bleibt nur dort, wo KEINE Person dahinter steht:**
+
+* ``backend/confluence_abgleich.py`` – der Wissensabgleich laeuft im Cron. Folge:
+  ein Bereich, den NUR der eigene Token sieht, laesst sich in der Einbindung
+  auswaehlen, der Abgleich kann ihn aber nicht lesen (er gilt dann als
+  gescheitert, sein Bestand bleibt unberuehrt).
+* ``backend/avatar.py`` – holt Profilbilder fuer ALLE Benutzer.
+* ``GET /api/confluence/test`` – prueft GENAU den hinterlegten Sammelzugang.
 
 DER BENUTZER SETZT NUR DEN TOKEN, NIE DIE ADRESSE
 -------------------------------------------------

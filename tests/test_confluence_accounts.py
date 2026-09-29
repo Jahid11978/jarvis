@@ -421,10 +421,6 @@ SAMMEL_OK = {
     "backend/confluence_abgleich.py",
     # Holt Profilbilder fuer ALLE Benutzer – eine Serveraufgabe ohne Person.
     "backend/avatar.py",
-    # Der Confluence-Reiter (Administratoren): beantwortet, was der GEMEINSAME
-    # Zugang sieht. Mit einem persoenlichen Token wuerde er etwas anderes
-    # behaupten, als der Server spaeter kann.
-    "backend/main.py",
 }
 ERLAUBT = {"backend/confluence_client.py", "backend/confluence_accounts.py"}
 bauer = []
@@ -448,6 +444,69 @@ check("keine unbegruendete Konstruktionsstelle",
       str(sorted(set(bauer) - ERLAUBT - SAMMEL_OK)))
 check("⚠ der SKILL baut keinen Client selbst – er fragt das Konten-Modul",
       "skills/confluence/main.py" not in bauer, str(bauer))
+
+# ⚠ VORGABE 2026-09-29: der eigene Zugang hat IN JEDEM BEREICH Vorrang. Als
+# REGEL ueber main.py: jede Funktion mit angemeldetem Benutzer (`user`-
+# Parameter), die `_confluence_client` ruft, reicht ihn weiter. Einzige
+# Ausnahme: der Verbindungstest der Skill-Konfiguration prueft GENAU den
+# Sammelzugang. `_cfb_aktiv` hat keinen Benutzer und faellt nicht unter die Regel.
+MAIN_SRC = (ROOT / "backend" / "main.py").read_text(encoding="utf-8")
+_mb = ast.parse(MAIN_SRC)
+SAMMEL_FN = {"confluence_test"}
+_mit_user, _ohne_user = [], []
+for _f in ast.walk(_mb):
+    if not isinstance(_f, (ast.FunctionDef, ast.AsyncFunctionDef)):
+        continue
+    if _f.name == "_confluence_client":
+        continue
+    _hat_user = any(a.arg == "user" for a in _f.args.args + _f.args.kwonlyargs)
+    for _x in ast.walk(_f):
+        if (isinstance(_x, ast.Call) and isinstance(_x.func, ast.Name)
+                and _x.func.id == "_confluence_client" and _hat_user):
+            _gibt = (len(_x.args) == 1 and isinstance(_x.args[0], ast.Name)
+                     and _x.args[0].id == "user")
+            (_mit_user if _gibt else _ohne_user).append(_f.name)
+check("Positivkontrolle: Aufrufe von `_confluence_client` mit Benutzer gefunden",
+      len(_mit_user) >= 5, str(_mit_user))
+check("⚠ jeder Aufruf mit angemeldetem Benutzer reicht `user` weiter",
+      not (set(_ohne_user) - SAMMEL_FN), str(sorted(set(_ohne_user) - SAMMEL_FN)))
+_cc = next((f for f in ast.walk(_mb) if isinstance(f, ast.FunctionDef)
+            and f.name == "_confluence_client"), None)
+# AUSGEFUEHRT, nicht gelesen: ein Vorkommen von `client_fuer_lauf(user)` bliebe
+# auch in einem toten Zweig wahr (Gegenprobe `if False:` – 0 FAIL am Text).
+import backend as _bk  # noqa: E402
+_rufe = []
+class _FakeCfa:
+    @staticmethod
+    def client_fuer_lauf(u=None):
+        _rufe.append(("eigen", u)); return "EIGEN"
+    @staticmethod
+    def sammel_client():
+        _rufe.append(("sammel", None)); return "SAMMEL"
+_ns_cc = {}
+_alt_mod = sys.modules.get("backend.confluence_accounts")
+_alt_attr = getattr(_bk, "confluence_accounts", None)
+try:
+    sys.modules["backend.confluence_accounts"] = _FakeCfa
+    _bk.confluence_accounts = _FakeCfa
+    if _cc is not None:
+        exec(compile(ast.Module(body=[_cc], type_ignores=[]), "main.py", "exec"), _ns_cc)
+    _f_cc = _ns_cc.get("_confluence_client")
+    _mit = _f_cc("andreas.bender") if _f_cc else None
+    _ohne = _f_cc() if _f_cc else None
+finally:
+    if _alt_mod is not None:
+        sys.modules["backend.confluence_accounts"] = _alt_mod
+    else:
+        sys.modules.pop("backend.confluence_accounts", None)
+    if _alt_attr is not None:
+        _bk.confluence_accounts = _alt_attr
+check("⚠ `_confluence_client(user)` liefert den Zugang des BENUTZERS",
+      _mit == "EIGEN" and ("eigen", "andreas.bender") in _rufe, str(_rufe))
+check("`_confluence_client()` ohne Benutzer liefert den Sammelzugang",
+      _ohne == "SAMMEL", str(_rufe))
+check("main.py baut keinen ConfluenceClient selbst",
+      "backend/main.py" not in bauer, str(bauer))
 
 # Und die Verdrahtung: `_client()` des Skills MUSS ueber die Aufloesung gehen,
 # und `_guard()` darueber laufen (sonst haette ein Werkzeug den Sammelzugang,

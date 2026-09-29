@@ -90,7 +90,7 @@ async def _visible(c):
 
 AKTIV = {"w": (True, True)}
 NS = {"JSONResponse": JSONResponse, "Depends": lambda f: None, "require_auth": None,
-      "_editable_groups_for": lambda u: ["g1"], "_confluence_client": lambda: Client(),
+      "_editable_groups_for": lambda u: ["g1"], "_confluence_client": lambda user="": Client(),
       "_wissen_visible_spaces": _visible, "asyncio": asyncio,
       "_cfb_aktiv": lambda: AKTIV["w"], "_cfb_mit_gruppen": lambda b, u="": b}
 for nm in NAMEN:

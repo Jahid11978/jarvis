@@ -314,6 +314,28 @@ class ConfluenceClient:
                     break
         return out
 
+    def space_permissions(self, space: str) -> list[str] | None:
+        """Eigene Rechte dieses Tokens im Bereich, z.B. ``['view', 'modify']``.
+
+        ``modify`` heisst: darf Seiten anlegen. Die REST-API von Server/DC
+        verraet die eigenen Bereichsrechte nicht (``expand=permissions`` nur
+        fuer Bereichs-Admins); ``getPermissions`` ueber JSON-RPC ist ein reiner
+        Lesezugriff und liefert sie (auf ECHT gemessen 2026-09-29).
+        ``None`` = nicht ermittelbar (RPC abgeschaltet, Netzfehler) – das ist
+        "unbekannt", NICHT "keine Rechte"; der Aufrufer entscheidet.
+        """
+        try:
+            r = requests.post(
+                self.base + "/rpc/json-rpc/confluenceservice-v2/getPermissions",
+                json=[str(space)], headers=self._headers({"Content-Type": "application/json"}),
+                timeout=20)
+            d = r.json() if r.status_code == 200 else None
+        except (requests.RequestException, ValueError):
+            return None
+        if not isinstance(d, list) or not all(isinstance(x, str) for x in d):
+            return None
+        return d
+
     def create_page(self, space: str, title: str, body: str,
                     parent_id: str | None = None) -> dict:
         payload = {
