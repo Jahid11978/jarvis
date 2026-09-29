@@ -477,6 +477,21 @@ class ConfluenceClient:
                 fh.write(chunk)
         return target, total
 
+    def upload_attachment_bytes(self, page_id: str, filename: str,
+                                daten: bytes, mime: str = "") -> dict:
+        """Anhang aus dem SPEICHER hochladen (ohne Umweg ueber eine Datei).
+
+        Gebraucht vom Wissens-Destillat: dessen Bilder liegen als ``data:``-URI
+        in der Anfrage und werden bewusst nirgends auf Platte gelegt (der
+        Modul-Kopf von ``wissen_destillat`` begruendet das) – eine Temp-Datei
+        nur fuer den Upload waere genau der Rueckstand, den man sich dort
+        gespart hat.
+        """
+        files = {"file": (filename, daten, mime or "application/octet-stream")}
+        return self._request(
+            "POST", "/rest/api/content/%s/child/attachment" % page_id,
+            headers={"X-Atlassian-Token": "no-check"}, files=files)
+
     def upload_attachment(self, page_id: str, file_path: str) -> dict:
         import os
         if not os.path.isfile(file_path):

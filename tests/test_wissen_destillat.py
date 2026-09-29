@@ -168,11 +168,43 @@ section("1. Das Modul schreibt nichts Dauerhaftes")
 # auffallen, auch ein kuenftiger.
 _schreib = {"write_text", "write_bytes", "mkdir", "rename", "replace", "unlink",
             "touch", "rmtree", "copy", "copy2", "move"}
-_gefunden = set()
-for _k in ast.walk(ast.parse(MOD)):
-    if isinstance(_k, ast.Call) and isinstance(_k.func, ast.Attribute):
-        if _k.func.attr in _schreib:
-            _gefunden.add(_k.func.attr)
+
+
+# ⚠ `replace` HEISST ZWEIERLEI, und der Waechter konnte es bis zum 2026-09-29
+# nicht auseinanderhalten: `os.replace(a, b)` bzw. `Path.replace(ziel)` sind
+# Schreibwege, `"text".replace(alt, neu)` ist eine Zeichenketten-Ersetzung und
+# fasst keine Datei an. Die XHTML-Maskierung des Confluence-Konverters benutzt
+# letzteres – der Waechter meldete damit einen Schreibweg, den es nicht gibt.
+# Unterschieden wird am EMPFAENGER (`os`) und an der ARGUMENTZAHL: die
+# Pfad-Fassung nimmt genau ein Argument, die Zeichenketten-Fassung zwei.
+def _ist_schreibaufruf(knoten) -> bool:
+    if knoten.func.attr != "replace":
+        return True
+    empf = knoten.func.value
+    if isinstance(empf, ast.Name) and empf.id == "os":
+        return True
+    return len(knoten.args) == 1
+
+
+def _schreibwege(quelle: str) -> set:
+    raus = set()
+    for k in ast.walk(ast.parse(quelle)):
+        if isinstance(k, ast.Call) and isinstance(k.func, ast.Attribute):
+            if k.func.attr in _schreib and _ist_schreibaufruf(k):
+                raus.add(k.func.attr)
+    return raus
+
+
+# POSITIVKONTROLLE: die Verfeinerung darf `replace` nicht pauschal freistellen –
+# beide Schreibformen muessen weiter auffallen, die Textform nicht.
+check("Regel erkennt os.replace als Schreibweg",
+      _schreibwege("import os\nos.replace(a, b)\n") == {"replace"})
+check("Regel erkennt Path.replace als Schreibweg",
+      _schreibwege("p.replace(ziel)\n") == {"replace"})
+check("Regel haelt str.replace NICHT fuer einen Schreibweg",
+      _schreibwege("s = t.replace('a', 'b')\n") == set())
+
+_gefunden = _schreibwege(MOD)
 # `write_bytes` ist erlaubt – aber NUR in die Wegwerf-Verzeichnisse.
 check("kein dauerhafter Schreibweg (nur write_bytes in TemporaryDirectory)",
       _gefunden <= {"write_bytes"}, f"gefunden: {sorted(_gefunden)}")

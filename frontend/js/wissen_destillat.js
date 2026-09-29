@@ -663,6 +663,13 @@
         var m = $('wi-dest-meta'); if (m) m.textContent = meta.join(' · ');
         var tb = $('wi-dest-takebox'); if (tb) tb.hidden = true;
         status('wi-dest-takestatus', '');
+        // Ein NEUES Destillat heisst: neuer Titelvorschlag. Ohne das Loeschen
+        // der Beruehrt-Marke stuende der Titel des vorigen Laufs im Feld, und
+        // die Seite hiesse nach einem Inhalt, der nicht mehr darin steht.
+        var cb = $('wi-dest-cfbox'); if (cb) cb.hidden = true;
+        var ct = $('wi-dest-cftitel');
+        if (ct) { delete ct.dataset.beruehrt; ct.value = ''; }
+        status('wi-dest-cfstatus', '');
     }
 
     // ── Ergebnis verwerten ──────────────────────────────────────────────
@@ -763,6 +770,250 @@
                 status('wi-dest-takestatus', String(e && e.message || e), 'err');
             })
             .then(function () { if (btn) btn.disabled = false; });
+    }
+
+    // ── Als neue Confluence-Seite ───────────────────────────────────────
+    // ⚠ ZUSTAND UND BEREICHSLISTE KOMMEN VON wissen.js (cfDestMelden), nicht
+    // aus einem eigenen Abruf: sonst boete dieser Container andere Bereiche an
+    // als die Einbindung darunter, sobald eine der beiden Stellen angefasst
+    // wird. Dieselbe Entscheidung wie beim Scope (siehe Modulkopf).
+    var cfAktiv = false;      // Skill aktiv UND konfiguriert
+    var cfSpaces = null;      // sichtbare Bereiche (null = noch unterwegs)
+    var cfSeiten = {};        // Bereichsschluessel -> Promise auf die Seitenliste
+    var cfLaeuft = false;     // Anlegen laeuft (zweiter Klick waere eine zweite Seite)
+
+    function confluence(aktiv, spaces) {
+        cfAktiv = !!aktiv;
+        cfSpaces = spaces || null;
+        cfKnopf();
+        // Steht der Kasten offen, waehrend die Bereichsliste eintrifft, muss
+        // das Pulldown nachgezogen werden - sonst bliebe dort "Lade ...".
+        var box = $('wi-dest-cfbox');
+        if (box && !box.hidden) cfSpacesZeichnen();
+    }
+
+    function cfKnopf() {
+        var b = $('wi-dest-cf');
+        if (!b) return;
+        b.hidden = !cfAktiv;
+        // Ohne aktiven Skill gibt es auch nichts zu schliessen.
+        if (!cfAktiv) { var box = $('wi-dest-cfbox'); if (box) box.hidden = true; }
+    }
+
+    // Titelvorschlag aus der ersten Ueberschrift - dieselbe Regel wie
+    // `titel_aus_markdown` im Backend. Er ist nur VORBELEGUNG: geschickt wird,
+    // was im Feld steht (Confluence verlangt je Bereich eindeutige Titel, und
+    // eine Kollision loest man genau hier).
+    function cfTitelVorschlag() {
+        var zeilen = String(destillat || '').split('\n');
+        for (var i = 0; i < zeilen.length; i++) {
+            var z = zeilen[i].trim();
+            if (!z) continue;
+            if (z.charAt(0) === '#') {
+                var h = z.replace(/^#+\s*/, '').trim();
+                if (h) return cfTitelPutzen(h);
+                continue;
+            }
+            return cfTitelPutzen(z);
+        }
+        return '';
+    }
+    function cfTitelPutzen(s) {
+        // `**Titel**` als Seitenname waere die Auszeichnung im Klartext.
+        return s.replace(/^[*_`#\s]+/, '').replace(/[*_`\s]+$/, '').slice(0, 255);
+    }
+
+    function cfSpacesZeichnen() {
+        var sel = $('wi-dest-cfspace');
+        if (!sel) return;
+        if (!cfSpaces) {
+            sel.innerHTML = '<option value="">' + esc(t('common.loading')) + '</option>';
+            sel.disabled = true;
+            cfGoKnopf();
+            return;
+        }
+        sel.disabled = false;
+        if (!cfSpaces.length) {
+            sel.innerHTML = '<option value="">' + esc(t('wissen.cfb_nospaces')) + '</option>';
+            cfGoKnopf();
+            return;
+        }
+        // Die bisherige Wahl ueberlebt ein Nachziehen der Liste.
+        var vorher = sel.value;
+        sel.innerHTML = '<option value="">' + esc(t('wissen.dest_cf_pick')) + '</option>'
+            + cfSpaces.map(function (sp) {
+                return '<option value="' + esc(sp.key) + '">'
+                    + esc((sp.name || sp.key) + ' (' + sp.key + ')') + '</option>';
+            }).join('');
+        // ⚠ ERST die Optionen, DANN der Wert: an einem leeren <select> verpufft
+        // eine Zuweisung still und der Wert waere '' (Register).
+        if (vorher) sel.value = vorher;
+        cfGoKnopf();
+    }
+
+    // Seitenbaum eines Bereichs als eingerueckte Auswahl. Gebaut wird die
+    // Hierarchie mit `WissenPortal.cfBaum` - derselben Regel wie im Baum der
+    // Einbindung, nicht mit einer zweiten Fassung davon.
+    function cfSeitenZeichnen(seiten) {
+        var sel = $('wi-dest-cfparent');
+        if (!sel) return;
+        sel.disabled = false;
+        var opt = ['<option value="">' + esc(t('wissen.dest_cf_root')) + '</option>'];
+        var bauen = (window.WissenPortal && window.WissenPortal.cfBaum) || null;
+        var baum = bauen ? bauen(seiten || []) : [];
+        (function lauf(knoten, tiefe) {
+            knoten.forEach(function (n) {
+                // GESCHUETZTE Leerzeichen (U+00A0): gewoehnliche faltet der
+                // Browser in einem <option> zusammen, die Einrueckung waere
+                // unsichtbar und der Baum saehe aus wie eine flache Liste.
+                var ein = new Array(tiefe + 1).join('\u00a0\u00a0\u00a0');
+                opt.push('<option value="' + esc(n.id) + '">'
+                         + ein + esc(n.title) + '</option>');
+                lauf(n.kids, tiefe + 1);
+            });
+        })(baum, 0);
+        sel.innerHTML = opt.join('');
+    }
+
+    function cfSeitenLaden(space) {
+        var sel = $('wi-dest-cfparent');
+        if (!sel) return;
+        if (!space) {
+            sel.innerHTML = '<option value="">' + esc(t('wissen.dest_cf_root')) + '</option>';
+            sel.disabled = true;
+            return;
+        }
+        sel.innerHTML = '<option value="">' + esc(t('common.loading')) + '</option>';
+        sel.disabled = true;
+        if (!cfSeiten[space]) {
+            cfSeiten[space] = fetch('/api/wissen/confluence/pages?space='
+                                    + encodeURIComponent(space), { headers: authH() })
+                .then(function (r) { return r.json(); })
+                .then(function (d) {
+                    if (!d || !d.ok) throw new Error((d && d.error) || 'x');
+                    return d.pages || [];
+                })
+                .catch(function (e) {
+                    // Naechster Anlauf darf es erneut versuchen.
+                    cfSeiten[space] = null;
+                    throw e;
+                });
+        }
+        cfSeiten[space].then(function (seiten) {
+            // Der Benutzer kann inzwischen einen anderen Bereich gewaehlt
+            // haben - dann gehoert diese Antwort nicht mehr zur Anzeige.
+            var akt = $('wi-dest-cfspace');
+            if (!akt || akt.value !== space) return;
+            cfSeitenZeichnen(seiten);
+        }).catch(function () {
+            var akt = $('wi-dest-cfspace');
+            if (!akt || akt.value !== space) return;
+            // Kein stilles Leerfeld: ohne Seitenliste kann man immer noch unter
+            // der Startseite anlegen, und genau das sagt die Meldung.
+            cfSeitenZeichnen([]);
+            status('wi-dest-cfstatus', t('wissen.dest_cf_pages_err'), 'err');
+        });
+    }
+
+    // Gesperrt MIT Grund, nicht verborgen (Projektregel): der Grund muss der
+    // RICHTIGE sein - ein Knopf, der nach dem Bereich fragt, obwohl der
+    // Bereich steht, schickt an die falsche Stelle.
+    function cfGoKnopf() {
+        var btn = $('wi-dest-cfgo');
+        if (!btn) return;
+        var sp = $('wi-dest-cfspace'), ti = $('wi-dest-cftitel');
+        var space = sp ? sp.value : '', titel = ti ? ti.value.trim() : '';
+        if (cfLaeuft) { btn.disabled = true; btn.title = t('wissen.dest_cf_busy'); return; }
+        if (!space) { btn.disabled = true; btn.title = t('wissen.dest_cf_need_space'); return; }
+        if (!titel) { btn.disabled = true; btn.title = t('wissen.dest_cf_need_title'); return; }
+        btn.disabled = false;
+        btn.title = '';
+    }
+
+    function cfZeigen() {
+        var box = $('wi-dest-cfbox');
+        if (!box) return;
+        box.hidden = false;
+        status('wi-dest-cfstatus', '');
+        cfSpacesZeichnen();
+        // Der Titel wird nur vorbelegt, solange ihn niemand angefasst hat -
+        // ein erneutes Oeffnen darf die Arbeit des Benutzers nicht verwerfen.
+        var ti = $('wi-dest-cftitel');
+        if (ti && !ti.dataset.beruehrt) ti.value = cfTitelVorschlag();
+        cfGoKnopf();
+    }
+
+    function cfAnlegen() {
+        var sp = $('wi-dest-cfspace'), pa = $('wi-dest-cfparent'), ti = $('wi-dest-cftitel');
+        var space = sp ? sp.value : '', titel = ti ? ti.value.trim() : '';
+        if (!space || !titel) { cfGoKnopf(); return; }
+        // Die Elternseite zaehlt nur, wenn sie zum GEWAEHLTEN Bereich gehoert -
+        // sonst schickte ein Wechsel mitten im Laden eine fremde Seiten-ID mit.
+        // Der Server prueft es ebenfalls; hier faellt es frueher auf.
+        // ⚠ HIER STAND EINE ZWEITE SCHRANKE ("gilt nur, wenn `data-space` zum
+        // gewaehlten Bereich passt") – sie ist WEG, weil ihr Entfernen in der
+        // Gegenprobe messbar nichts geaenderte hat: `cfSeitenLaden` setzt das
+        // Pulldown bei JEDEM Bereichswechsel zurueck, eine fremde Seiten-ID
+        // kann hier gar nicht mehr stehen. Eine Zeile, die niemand pruefen
+        // kann, ist keine Schranke, sondern eine, die jede kuenftige
+        // Durchsicht mitschleppt (Register: der `IsFile`-Guertel). Die
+        // tragende Pruefung macht ohnehin der Server – und die ist gemessen.
+        var parent = pa ? pa.value : '';
+        cfLaeuft = true;
+        cfGoKnopf();
+        status('wi-dest-cfstatus', t('wissen.dest_cf_running'), 'busy');
+        fetch('/api/wissen/destillat/confluence', {
+            method: 'POST', headers: authH({ 'Content-Type': 'application/json' }),
+            body: JSON.stringify({
+                markdown: destillat, space: space, parent: parent,
+                titel: titel, bilder: bilder
+            })
+        })
+            .then(function (r) { return r.json().then(function (d) { return { s: r.status, d: d }; }); })
+            .then(function (res) {
+                if (res.s !== 201 || !res.d.ok) {
+                    status('wi-dest-cfstatus', res.d.error || t('wissen.dest_cf_failed'), 'err');
+                    return;
+                }
+                cfFertig(res.d);
+            })
+            .catch(function (e) {
+                status('wi-dest-cfstatus', String(e && e.message || e), 'err');
+            })
+            .then(function () { cfLaeuft = false; cfGoKnopf(); });
+    }
+
+    function cfFertig(d) {
+        var el = $('wi-dest-cfstatus');
+        if (!el) return;
+        // Die neue Seite ist der Sinn der Sache - sie gehoert anklickbar da,
+        // nicht als Kennung. Ziel ist ein fremder Origin: rel/target gesetzt.
+        var html = esc(t('wissen.dest_cf_done'));
+        if (d.link) {
+            // Ziel ist ein fremder Origin - `noopener` ist hier Pflicht, nicht
+            // Stil (sonst greift die neue Seite ueber `window.opener` zurueck).
+            html += ' <a href="' + esc(d.link) + '" target="_blank" rel="noopener noreferrer">'
+                 + esc(d.title || '') + '</a>';
+        } else {
+            html += ' ' + esc(d.title || '');
+        }
+        if (d.bilder) html += ' · ' + esc(t('wissen.dest_cf_images', { n: d.bilder }));
+        // Gleiche Auszeichnung wie `status(..., 'ok')` - zwei Schreibweisen
+        // fuer dieselbe Meldung liefen beim naechsten Feinschliff auseinander.
+        html = '<span class="wi-ok">' + html + '</span>';
+        // ⚠ EIN FEHLSCHLAG BEIM ANHANG WIRD GENANNT. Die Seite steht, der Text
+        // ist da - aber sie ist unvollstaendig, und das sieht man ihr nicht an.
+        if (d.bilder_fehler && d.bilder_fehler.length) {
+            html += '<div class="wi-err">'
+                 + esc(t('wissen.dest_cf_img_err', { n: d.bilder_fehler.length }))
+                 + '</div>';
+        }
+        el.innerHTML = html;
+        // Der Seitenbaum dieses Bereichs ist veraltet - die neue Seite fehlt
+        // darin, und beim naechsten Anlegen waere sie nicht als Elternseite
+        // waehlbar.
+        var sp = $('wi-dest-cfspace');
+        if (sp && sp.value) cfSeiten[sp.value] = null;
     }
 
     // ── Aufbau ──────────────────────────────────────────────────────────
@@ -879,6 +1130,30 @@
             var b = $('wi-dest-takebox'); if (b) b.hidden = true;
         });
 
+        var cfb = $('wi-dest-cf'); if (cfb) cfb.addEventListener('click', cfZeigen);
+        var cfg = $('wi-dest-cfgo'); if (cfg) cfg.addEventListener('click', cfAnlegen);
+        var cfc = $('wi-dest-cfcancel');
+        if (cfc) cfc.addEventListener('click', function () {
+            var b = $('wi-dest-cfbox'); if (b) b.hidden = true;
+        });
+        var cfs = $('wi-dest-cfspace');
+        if (cfs) cfs.addEventListener('change', function () {
+            status('wi-dest-cfstatus', '');
+            cfSeitenLaden(cfs.value);
+            cfGoKnopf();
+        });
+        var cft = $('wi-dest-cftitel');
+        if (cft) cft.addEventListener('input', function () {
+            // Ein bearbeiteter Titel ist Arbeit des Benutzers - ab hier wird
+            // nicht mehr vorbelegt (bis zum naechsten Destillat-Lauf).
+            cft.dataset.beruehrt = '1';
+            cfGoKnopf();
+        });
+        // Der Zustand kann VOR init() gemeldet worden sein (wissen.js ruft
+        // cfbLaden und init im selben Durchgang) - dann steht er schon in
+        // `cfAktiv` und der Knopf muss nachgezogen werden.
+        cfKnopf();
+
         // Die Vorgabe-Aufträge folgen dem Sprachwechsel. `applyLang()` erreicht
         // sie nicht – sie stehen als WERT in einem Textfeld, nicht als
         // data-i18n-Text. Ein vom Benutzer geaenderter Auftrag bleibt aber
@@ -897,6 +1172,8 @@
         });
     }
 
-    window.WissenDestillat = { init: init, _md: md, _mitBildern: mitBildern,
-                               _filterGrund: filterGrund, _musterTrifft: musterTrifft };
+    window.WissenDestillat = { init: init, confluence: confluence,
+                               _md: md, _mitBildern: mitBildern,
+                               _filterGrund: filterGrund, _musterTrifft: musterTrifft,
+                               _storageZiel: cfTitelVorschlag };
 })();

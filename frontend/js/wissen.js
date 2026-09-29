@@ -1463,7 +1463,20 @@
             .catch(function () { _cfbAktiv = false; cfbRender(); });
     }
 
+    // ⚠ DER DESTILLAT-CONTAINER HOLT DIE BEREICHSLISTE NICHT SELBST. Sein Knopf
+    // "Als neue Confluence-Seite" braucht dieselbe Liste und dieselbe
+    // Aktiv-Aussage wie die Einbindung hier; zwei Abrufe liefen beim naechsten
+    // Feinschliff auseinander, und dann boete der eine Container Bereiche an,
+    // die der andere nicht kennt (gleiche Regel wie zwischen Extraktor und
+    // Einbindung). Gemeldet wird AUCH der ausgeschaltete Zustand – sonst bliebe
+    // der Knopf dort stehen, wenn der Skill abgeschaltet wird.
+    function cfDestMelden() {
+        var d = window.WissenDestillat;
+        if (d && d.confluence) d.confluence(_cfbAktiv, _cfSpaces);
+    }
+
     function cfbRender() {
+        cfDestMelden();
         var sec = $('wi-sec-cfbind');
         if (!sec) return;
         // Sichtbar GENAU nach der Vorgabe: Skill installiert+aktiv UND
@@ -2616,5 +2629,10 @@
     // Entwurf ueber den VORHANDENEN Pending-Weg ab und muss die Liste darunter
     // nachziehen – ohne das sucht der Benutzer seinen frischen Entwurf dort
     // vergeblich und haelt die Uebernahme fuer fehlgeschlagen.
-    window.WissenPortal = { reloadPending: function () { loadPending(); } };
+    // `cfBaum` wandert mit hinaus, damit der Destillat-Container die
+    // Seitenhierarchie mit DERSELBEN Regel bildet wie der Baum hier – eine
+    // zweite Fassung liefe beim naechsten Feinschliff auseinander, und dann
+    // haengte dieselbe Seite je nach Container an einer anderen Elternseite.
+    window.WissenPortal = { reloadPending: function () { loadPending(); },
+                            cfBaum: cfBaum };
 })();

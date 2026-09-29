@@ -19916,6 +19916,122 @@ async def wissen_destillat_uebernehmen(request: Request,
                         status_code=201)
 
 
+@app.post("/api/wissen/destillat/confluence")
+async def wissen_destillat_confluence(request: Request,
+                                      user: str = Depends(require_auth)):
+    """Destillat als NEUE Confluence-Seite anlegen (Vorgabe 2026-09-29).
+
+    ⚠ DER SEITENINHALT GEHT ALS HTML RAUS, nicht als Markdown – Confluence
+    speichert im Storage-Format (XHTML). Die Umwandlung macht
+    ``wissen_destillat.storage_aus_markdown`` mit denselben Regeln wie die
+    Vorschau im Container.
+
+    ⚠ ES WIRD NUR ANGELEGT, NIE UEBERSCHRIEBEN. Kennt der Bereich den Titel
+    schon, weist Confluence ab und der Benutzer bekommt das zu lesen – ein
+    stilles ``update_page`` waere der kuerzeste Weg, eine fremde Seite zu
+    ueberschreiben, und das hat niemand bestellt.
+
+    Rechte: **genau wie der Destiller daneben** (``_destillat_erlaubt``), plus
+    die beiden Schranken der Confluence-Einbindung – der Skill muss aktiv und
+    konfiguriert sein, und der Zielbereich muss fuer den hinterlegten Token
+    SICHTBAR sein. Ohne die zweite waere der Endpunkt der bequemste Weg,
+    in einen Bereich zu schreiben, den die Oberflaeche gar nicht anbietet.
+    """
+    if not _destillat_erlaubt(user):
+        return JSONResponse({"ok": False, "error": "Dir ist kein Wissensbereich zugewiesen."},
+                            status_code=403)
+    aktiv, konfiguriert = _cfb_aktiv()
+    if not aktiv or not konfiguriert:
+        return JSONResponse({"ok": False, "error": "Confluence ist nicht aktiv oder nicht konfiguriert."},
+                            status_code=400)
+
+    from backend import wissen_destillat as _wd
+    from backend.confluence_client import ConfluenceError
+
+    try:
+        body = await request.json()
+    except Exception:  # noqa: BLE001
+        body = {}
+    if not isinstance(body, dict):
+        body = {}
+    markdown = str(body.get("markdown") or "").strip()
+    space = str(body.get("space") or "").strip()
+    parent = str(body.get("parent") or "").strip()
+    titel = str(body.get("titel") or "").strip()
+    bilder = body.get("bilder")
+
+    # ÖRTLICHE Pruefungen zuerst: jede Confluence-Abfrage darunter ist eine
+    # Netzrundreise, und ein fehlender Titel soll nicht erst danach auffallen.
+    if not markdown:
+        return JSONResponse({"ok": False, "error": "Kein Destillat vorhanden."}, status_code=400)
+    if not space:
+        return JSONResponse({"ok": False, "error": "Bitte einen Confluence-Bereich wählen."},
+                            status_code=400)
+    if not titel:
+        return JSONResponse({"ok": False, "error": "Bitte einen Seitentitel angeben."},
+                            status_code=400)
+    # ABGEWIESEN, NICHT GEKUERZT: ein stillschweigend gekuerzter Titel ist ein
+    # ANDERER Titel – die Seite hiesse dann anders, als der Benutzer gelesen
+    # hat (dieselbe Lehre wie beim Space-Key der Einbindung).
+    if len(titel) > _wd.TITEL_MAX:
+        return JSONResponse({"ok": False, "error": f"Der Titel ist zu lang (max. {_wd.TITEL_MAX} Zeichen)."},
+                            status_code=400)
+
+    c = _confluence_client()
+    try:
+        sichtbar = {s.get("key") for s in await _wissen_visible_spaces(c)}
+        if space not in sichtbar:
+            return JSONResponse({"ok": False, "error": "Bereich nicht sichtbar/erlaubt."},
+                                status_code=403)
+        # Die Elternseite muss in DIESEM Bereich liegen. Ohne diese Pruefung
+        # waere `parent` eine beliebige Seiten-ID aus dem ganzen Confluence –
+        # angelegt wuerde dann unter einer Seite, die der Benutzer nie gesehen
+        # hat (gleiche Regel wie beim Abgleich der Einbindung).
+        if parent:
+            seiten = await asyncio.to_thread(c.pages_in_space, space, 500)
+            if parent not in {str(p.get("id") or "") for p in seiten}:
+                return JSONResponse({"ok": False, "error": "Die gewählte übergeordnete Seite gehört nicht zu diesem Bereich."},
+                                    status_code=403)
+
+        # Bilder werden VOR dem Anlegen aufbereitet: nur so stehen die
+        # Anhang-Namen schon im Rumpf, und die Seite ist ab dem ersten Aufruf
+        # vollstaendig. Die Liste ist indexgleich zu `[BILD-N]`.
+        dateien = _wd.bilder_als_dateien(bilder if isinstance(bilder, list) else [])
+        namen = [d[0] if d else "" for d in dateien]
+        storage = _wd.storage_aus_markdown(markdown, namen)
+
+        seite = await asyncio.to_thread(c.create_page, space, titel, storage, parent or None)
+        seiten_id = str(seite.get("id") or "")
+
+        # Anhaenge NACH dem Anlegen – vorher gibt es keine Seiten-ID. Ein
+        # Fehlschlag hier verwirft die Seite NICHT: der Text ist die Arbeit des
+        # Benutzers, und ein fehlendes Bild ist der kleinere Verlust. Gemeldet
+        # wird er trotzdem, sonst haelt man die Seite fuer vollstaendig.
+        angehaengt, misslungen = 0, []
+        for eintrag in dateien:
+            if not eintrag:
+                continue
+            name, daten, mime = eintrag
+            try:
+                await asyncio.to_thread(c.upload_attachment_bytes, seiten_id, name, daten, mime)
+                angehaengt += 1
+            except Exception as e:  # noqa: BLE001
+                misslungen.append(f"{name}: {e}")
+                print(f"[Destillat/CF] Anhang {name} fehlgeschlagen: {e}", flush=True)
+    except ConfluenceError as e:
+        return JSONResponse({"ok": False, "status": e.status, "error": str(e)},
+                            status_code=400 if e.status < 500 else 502)
+    except Exception as e:  # noqa: BLE001
+        from backend.llm import scrub_secrets
+        return JSONResponse({"ok": False, "error": scrub_secrets(str(e))}, status_code=500)
+
+    return JSONResponse({"ok": True, "id": seiten_id,
+                         "title": seite.get("title") or titel,
+                         "link": c.link_for(seite, seite),
+                         "bilder": angehaengt,
+                         "bilder_fehler": misslungen}, status_code=201)
+
+
 # ─── Wissensgruppen (logische Tags, Modell B) ────────────────────────
 
 def _kb_all_rel_paths() -> list:

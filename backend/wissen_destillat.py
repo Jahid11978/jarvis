@@ -981,3 +981,193 @@ def titel_aus_markdown(markdown: str, rueckfall: str = "") -> str:
         else:
             return z[:120]
     return (rueckfall or "Destillat")[:120]
+
+
+# ── Als neue Confluence-Seite (XHTML/Storage) ───────────────────────────────
+#
+# ⚠ DER SEITENINHALT IST HTML, NICHT MARKDOWN (ausdrueckliche Vorgabe
+# 2026-09-29). Confluence legt Seiten im "Storage Format" ab: wohlgeformtes
+# XHTML mit zwei eigenen Namensraeumen (`ac:` fuer Makros, `ri:` fuer
+# Verweise). Wer das Markdown roh uebergibt, bekommt eine Seite, auf der
+# sichtbar `## Ueberschrift` und `**fett**` steht.
+#
+# ⚠ DIE REGELN SIND DIESELBEN WIE IN DER VORSCHAU (`wissen_destillat.js::md`),
+# und zwar absichtlich: was der Benutzer im Container sieht, soll auf der Seite
+# stehen. Deshalb hier AUCH KEINE Tabellen – der Vorschau-Renderer kann sie
+# nicht, und eine Seite, die mehr kann als die Vorschau zeigt, ist eine Drift,
+# die niemand bemerkt, bis sie falsch ist.
+
+TITEL_MAX = 255             # Confluence weist laengere Seitentitel ab
+
+# XML kennt diese Zeichen nicht – Confluence lehnt den ganzen Rumpf ab, wenn
+# eines darin steht. `\n` und `\t` bleiben. Sie werden ENTFERNT statt ersetzt:
+# sie tragen keine Bedeutung, und ein sichtbarer Platzhalter waere Rauschen.
+_STEUER = re.compile(r"[\x00-\x08\x0b\x0c\x0e-\x1f]")
+
+_DATA_URI = re.compile(r"^data:image/([a-z0-9.+-]+);base64,(.+)$", re.I | re.S)
+
+_MIME_ENDUNG = {
+    "image/png": "png", "image/jpeg": "jpg", "image/gif": "gif",
+    "image/webp": "webp", "image/bmp": "bmp",
+}
+
+
+def bilder_als_dateien(bilder) -> list:
+    """``data:``-URIs des Destillats zu ``(Dateiname, Bytes, MIME)`` – oder ``None``.
+
+    Fuer die ANHAENGE der neuen Confluence-Seite.
+
+    ⚠ DIE RUECKGABE IST INDEXGLEICH ZUR EINGABE, und das ist keine Kosmetik:
+    ``[BILD-N]`` zeigt auf den N-ten Eintrag der uebergebenen Liste. Wer die
+    verworfenen Bilder einfach weglaesst, verschiebt jeden Marker dahinter um
+    eins – auf der fertigen Seite steht dann das falsche Bild, und zwar ohne
+    jede Fehlermeldung. Verworfene Stellen sind ``None`` und werden in
+    ``storage_aus_markdown`` zum Hinweistext (ein toter ``ri:attachment``-
+    Verweis waere die schlechtere Wahl: er zeigt ein defektes Bild).
+
+    ⚠ DER ANGEGEBENE MIME-TYP WIRD NICHT GEGLAUBT. Die Liste kommt aus dem
+    Rumpf der Anfrage, ist also Fremdeingabe – entschieden wird nach den
+    ERSTEN BYTES (``_bild_mime``, dieselbe Pruefung wie beim DOCX-Import).
+    Sonst waere das Feld der bequemste Weg, eine beliebige Datei unter dem
+    Namen ``bild-1.png`` an eine Confluence-Seite zu haengen.
+
+    Dieselben drei Deckel wie ueberall im Modul (Anzahl, Einzel-, Gesamtgroesse).
+    """
+    raus: list = []
+    gesamt = 0
+    genommen = 0
+    for i, roh in enumerate(bilder or [], start=1):
+        raus.append(None)
+        if genommen >= MAX_BILDER or gesamt >= MAX_BILDER_GESAMT:
+            continue
+        if not isinstance(roh, str):
+            continue
+        m = _DATA_URI.match(roh.strip())
+        if not m:
+            continue
+        try:
+            daten = base64.b64decode(m.group(2), validate=False)
+        except Exception:  # noqa: BLE001
+            continue
+        mime = _bild_mime(daten)
+        if not mime or len(daten) > MAX_BILD_BYTES:
+            continue
+        if gesamt + len(daten) > MAX_BILDER_GESAMT:
+            continue
+        gesamt += len(daten)
+        genommen += 1
+        raus[-1] = (f"bild-{i}.{_MIME_ENDUNG.get(mime, 'png')}", daten, mime)
+    return raus
+
+
+def _xesc(s: str) -> str:
+    """Text fuer XHTML maskieren.
+
+    ⚠ LAEUFT VOR JEDER MARKDOWN-REGEL, genau wie ``esc()`` in der Vorschau. Der
+    Text kommt von einem Modell, das hochgeladene Fremddokumente verarbeitet
+    hat; danach kann kein Markup mehr aus dem INHALT entstehen, sondern nur
+    noch aus unseren eigenen Regeln.
+    """
+    return (str(s or "").replace("&", "&amp;").replace("<", "&lt;")
+            .replace(">", "&gt;").replace('"', "&quot;"))
+
+
+# Fett/kursiv wie in der Vorschau. Die `\S`-Waechter sind der Unterschied
+# zwischen brauchbar und gefaehrlich: ohne sie werden `2 * 3 * 4` und `*.txt`
+# ausgezeichnet (zeichengleich zu `wissen_destillat.js` und `avatar.py`).
+_ST_FETT = re.compile(r"\*\*(?=\S)([^\n]+?)(?<=\S)\*\*")
+_ST_KURSIV = re.compile(r"(^|[^*])\*(?=\S)([^*\n]+?)(?<=\S)\*(?!\*)", re.M)
+_ST_BLOCKSTART = re.compile(r"^<(h[123]|ul|ol|pre|hr|ac:image)")
+
+
+def storage_aus_markdown(markdown: str, bild_namen=None) -> str:
+    """Destillat-Markdown in Confluence-Storage-XHTML.
+
+    ``bild_namen`` sind die Dateinamen der Anhaenge (Index = ``[BILD-N] - 1``,
+    aus ``bilder_als_dateien``). Ein Marker ohne Anhang wird zum HINWEIS – wie
+    in ``markdown_fuer_wissen``: die STELLE bleibt erhalten, statt dass jemand
+    glaubt, dort habe nie ein Bild gestanden. Ein toter ``ri:attachment``-
+    Verweis waere die schlechtere Wahl, er zeigt auf der Seite ein defektes Bild.
+    """
+    namen = list(bild_namen or [])
+    s = _STEUER.sub("", str(markdown or ""))
+    s = _xesc(s)
+
+    # Codebloecke und Inline-Code zuerst wegsichern – ein `**` in einem
+    # Codebeispiel ist kein Fettdruck. Die Platzhalter tragen \x00, und das
+    # kann im Text nicht mehr vorkommen: `_STEUER` hat es oben entfernt.
+    bloecke: list[str] = []
+
+    def _block(m):
+        bloecke.append("<pre>" + m.group(1).rstrip("\n") + "</pre>")
+        return "\x00B%d\x00" % (len(bloecke) - 1)
+
+    s = re.sub(r"```[a-zA-Z0-9]*\n([\s\S]*?)```", _block, s)
+
+    def _inline(m):
+        bloecke.append("<code>" + m.group(1) + "</code>")
+        return "\x00B%d\x00" % (len(bloecke) - 1)
+
+    s = re.sub(r"`([^`\n]+)`", _inline, s)
+
+    # `[BILD-N]` -> Anhang-Verweis. Hier liegt der ganze Unterschied zur
+    # Wissensdatenbank: dort ist ein Bild Zeichenrauschen im Vektor-Index,
+    # auf einer Confluence-Seite ist es der Inhalt.
+    def _bild(m):
+        i = int(m.group(1)) - 1
+        # Ein leerer Name heisst "kein Anhang" (verworfenes Bild, siehe
+        # `bilder_als_dateien`) – dann der Hinweis, nicht der tote Verweis.
+        if 0 <= i < len(namen) and namen[i]:
+            bloecke.append('<ac:image><ri:attachment ri:filename="%s" /></ac:image>'
+                           % _xesc(namen[i]))
+            return "\x00B%d\x00" % (len(bloecke) - 1)
+        return "<em>(Bild %d – im Originaldokument enthalten)</em>" % (i + 1)
+
+    s = _MARKER.sub(_bild, s)
+
+    # Bilder VOR den Links: `![alt](url)` waere sonst ein Link mit `!` davor.
+    # `data:` kann Confluence nicht darstellen, dort bleibt der Alt-Text.
+    def _mdbild(m):
+        alt, url = m.group(1), m.group(2)
+        if re.match(r"^https?://", url):
+            return '<ac:image><ri:url ri:value="%s" /></ac:image>' % url
+        return alt or ""
+
+    s = re.sub(r"!\[([^\]]*)\]\(([^)\s]+)\)", _mdbild, s)
+    s = re.sub(r"\[([^\]]+)\]\((https?://[^)\s]+)\)",
+               r'<a href="\2">\1</a>', s)
+
+    # ⚠ BLOCKELEMENTE BEKOMMEN LEERZEILEN. Ohne sie haengt der folgende Text im
+    # SELBEN Absatz-Stueck: der Absatz-Durchlauf unten sieht dann ein Stueck,
+    # das mit `<h1` beginnt, und gibt es unveraendert heraus – der Text
+    # dahinter stuende roh und ohne Umbrueche auf der Seite. Faellt nur auf,
+    # wenn das Modell keine Leerzeile setzt, und genau das tut es manchmal.
+    for muster, tag in ((r"^#{4,6} (.+)$", "h3"), (r"^### (.+)$", "h3"),
+                        (r"^## (.+)$", "h2"), (r"^# (.+)$", "h1")):
+        s = re.sub(muster, "\n<%s>\\1</%s>\n" % (tag, tag), s, flags=re.M)
+    s = re.sub(r"^\s*---\s*$", "\n<hr />\n", s, flags=re.M)
+    s = _ST_FETT.sub(r"<strong>\1</strong>", s)
+    s = _ST_KURSIV.sub(r"\1<em>\2</em>", s)
+
+    def _liste(m, tag, weg):
+        eintraege = [z for z in m.group(0).strip().split("\n") if z.strip()]
+        li = "".join("<li>%s</li>" % re.sub(weg, "", z) for z in eintraege)
+        return "\n<%s>%s</%s>\n\n" % (tag, li, tag)
+
+    s = re.sub(r"(?:^[-*+] .+$\n?)+",
+               lambda m: _liste(m, "ul", r"^[-*+] "), s, flags=re.M)
+    s = re.sub(r"(?:^\d+\. .+$\n?)+",
+               lambda m: _liste(m, "ol", r"^\d+\. "), s, flags=re.M)
+
+    teile = []
+    for absatz in re.split(r"\n{2,}", s):
+        a = absatz.strip()
+        if not a:
+            continue
+        if _ST_BLOCKSTART.match(a) or a.startswith("\x00B"):
+            teile.append(a)
+        else:
+            teile.append("<p>" + a.replace("\n", "<br />") + "</p>")
+    s = "\n".join(teile)
+
+    return re.sub(r"\x00B(\d+)\x00", lambda m: bloecke[int(m.group(1))], s)
