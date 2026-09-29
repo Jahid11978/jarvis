@@ -194,6 +194,58 @@ if [ "$DISPLAY" == ":10" ]; then
     fi
 fi
 
+# 4b. Desktop-Zugang (x11vnc 5900, websockify 6080) nur fuer root und den Dienstbenutzer
+#
+# BEFUND H11 (BSI-Abgleich 2026-09-29, auf ECHT): x11vnc laeuft als root mit
+# `-nopw`. `-localhost` (2026-08-11) haelt das Netz draussen, aber auf dem Host
+# selbst konnte JEDER Prozess verbinden – auch die Agent-Shell der
+# Domain-Benutzer (jarvis_sandbox, jarvis_sandbox_noinet). Wer dort eine Zeile
+# Python ausfuehrt, hatte Maus und Tastatur auf dem Desktop, ohne Jarvis-Login
+# und ohne Administrator-Recht. websockify auf 127.0.0.1:6080 ist derselbe Weg
+# (proxyt auf 5900), deshalb beide Ports – eine Sperre nur auf 5900 waere durch
+# 6080 umgangen, genau wie 2026-08-18.
+#
+# Erlaubt bleiben die beiden, die den Desktop tatsaechlich brauchen: root
+# (websockify, Broker) und der Dienstbenutzer (Backend-Proxy /ws/vnc, der nur
+# Administratoren durchlaesst). Alles andere bekommt einen TCP-Reset.
+#   * `oif "lo"` statt einer Adresse: trifft auch Verbindungen an die eigene
+#     LAN-IP, die der Kernel ebenfalls ueber lo zustellt.
+#   * Die Bedingung haengt an skuid: Kernel-Sockets (CIFS/NFS) tragen keine
+#     und fallen durch – kein nacktes drop (Vorfall 2026-09-04).
+#   * Eigene Tabelle, `table`+`delete`+Neuanlage in EINER Transaktion: kein
+#     Zeitfenster ohne Sperre, kein Verdoppeln bei jedem Broker-Start.
+# Test: tests/test_bsi_ldap_vnc.py (wendet _vnc_sperre_regeln in einem eigenen
+# Netz-Namespace an und misst, wer verbinden darf).
+_vnc_erlaubte_uids() {   # $1 = Dienstbenutzer -> "0" oder "0, <uid>"
+    local uid
+    uid="$(id -u "$1" 2>/dev/null)"
+    if [ -n "$uid" ] && [ "$uid" != "0" ]; then echo "0, $uid"; else echo "0"; fi
+}
+_vnc_sperre_regeln() {   # $1 = erlaubte uids (Ausgabe von _vnc_erlaubte_uids)
+    cat <<NFT
+table inet jarvis_vnc {}
+delete table inet jarvis_vnc
+table inet jarvis_vnc {
+    chain out {
+        type filter hook output priority filter; policy accept;
+        oif "lo" tcp dport { 5900, 6080 } meta skuid != { $1 } reject with tcp reset
+    }
+}
+NFT
+}
+VNC_SVC_USER="$(systemctl show -p User --value jarvis.service 2>/dev/null)"
+[ -z "$VNC_SVC_USER" ] && VNC_SVC_USER="jarvis"
+VNC_UIDS="$(_vnc_erlaubte_uids "$VNC_SVC_USER")"
+if command -v nft >/dev/null 2>&1; then
+    if _vnc_sperre_regeln "$VNC_UIDS" | nft -f -; then
+        echo "[VNC] Desktop-Ports 5900/6080 lokal nur fuer uid $VNC_UIDS erreichbar."
+    else
+        echo "[VNC] WARNUNG: Sperre fuer 5900/6080 nicht gesetzt – jeder lokale Prozess erreicht den Desktop." >&2
+    fi
+else
+    echo "[VNC] WARNUNG: nft fehlt – Desktop-Ports 5900/6080 sind fuer jeden lokalen Prozess erreichbar." >&2
+fi
+
 # Selbstheilung: Laeuft x11vnc (nur) auf dem leeren Xvfb :10, obwohl lightdm
 # aktiviert ist, zieht dieser Hintergrund-Watcher auf das echte :0 um, sobald
 # dessen X-Socket verfuegbar ist (heilt Boot-Races und lightdm-Neustarts ohne

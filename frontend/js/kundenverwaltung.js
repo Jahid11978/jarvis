@@ -27,6 +27,8 @@
 
     var Manager = {
         _bound: false,
+        _cfg: {},
+        _cert: null,
 
         onShow: function () {
             this._bind();
@@ -56,10 +58,40 @@
                 .then(function (r) { return r.json(); })
                 .then(function (d) {
                     var c = (d && d.config) || {};
+                    Manager._cfg = c;
                     if ($('ibs-api-url')) $('ibs-api-url').value = c.ibs_api_url || '';
                     if ($('ibs-api-key')) $('ibs-api-key').value = c.ibs_api_key || '';
+                    Manager._certMount();
                 })
                 .catch(function () {});
+        },
+
+        // Serverzertifikat pruefen/verankern (gemeinsamer Baustein sapcert.js).
+        // Der Server prueft das Zertifikat IMMER; ein selbst ausgestelltes wird
+        // hier bewusst verankert statt die Pruefung abzuschalten.
+        _certMount: function () {
+            if (this._cert) { this._cert.refresh(); return; }
+            var box = $('kv-cert');
+            if (!box || !window.SapCert) return;
+            this._cert = window.SapCert.mount(box, {
+                basis: '/api/kundenverwaltung/zertifikat',
+                kanal: 'kundenverwaltung',
+                ziel: function () {
+                    return { url: ($('ibs-api-url') ? $('ibs-api-url').value : '').trim() };
+                },
+                gebunden: function () {
+                    var g = Manager._cfg.ibs_api_cert;
+                    return (g && typeof g === 'object') ? g : {};
+                },
+                nachAenderung: function () { Manager.loadConfig(); },
+                texte: {
+                    v_no: ['kv.cert_v_no', 'Verankern würde hier nicht helfen ({grund}). '
+                        + 'Trage die Adresse ein, auf die das Zertifikat lautet.'],
+                    browser_hint: ['kv.cert_browser_hint', 'Die Verbindung zur '
+                        + 'Kundenverwaltung baut der Server auf, nicht der Browser – ein '
+                        + 'Eintrag im Browser-Zertifikatsspeicher wirkt hier nicht.']
+                }
+            });
         },
 
         save: function () {

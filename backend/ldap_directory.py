@@ -21,7 +21,8 @@ def _esc(s):
 
 def _bind(bind_user=None, bind_password=None):
     """Baut eine gebundene, read-only ldap3-Verbindung auf. Gibt (conn, base_dn)
-    zurück. Wirft RuntimeError('NO_CREDENTIALS' | 'BIND_FAILED' | Klartext)."""
+    zurück. Wirft RuntimeError('NO_CREDENTIALS' | 'BIND_FAILED' | 'TLS_FAILED: …'
+    | Klartext)."""
     import ldap3
 
     ad_server = (config.get_setting("ad_server", "") or "").strip()
@@ -41,15 +42,15 @@ def _bind(bind_user=None, bind_password=None):
     if "@" not in user and "\\" not in user and "=" not in user:
         user = user + "@" + ad_domain
 
-    use_ssl = ad_server.lower().startswith("ldaps://")
-    server = ldap3.Server(ad_server, use_ssl=use_ssl, get_info=ldap3.NONE, connect_timeout=6)
-    conn = ldap3.Connection(server, user=user, password=pw, auto_bind=False)
-    if not use_ssl:
-        try:
-            conn.open()
-            conn.start_tls()
-        except Exception:
-            pass  # Fallback auf Plain, falls der DC kein StartTLS kann
+    # TLS ist Pflicht, das Zertifikat wird geprueft (BSI H5) – bis 2026-09-29
+    # band diese Stelle nach gescheitertem StartTLS still im Klartext.
+    from backend import ldap_tls
+    try:
+        conn = ldap_tls.verbinden(ad_server, user, pw, timeout=6)
+    except ldap_tls.TlsFehler as e:
+        raise RuntimeError("TLS_FAILED: " + str(e)[:160])
+    except Exception as e:  # noqa: BLE001
+        raise RuntimeError("BIND_FAILED: " + str(e)[:120])
     try:
         ok = conn.bind()
     except Exception as e:  # noqa: BLE001

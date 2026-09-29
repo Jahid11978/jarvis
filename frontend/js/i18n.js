@@ -1735,6 +1735,14 @@ const _I18N = {
         'security.ad_connecting':   'Verbinde mit',
         'security.ad_reachable':    'erreichbar (LDAP Port 389)',
         'security.ad_unreachable':  'Nicht erreichbar',
+        // Pflicht-TLS zum Domain-Controller (BSI H5)
+        'security.ad_tls_ok':       'Verbindung verschlüsselt, Zertifikat geprüft',
+        'security.ad_tls_fail':     'Erreichbar, aber keine gesicherte Verbindung ({grund}). Anmeldungen über das Firmenverzeichnis sind so nicht möglich – Zertifikat unten prüfen.',
+        'security.ad_tls_hint':     'Anmeldungen über das Firmenverzeichnis laufen nur verschlüsselt und mit geprüftem Zertifikat des Domain-Controllers. Stammt es von einer internen Zertifizierungsstelle, hier prüfen und verankern.',
+        'adcert.v_no':              'Verankern würde hier nicht helfen ({grund}).',
+        'security.ad_tls_transition': 'Übergangsfrist bis {bis}: Die Verbindung zum Domain-Controller ist verschlüsselt, sein Zertifikat wird aber noch nicht geprüft. Bitte jetzt prüfen und verankern – nach der Frist sind Anmeldungen über das Firmenverzeichnis sonst gesperrt.',
+        'security.ad_tls_unverified': 'erreichbar und verschlüsselt, Zertifikat aber noch ungeprüft (Übergangsfrist bis {bis}) – unten prüfen und verankern',
+        'adcert.browser_hint':      'Die Verbindung zum Domain-Controller baut der Server auf, nicht der Browser – ein Eintrag im Browser-Zertifikatsspeicher wirkt hier nicht.',
         'security.ad_warn_none':    '⚠ Es ist weder ein Benutzer noch eine Gruppe zur Anmeldung freigegeben – KEIN Domänen-Benutzer kann sich anmelden. Nur das lokale Konto jarvis bleibt möglich. Wer sich anmelden darf, muss hier eingetragen werden.',
         'security.ad_users_active': '✓ Benutzerliste:',
         'security.ad_group_active': '✓ Gruppen-Filter:',
@@ -3717,6 +3725,8 @@ const _I18N = {
         'kv.search_title':  'Tickets suchen',
         'kv.search_ph':     'Schlagworte, kommagetrennt (1–5)…',
         'kv.search_addr_ph': 'Adress-ID (optional)',
+        'kv.cert_v_no':     'Verankern würde hier nicht helfen ({grund}). Trage die Adresse ein, auf die das Zertifikat lautet.',
+        'kv.cert_browser_hint': 'Die Verbindung zur Kundenverwaltung baut der Server auf, nicht der Browser – ein Eintrag im Browser-Zertifikatsspeicher wirkt hier nicht.',
 
         // ── WhatsApp ──────────────────────────────────────────
         'wa.ready':                    'Bereit für Nachrichten',
@@ -5494,6 +5504,14 @@ const _I18N = {
         'security.ad_connecting':   'Connecting to',
         'security.ad_reachable':    'reachable (LDAP port 389)',
         'security.ad_unreachable':  'Not reachable',
+        // Mandatory TLS to the domain controller (BSI H5)
+        'security.ad_tls_ok':       'Connection encrypted, certificate verified',
+        'security.ad_tls_fail':     'Reachable, but no secure connection ({grund}). Sign-in via the company directory is not possible like this – check the certificate below.',
+        'security.ad_tls_hint':     'Sign-ins via the company directory only run encrypted and with a verified domain controller certificate. If it comes from an internal certificate authority, check and pin it here.',
+        'adcert.v_no':              'Pinning would not help here ({grund}).',
+        'security.ad_tls_transition': 'Transition period until {bis}: the connection to the domain controller is encrypted, but its certificate is not verified yet. Please check and pin it now – after this date sign-ins via the company directory will be blocked.',
+        'security.ad_tls_unverified': 'reachable and encrypted, but the certificate is not verified yet (transition period until {bis}) – check and pin it below',
+        'adcert.browser_hint':      'The connection to the domain controller is made by the server, not by the browser – an entry in the browser certificate store has no effect here.',
         'security.ad_warn_none':    '⚠ Neither a user nor a group is granted sign-in – NO domain user can sign in. Only the local jarvis account remains possible. Whoever may sign in has to be entered here.',
         'security.ad_users_active': '✓ User list:',
         'security.ad_group_active': '✓ Group filter:',
@@ -7442,6 +7460,8 @@ const _I18N = {
         'kv.search_title':  'Search tickets',
         'kv.search_ph':     'Buzzwords, comma-separated (1–5)…',
         'kv.search_addr_ph': 'Address ID (optional)',
+        'kv.cert_v_no':     'Pinning would not help here ({grund}). Enter the address the certificate is issued for.',
+        'kv.cert_browser_hint': 'The connection to customer management is made by the server, not by the browser – an entry in the browser certificate store has no effect here.',
 
         // ── WhatsApp ──────────────────────────────────────────
         'wa.ready':                    'Ready for messages',

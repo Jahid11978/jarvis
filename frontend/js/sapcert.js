@@ -59,9 +59,17 @@
      *   gebunden() – aktuell gespeicherter Anker (dict aus sap_cert.info) oder {}
      *   fremd()    – optional: Anker des Administrators, nur zur Anzeige
      *   nachAenderung(antwort) – nach Verankern/Loesen (Formular neu laden)
+     *   texte   – optional: {v_no: [key, fallback], browser_hint: [key, fallback]}
+     *             fuer Nutzer ausserhalb von SAP (Kundenverwaltung); die
+     *             Vorgabetexte nennen das SAP-System beim Namen
      */
     function mount(container, opts) {
         if (!container || container.dataset.sapcertReady === '1') return null;
+        var texte = opts.texte || {};
+        function TX(name, key, fb) {
+            var t = texte[name];
+            return t ? T(t[0], t[1]) : T(key, fb);
+        }
         container.dataset.sapcertReady = '1';
         container.classList.add('sapcert');
 
@@ -175,7 +183,7 @@
                         'Der Name im Zertifikat passt nicht zur Adresse ({grund}). '
                         + 'Für HANA lässt sich das überbrücken – trage besser den Namen ein, '
                         + 'auf den das Zertifikat lautet.')
-                    : T('sapcert.v_no',
+                    : TX('v_no', 'sapcert.v_no',
                         'Verankern würde hier nicht helfen ({grund}). Trage die Adresse ein, '
                         + 'auf die das Zertifikat lautet – oder lass auf dem SAP-Server ein '
                         + 'Zertifikat mit passendem Namen hinterlegen.');
@@ -184,7 +192,7 @@
             kasten.appendChild(urteil);
             if (btnTrust) kasten.appendChild(btnTrust);
 
-            var hinweis = el('p', 'sapcert-hint', T('sapcert.browser_hint',
+            var hinweis = el('p', 'sapcert-hint', TX('browser_hint', 'sapcert.browser_hint',
                 'Die Verbindung zum SAP-System baut der Server auf, nicht der Browser – '
                 + 'ein Eintrag im Browser-Zertifikatsspeicher wirkt hier nicht.'));
             kasten.appendChild(hinweis);

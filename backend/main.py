@@ -2953,17 +2953,20 @@ def authenticate_linux_user(username: str, password: str, details: dict | None =
                 bind_user = f"{username}@{ad_domain}"
             # Base-DN aus Domain ableiten: firma.local → DC=firma,DC=local
             base_dn = ",".join(f"DC={part}" for part in ad_domain.split("."))
-            # TLS verwenden wenn ldaps:// oder StartTLS wenn ldap://
-            use_ssl = ad_server.lower().startswith("ldaps://")
-            server = ldap3.Server(ad_server, use_ssl=use_ssl, get_info=ldap3.NONE, connect_timeout=5)
-            conn = ldap3.Connection(server, user=bind_user, password=password, auto_bind=False)
-            # StartTLS bei unverschlüsselten Verbindungen versuchen
-            if not use_ssl:
-                try:
-                    conn.open()
-                    conn.start_tls()
-                except Exception:
-                    pass  # Fallback auf Plain wenn DC kein StartTLS unterstützt
+            # TLS ist Pflicht (ldaps:// oder StartTLS), das Zertifikat wird
+            # geprueft (BSI H5). Bis 2026-09-29 stand hier ein StartTLS-Versuch
+            # mit `except: pass` – scheiterte er, ging das AD-Kennwort im
+            # Klartext zum DC. Jetzt: ohne gesicherte Verbindung kein Bind.
+            from backend import ldap_tls
+            try:
+                conn = ldap_tls.verbinden(ad_server, bind_user, password, timeout=5)
+            except ldap_tls.TlsFehler as e:
+                print(f"[AUTH] AD-Login abgebrochen: keine gesicherte Verbindung zu "
+                      f"{ad_server} ({e}) – Kennwort NICHT gesendet. Zertifikat unter "
+                      f"Einstellungen → Sicherheit → Verbindung pruefen.", flush=True)
+                if details is not None:
+                    details["reason"] = "ad_tls"
+                return False
             if conn.bind():
                 # Credentials korrekt – Whitelist prüfen + Wissens-Recht cachen
                 allowed = _ad_user_allowed(conn, username, base_dn)
@@ -3776,6 +3779,16 @@ async def login(request: Request):
                 {"success": False, "error": "Keine Anmeldeberechtigung"},
                 status_code=403,
             )
+        # Keine gesicherte Verbindung zum DC (BSI H5): das Kennwort wurde gar
+        # nicht geprueft – kein Fehlversuch, und keine Meldung "Passwort falsch",
+        # die den Benutzer zum Wiederholen treibt.
+        if _auth_details.get("reason") == "ad_tls":
+            return JSONResponse(
+                {"success": False, "error": "Anmeldung über das Firmenverzeichnis ist gerade "
+                 "nicht möglich (keine gesicherte Verbindung zum Domain-Controller). "
+                 "Bitte den Administrator informieren."},
+                status_code=503,
+            )
         _record_login_attempt(client_ip)
         return JSONResponse(
             {"success": False, "error": "Benutzername oder Passwort falsch"},
@@ -4040,10 +4053,30 @@ async def totp_status(username: str = Depends(require_auth)):
 
 
 @app.post("/api/auth/totp/setup")
-async def totp_setup(username: str = Depends(require_auth)):
+async def totp_setup(request: Request, username: str = Depends(require_auth)):
     """Generiert ein neues TOTP-Secret + QR-Code (Base64 PNG).
     Aktiviert 2FA noch NICHT – erst nach Verifizierung via /totp/verify.
+
+    Das neue Secret liegt bis dahin als ``totp_pending_secret`` NEBEN dem
+    aktiven. Bis 2026-09-29 (BSI-Abgleich H2) schrieb setup direkt
+    ``totp_secret`` und ``totp_enabled: False`` – ein einziger POST mit einem
+    Sitzungstoken schaltete die 2FA damit ab, ohne Kennwort. Ist die 2FA an,
+    verlangt ein Neu-Einrichten jetzt dasselbe wie /totp/disable: das Kennwort.
     """
+    user_state = _get_user_auth_state(username)
+    if user_state.get("totp_enabled") and user_state.get("totp_secret"):
+        try:
+            body = await request.json()
+        except Exception:  # noqa: BLE001
+            body = {}
+        password = (body or {}).get("password", "") if isinstance(body, dict) else ""
+        if not password:
+            return JSONResponse({"success": False,
+                                 "error": "Zwei-Faktor-Anmeldung ist aktiv – Passwort zur Bestätigung erforderlich"},
+                                status_code=400)
+        if not await asyncio.to_thread(authenticate_linux_user, username, password):
+            return JSONResponse({"success": False, "error": "Falsches Passwort"}, status_code=401)
+
     import pyotp
     import qrcode
     import qrcode.image.pil
@@ -4063,8 +4096,8 @@ async def totp_setup(username: str = Depends(require_auth)):
     img.save(buf, format="PNG")
     qr_b64 = base64.b64encode(buf.getvalue()).decode()
 
-    # Secret temporär speichern (noch nicht aktiviert!)
-    _set_user_auth_state(username, {"totp_secret": secret, "totp_enabled": False})
+    # Secret vormerken – das aktive (falls vorhanden) bleibt unberuehrt
+    _set_user_auth_state(username, {"totp_pending_secret": secret})
 
     return JSONResponse({
         "secret": secret,
@@ -4082,7 +4115,11 @@ async def totp_verify(request: Request, username: str = Depends(require_auth)):
         return JSONResponse({"success": False, "error": "Code erforderlich"}, status_code=400)
 
     user_state = _get_user_auth_state(username)
-    secret = user_state.get("totp_secret")
+    secret = user_state.get("totp_pending_secret")
+    if not secret and not user_state.get("totp_enabled"):
+        # Altbestand: ein vor 2026-09-29 begonnenes Einrichten liegt noch
+        # in totp_secret (damals ohne pending-Feld)
+        secret = user_state.get("totp_secret")
     if not secret:
         return JSONResponse({"success": False, "error": "Kein TOTP-Setup gefunden"}, status_code=400)
 
@@ -4091,8 +4128,9 @@ async def totp_verify(request: Request, username: str = Depends(require_auth)):
     if not totp.verify(code, valid_window=1):
         return JSONResponse({"success": False, "error": "Ungültiger Code"}, status_code=401)
 
-    # 2FA aktivieren
-    _set_user_auth_state(username, {"totp_enabled": True})
+    # 2FA aktivieren: vorgemerktes Secret wird das aktive
+    _set_user_auth_state(username, {"totp_secret": secret, "totp_enabled": True,
+                                    "totp_pending_secret": None})
     return JSONResponse({"success": True, "message": "2FA aktiviert"})
 
 
@@ -4107,7 +4145,8 @@ async def totp_disable(request: Request, username: str = Depends(require_auth)):
     if not authenticate_linux_user(username, password):
         return JSONResponse({"success": False, "error": "Falsches Passwort"}, status_code=401)
 
-    _set_user_auth_state(username, {"totp_enabled": False, "totp_secret": None})
+    _set_user_auth_state(username, {"totp_enabled": False, "totp_secret": None,
+                                    "totp_pending_secret": None})
     return JSONResponse({"success": True, "message": "2FA deaktiviert"})
 
 
@@ -7415,11 +7454,83 @@ async def test_ad_connection(request: Request, _username: str = Depends(require_
         conn = ldap3.Connection(server, auto_bind=False)
         conn.open()
         conn.closed
-        return JSONResponse({"reachable": True})
     except ImportError:
         return JSONResponse({"reachable": False, "error": "ldap3 nicht installiert"})
     except Exception as e:
         return JSONResponse({"reachable": False, "error": str(e)})
+    # Erreichbar heisst nicht "Anmeldung geht": die laeuft nur noch ueber eine
+    # gesicherte, gepruefte Verbindung (BSI H5). Dieselbe Funktion wie beim
+    # Login, ohne Anmeldedaten – gemessen wird der Weg, der spaeter das
+    # Kennwort sendet.
+    from backend import ldap_tls
+
+    def _tls_probe() -> tuple[bool, str, bool]:
+        info: dict = {}
+        try:
+            ldap_tls._schliessen(ldap_tls.verbinden(ad_server, timeout=5, info=info))
+            return True, "", bool(info.get("ungeprueft"))
+        except Exception as e:  # noqa: BLE001
+            return False, str(e)[:200], False
+    tls_ok, tls_error, ungeprueft = await asyncio.to_thread(_tls_probe)
+    # ungeprueft: verschluesselt, aber nur dank Uebergangsfrist angenommen
+    return JSONResponse({"reachable": True, "tls_ok": tls_ok, "tls_error": tls_error,
+                         "tls_ungeprueft": ungeprueft,
+                         "tls_uebergang": ldap_tls.uebergang()})
+
+
+async def _ad_tls_ziel(request: Request) -> str:
+    """Adresse aus dem Formular (pruefen VOR dem Speichern), sonst die gespeicherte."""
+    body = await _json_rumpf(request)
+    return (str(body.get("server") or "").strip()
+            or (config.get_setting("ad_server", "") or "").strip())
+
+
+@app.post("/api/auth/ad_tls/probe")
+async def ad_tls_probe_api(request: Request, user: str = Depends(require_local_auth)):
+    """Zertifikat des Domain-Controllers holen und beurteilen (BSI H5; Baustein
+    sapcert.js). Rumpf: {server?}. Rueckgabe: {ok, zert, gebunden}."""
+    from backend import ldap_tls, sap_cert
+    ziel = await _ad_tls_ziel(request)
+    try:
+        erg = await asyncio.to_thread(ldap_tls.pruefen, ziel)
+    except sap_cert.ZertFehler as e:
+        return JSONResponse({"ok": False, "error": str(e)}, status_code=400)
+    except Exception as e:  # noqa: BLE001
+        return JSONResponse({"ok": False, "error": str(e)}, status_code=500)
+    erg.pop("pem", None)
+    return JSONResponse({"ok": True, "zert": erg, "gebunden": sap_cert.info(ldap_tls.anker())})
+
+
+@app.post("/api/auth/ad_tls/trust")
+async def ad_tls_trust_api(request: Request, user: str = Depends(require_local_auth)):
+    """Gezeigtes DC-Zertifikat als einzigen Vertrauensanker der AD-Verbindung
+    verankern. Rumpf: {server?, fingerprint} – der Server holt das Zertifikat
+    selbst erneut; ein PEM aus dem Request wird nie angenommen."""
+    from backend import ldap_tls, sap_cert
+    body = await _json_rumpf(request)
+    ziel = (str(body.get("server") or "").strip()
+            or (config.get_setting("ad_server", "") or "").strip())
+    try:
+        eintrag = await asyncio.to_thread(ldap_tls.bestaetigen, ziel,
+                                          str(body.get("fingerprint") or ""))
+    except sap_cert.ZertFehler as e:
+        return JSONResponse({"ok": False, "error": str(e)}, status_code=400)
+    except Exception as e:  # noqa: BLE001
+        return JSONResponse({"ok": False, "error": str(e)}, status_code=500)
+    config.save_setting(ldap_tls.ANKER_FELD, eintrag)
+    print("[AUTH] AD-Zertifikat verankert von %s: %s:%s %s"
+          % (user, eintrag["host"], eintrag["port"], eintrag["fingerprint"]), flush=True)
+    return JSONResponse({"ok": True, "gebunden": sap_cert.info(eintrag)})
+
+
+@app.delete("/api/auth/ad_tls")
+async def ad_tls_loesen_api(user: str = Depends(require_local_auth)):
+    """Verankertes DC-Zertifikat entfernen – danach gilt die Pruefung gegen den
+    Systemspeicher (nie: gar keine Pruefung, nie: Klartext)."""
+    from backend import ldap_tls
+    config.save_setting(ldap_tls.ANKER_FELD, None)
+    print("[AUTH] AD-Zertifikatsanker entfernt von %s" % user, flush=True)
+    return JSONResponse({"ok": True, "gebunden": {}})
 
 
 @app.get("/api/auth/ad_status")
@@ -7467,9 +7578,14 @@ async def get_ad_status(user: str = Depends(require_local_auth)):
         _reval_min = int(float(config.get_setting("ad_revalidate_minutes", 10) or 0))
     except Exception:  # noqa: BLE001
         _reval_min = 10
+    from backend import ldap_tls, sap_cert
     return JSONResponse({
         "configured": bool(ad_server and ad_domain),
         "reachable": reachable,
+        # Verankertes DC-Zertifikat (ohne PEM) – Baustein sapcert.js im Reiter
+        "tls_anker": sap_cert.info(ldap_tls.anker()),
+        # Uebergangsfrist ohne Zertifikatspruefung ({aktiv, bis}); der Reiter warnt
+        "tls_uebergang": ldap_tls.uebergang(),
         "revalidation": {
             "active": bool((config.get_setting("ad_bind_user", "") or "").strip()) and _reval_min > 0,
             "minutes": _reval_min,
@@ -8398,15 +8514,36 @@ async def llm_profiles_reachability(user: str = Depends(require_auth)):
 
 @app.post("/api/feedback")
 async def api_feedback(request: Request):
-    """Benutzer-Feedback zu einer Jarvis-Antwort (👍 / 👎 / ❌ Falsch)."""
-    body = await request.json()
+    """Benutzer-Feedback zu einer Jarvis-Antwort (👍 / 👎 / ❌ Falsch).
 
-    # Token optional (Jarvis-Auth oder anonymous)
+    Nur mit Anmeldung: Sitzungstoken ODER Agent-API-Key, jeweils im
+    Authorization-Header oder – wie Web-Chat, Android- und Windows-App es
+    schicken – als ``token`` im Rumpf. Bis 2026-09-29 (BSI-Abgleich H12) fiel
+    ein fehlendes/falsches Token auf "anonymous" zurueck: jeder im Netz konnte
+    damit LLM-Aufrufe ausloesen und Lernnotizen schreiben, die spaeter in den
+    Kontext des Agenten fliessen.
+    """
+    try:
+        body = await request.json()
+    except Exception:  # noqa: BLE001
+        body = None
+    if not isinstance(body, dict):
+        return JSONResponse({"success": False, "error": "Ungültige Anfrage"}, status_code=400)
+
     token_str = (
         request.headers.get("Authorization", "").replace("Bearer ", "")
-        or body.get("token", "")
+        or str(body.get("token") or "")
     )
-    user = verify_token(token_str) or "anonymous"
+    user = verify_token(token_str)
+    if user:
+        # Dieselben Sperren wie require_auth_or_agent
+        if _user_must_change(user) or security_guard.is_blocked(user) \
+                or not _login_still_allowed(user):
+            return JSONResponse({"success": False, "error": "Nicht berechtigt"}, status_code=403)
+    elif _is_valid_agent_key(token_str) or _verify_agent_api_key(request):
+        user = "api"
+    else:
+        return JSONResponse({"success": False, "error": "Nicht authentifiziert"}, status_code=401)
 
     rating   = body.get("rating", "")        # "positive" | "negative" | "wrong"
     user_msg = body.get("user_message", "")
@@ -14702,10 +14839,72 @@ async def feedback_seite():
 async def kv_test_api(user: str = Depends(require_local_auth)):
     """Testet die Verbindung zur Kundenverwaltungs-API (IBS): prueft die
     Erreichbarkeit der konfigurierten Basis-URL (X-API-Key wird mitgesendet,
-    self-signed TLS erlaubt). Jede HTTP-Antwort gilt als erreichbar;
-    Rueckgabe: {ok, configured, reachable, status, key_set, url, error}."""
+    Zertifikat wird geprueft; bei selbst ausgestelltem Zertifikat kommt es in
+    ``zertifikat`` zum Verankern zurueck). Jede HTTP-Antwort gilt als erreichbar;
+    Rueckgabe: {ok, configured, reachable, status, key_set, url, error, zertifikat?}."""
     from backend.kundenverwaltung_client import test_connection
     return JSONResponse(await asyncio.to_thread(test_connection))
+
+
+async def _json_rumpf(request: Request) -> dict:
+    """JSON-Rumpf als dict; kaputter oder fehlender Rumpf -> {}."""
+    try:
+        body = await request.json()
+    except Exception:  # noqa: BLE001
+        return {}
+    return body if isinstance(body, dict) else {}
+
+
+@app.post("/api/kundenverwaltung/zertifikat/probe")
+async def kv_zertifikat_probe_api(request: Request, user: str = Depends(require_local_auth)):
+    """Serverzertifikat der Kundenverwaltungs-API holen und beurteilen
+    (BSI-Abgleich H14; Baustein sapcert.js). Rumpf: {url?} – ohne URL die
+    gespeicherte. Rueckgabe: {ok, zert, gebunden} bzw. {ok: False, error}."""
+    from backend import kundenverwaltung_client as _kv, sap_cert
+    body = await _json_rumpf(request)
+    try:
+        erg = await asyncio.to_thread(_kv.zertifikat_pruefen, str(body.get("url") or ""))
+    except sap_cert.ZertFehler as e:
+        return JSONResponse({"ok": False, "error": str(e)}, status_code=400)
+    except Exception as e:  # noqa: BLE001
+        return JSONResponse({"ok": False, "error": str(e)}, status_code=500)
+    from backend.jira_client import get_jira_config
+    return JSONResponse({"ok": True, "zert": erg,
+                         "gebunden": sap_cert.info(get_jira_config().get(_kv.CERT_FELD))})
+
+
+@app.post("/api/kundenverwaltung/zertifikat/trust")
+async def kv_zertifikat_trust_api(request: Request, user: str = Depends(require_local_auth)):
+    """Gezeigtes Zertifikat als einzigen Vertrauensanker der Kundenverwaltung
+    verankern. Rumpf: {url?, fingerprint} – der Server holt das Zertifikat
+    selbst erneut und verankert nur bei gleichem Fingerabdruck; ein PEM aus
+    dem Request wird nie angenommen."""
+    from backend import kundenverwaltung_client as _kv, sap_cert
+    body = await _json_rumpf(request)
+    try:
+        eintrag = await asyncio.to_thread(_kv.zertifikat_verankern,
+                                          str(body.get("url") or ""),
+                                          str(body.get("fingerprint") or ""))
+    except sap_cert.ZertFehler as e:
+        return JSONResponse({"ok": False, "error": str(e)}, status_code=400)
+    except Exception as e:  # noqa: BLE001
+        return JSONResponse({"ok": False, "error": str(e)}, status_code=500)
+    # Merge (update_skill_config): der Speichern-Knopf des Reiters sendet das
+    # Anker-Feld nicht mit und kann es deshalb nicht ueberschreiben
+    _get_skill_manager().update_skill_config("jira", {_kv.CERT_FELD: eintrag})
+    print("[Kundenverwaltung] Zertifikat verankert von %s: %s:%s %s"
+          % (user, eintrag["host"], eintrag["port"], eintrag["fingerprint"]), flush=True)
+    return JSONResponse({"ok": True, "gebunden": sap_cert.info(eintrag)})
+
+
+@app.delete("/api/kundenverwaltung/zertifikat")
+async def kv_zertifikat_loesen_api(user: str = Depends(require_local_auth)):
+    """Verankertes Zertifikat entfernen – danach gilt wieder die gewoehnliche
+    Pruefung gegen den Systemspeicher (nie: gar keine Pruefung)."""
+    from backend import kundenverwaltung_client as _kv
+    _get_skill_manager().update_skill_config("jira", {_kv.CERT_FELD: None})
+    print("[Kundenverwaltung] Zertifikatsanker entfernt von %s" % user, flush=True)
+    return JSONResponse({"ok": True, "gebunden": {}})
 
 
 @app.get("/api/kundenverwaltung/tickets-by-buzzwords")
