@@ -2,17 +2,17 @@ fastapi==0.115.6
 uvicorn[standard]==0.34.0
 google-genai==1.5.0
 anthropic>=0.39.0
-python-dotenv==1.0.1
+python-dotenv==1.2.2
 psutil==6.1.1
 # pyautogui wurde am 2026-07-31 ENTFERNT: es war nie importiert (die
 # Desktop-Steuerung laeuft ueber xdotool als Unterprozess, siehe
 # backend/tools/desktop.py), zog aber drei GPL-Pakete in den Backend-Prozess
 # (MouseInfo/PyMsgBox GPL-3.0+, python3-xlib GPL-2.0) – unvereinbar mit der
 # eigenen Apache-2.0. Nicht wieder aufnehmen, ohne das zu pruefen.
-pillow==11.1.0
+pillow==12.3.0
 pytesseract==0.3.13   # Bild-OCR fuer Wissensbasis; benoetigt System-Paket: tesseract-ocr (+ tesseract-ocr-deu/-eng)
 pdf2image==1.17.0     # OCR-Fallback fuer gescannte PDFs (rendert Seiten zu Bildern); benoetigt System-Paket: poppler-utils
-python-multipart==0.0.20
+python-multipart==0.0.31
 websockets==14.2
 python-pam>=2.0.2
 six>=1.16.0
